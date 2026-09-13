@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Entorno / secretos
+.env
+*.local
+
+# Base de datos local
+*.sqlite3
+*.db
+data/
+
+# Herramientas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Salidas de la herramienta
+reports/*.pdf
+reports/*.docx
+scans/
+
+# IDE / SO
+.idea/
+.vscode/
+.DS_Store
