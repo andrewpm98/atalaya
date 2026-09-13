@@ -22,6 +22,30 @@ consultar la superficie de exposición **en lenguaje natural**.
    puertos de gestión abiertos?"*.
 5. **Informa** — genera un informe ejecutivo con portada (PDF/DOCX).
 
+## Uso rápido: enumeración de subdominios
+
+Ya operativo (Paso 2). Desde la línea de comandos:
+
+```bash
+atalaya subdomains ejemplo.com                # enumera y verifica por DNS
+atalaya subdomains ejemplo.com --only-active  # solo hosts que resuelven
+atalaya subdomains ejemplo.com --no-resolve   # solo candidatos de CT, sin DNS
+atalaya subdomains ejemplo.com --json         # salida estructurada
+```
+
+La enumeración consulta los registros de **Certificate Transparency** vía
+crt.sh —técnica pasiva: no envía tráfico al objetivo— normaliza y deduplica
+los resultados, y verifica por DNS cuáles están realmente activos. Esa
+distinción entre superficie *histórica* y *real* es la información útil:
+un certificado emitido en su día no implica un host vivo hoy.
+
+Cada dirección resuelta se clasifica por alcance: un nombre que apunta a
+`0.0.0.0` (registro anulado), a bucle local o a direccionamiento privado **no**
+cuenta como activo alcanzable. Los que resuelven a IPs privadas se destacan
+aparte, porque filtrar direccionamiento interno es un hallazgo en sí mismo.
+
+> ⚠️ Respeta `SCAN_ALLOWLIST`. Analiza solo dominios propios o autorizados.
+
 ## Arquitectura (resumen)
 
 ```
@@ -92,6 +116,10 @@ Desarrollo por fases (ver `docs/ARQUITECTURA.md`):
 
 - [x] **Paso 1** — Arquitectura + esqueleto del repositorio
 - [ ] **Paso 2** — Motor de descubrimiento
+  - [x] Subdominios (Certificate Transparency + DNS)
+  - [ ] Puertos y servicios
+  - [ ] Cabeceras de seguridad HTTP
+  - [ ] Configuración TLS
 - [ ] **Paso 3** — Base de datos + modelos
 - [ ] **Paso 4** — API REST completa + APIs externas
 - [ ] **Paso 5** — Capa IA (triaje + consulta NL)

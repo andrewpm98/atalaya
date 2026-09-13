@@ -1,10 +1,11 @@
-.PHONY: help install dev api dashboard test lint fmt up down logs
+.PHONY: help install dev api dashboard scan test lint fmt up down logs
 
 help:
 	@echo "Atalaya — comandos disponibles:"
 	@echo "  make install    Instala dependencias (editable + dev)"
 	@echo "  make api        Levanta la API en local (sin Docker)"
 	@echo "  make dashboard  Levanta el dashboard Streamlit en local"
+	@echo "  make scan DOMAIN=ejemplo.com   Enumera subdominios por CLI"
 	@echo "  make test       Ejecuta la batería de tests"
 	@echo "  make lint       Linter (ruff) + tipos (mypy)"
 	@echo "  make fmt        Formatea el código (ruff format)"
@@ -20,6 +21,9 @@ api:
 
 dashboard:
 	streamlit run dashboard/app.py
+
+scan:
+	atalaya subdomains $(DOMAIN) --only-active
 
 test:
 	pytest -q
