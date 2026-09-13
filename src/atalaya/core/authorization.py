@@ -37,11 +37,19 @@ def normalize_domain(domain: str) -> str:
 
 
 def is_authorized(domain: str) -> bool:
-    """Indica si *domain* puede escanearse según la allowlist configurada."""
+    """Indica si *domain* puede escanearse según la allowlist configurada.
+
+    Normaliza y valida el formato del dominio antes de mirar la allowlist,
+    de modo que una entrada malformada nunca se considere autorizada aunque
+    `SCAN_ALLOWLIST` esté vacía (sin restricción).
+
+    Raises:
+        InvalidTargetError: si el dominio está mal formado.
+    """
+    candidate = normalize_domain(domain)
     allowlist = settings.allowlist
     if not allowlist:
         return True
-    candidate = normalize_domain(domain)
     return any(
         candidate == allowed or candidate.endswith(f".{allowed}") for allowed in allowlist
     )
