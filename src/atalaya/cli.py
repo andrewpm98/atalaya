@@ -13,7 +13,9 @@ import logging
 import sys
 
 from atalaya import __version__
+from atalaya.core.database import SessionLocal
 from atalaya.core.exceptions import AtalayaError
+from atalaya.core.persistence import save_subdomain_scan
 from atalaya.discovery.models import ResolutionStatus
 from atalaya.discovery.subdomains import enumerate_subdomains
 
@@ -27,6 +29,12 @@ def _configure_logging(verbose: bool) -> None:
 
 async def _run_subdomains(args: argparse.Namespace) -> int:
     result = await enumerate_subdomains(args.domain, resolve=not args.no_resolve)
+
+    if args.save:
+        async with SessionLocal() as session:
+            scan = await save_subdomain_scan(session, result)
+            await session.commit()
+            print(f"[BD] Escaneo #{scan.id} guardado ({len(scan.assets)} activos).")
 
     if args.json:
         print(result.model_dump_json(indent=2))
@@ -90,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--only-active", action="store_true", help="Muestra solo los hosts que resuelven"
     )
     subdomains.add_argument("--json", action="store_true", help="Salida en formato JSON")
+    subdomains.add_argument(
+        "--save", action="store_true", help="Persiste el resultado en base de datos"
+    )
     subdomains.set_defaults(func=_run_subdomains)
 
     return parser
