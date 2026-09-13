@@ -1,7 +1,10 @@
 """Motor de base de datos asíncrono y sesión (SQLAlchemy 2.0).
 
-Los modelos concretos (activos, escaneos, hallazgos) se definen en el Paso 3.
-Aquí queda listo el engine, la Base declarativa y el proveedor de sesión.
+Aquí vive el engine, la Base declarativa y el proveedor de sesión. Los
+modelos concretos (`Scan`, `Asset`, `Finding`) están en `core/models.py`, y la
+traducción de un resultado de descubrimiento a esas filas en
+`core/persistence.py` — separados de este fichero para que el ciclo de vida
+del engine no dependa de qué entidades existen.
 """
 
 from __future__ import annotations
