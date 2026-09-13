@@ -12,7 +12,7 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
-| Base de datos | PostgreSQL + SQLAlchemy async | ⬜ Motor configurado, modelos pendientes |
+| Base de datos | PostgreSQL + SQLAlchemy async | 🔨 Modelos Scan/Asset/Finding + migraciones Alembic. Solo persiste subdominios; puertos/cabeceras/TLS aún no existen |
 | API o webhook | API REST propia **y** consumo de APIs externas | 🔨 Estructura lista, endpoints en 501 |
 | Aplicación web | Dashboard Streamlit | 🔨 Versión mínima |
 | GitHub con historial | Commits por unidad lógica | ✅ 10 commits |
@@ -46,7 +46,9 @@ src/atalaya/
 ├── config.py                    Configuración desde entorno (.env)
 ├── cli.py                       CLI con subcomando `subdomains`
 ├── core/
-│   ├── database.py              Engine async + Base declarativa (sin modelos)
+│   ├── database.py              Engine async + Base declarativa + get_session
+│   ├── models.py                Scan, Asset, Finding (SQLAlchemy 2.0)
+│   ├── persistence.py           save_subdomain_scan() — descubrimiento → BD
 │   ├── exceptions.py            AtalayaError, UnauthorizedTargetError, ...
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
 │   └── netutils.py              classify_ip() — 10 alcances de red
@@ -54,10 +56,18 @@ src/atalaya/
 │   ├── models.py                SubdomainRecord, SubdomainScanResult
 │   └── subdomains.py            Enumeración completa (crt.sh + DNS)
 └── api/main.py                  FastAPI operativo, /health responde
+
+migrations/                      Alembic (async); URL desde settings.database_url
 ```
 
+> **Desviación del stub original:** este documento preveía los modelos
+> dentro de `core/database.py`. Se separaron en `core/models.py` (entidades)
+> y `core/persistence.py` (traducción resultado de descubrimiento → filas)
+> para que el ciclo de vida del engine no dependa de qué entidades existen.
+> `core/database.py` conserva solo engine/Base/sesión.
+
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **70 tests en verde.**
+55 objetivos de escaneo, 19 segundos. **76 tests en verde.**
 
 ### Pendiente (stubs con contrato definido)
 
@@ -66,7 +76,6 @@ Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
 | `discovery/ports.py` | Paso 2 | Escaneo asíncrono de puertos |
 | `discovery/headers.py` | Paso 2 | Cabeceras de seguridad HTTP |
 | `discovery/tls.py` | Paso 2 | Certificados y versión TLS |
-| `core/database.py` | Paso 3 | Modelos Scan / Asset / Finding |
 | `api/routes/*.py` | Paso 4 | 6 endpoints devuelven 501 a propósito |
 | `ai/provider.py`, `ai/triage.py` | Paso 5 | Capa de IA |
 | `dashboard/app.py` | Paso 6 | Panel completo |
@@ -82,15 +91,16 @@ dilo.
 
 1. ~~Paso 1 — Arquitectura y esqueleto~~ ✅
 2. **Paso 2 — Motor de descubrimiento** — subdominios ✅ · puertos, cabeceras, TLS ⬜
-3. Paso 3 — Modelos de BD y persistencia
+3. **Paso 3 — Modelos de BD y persistencia** — Scan/Asset/Finding + migraciones ✅ ·
+   solo subdominios persisten (puertos/cabeceras/TLS se conectan cuando existan)
 4. Paso 4 — Endpoints REST completos
 5. Paso 5 — Capa de IA (triaje + consulta NL)
 6. Paso 6 — Dashboard completo
 7. Paso 7 — Informe con portada
 
-**Orden en discusión:** se valora adelantar el Paso 3 (persistencia) antes de
-completar el resto del descubrimiento, para que los módulos nuevos nazcan ya
-guardando resultados en lugar de requerir adaptación posterior.
+Se adelantó el Paso 3 antes de completar el resto del descubrimiento, tal
+como se venía valorando: los módulos de puertos/cabeceras/TLS nacerán ya
+con destino de persistencia en vez de requerir adaptación posterior.
 
 **Plazo:** entrega a finales de septiembre. Priorizar cerrar los cinco
 requisitos obligatorios sobre pulir cualquiera de ellos.
@@ -202,10 +212,12 @@ cómo trata esto.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 70)
+pytest -q                            # tests (deben pasar los 76)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
+alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
 atalaya subdomains ejemplo.com       # CLI de enumeración
+atalaya subdomains ejemplo.com --save # enumera y persiste el resultado en BD
 ruff check src tests                 # linter
 docker compose up --build            # stack completo
 ```

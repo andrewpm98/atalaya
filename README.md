@@ -31,7 +31,10 @@ atalaya subdomains ejemplo.com                # enumera y verifica por DNS
 atalaya subdomains ejemplo.com --only-active  # solo hosts que resuelven
 atalaya subdomains ejemplo.com --no-resolve   # solo candidatos de CT, sin DNS
 atalaya subdomains ejemplo.com --json         # salida estructurada
+atalaya subdomains ejemplo.com --save         # además, persiste el escaneo en BD
 ```
+
+`--save` requiere que las tablas existan (`alembic upgrade head` una vez).
 
 La enumeración consulta los registros de **Certificate Transparency** vía
 crt.sh —técnica pasiva: no envía tráfico al objetivo— normaliza y deduplica
@@ -120,7 +123,8 @@ Desarrollo por fases (ver `docs/ARQUITECTURA.md`):
   - [ ] Puertos y servicios
   - [ ] Cabeceras de seguridad HTTP
   - [ ] Configuración TLS
-- [ ] **Paso 3** — Base de datos + modelos
+- [x] **Paso 3** — Base de datos + modelos (Scan/Asset/Finding, migraciones Alembic;
+      solo persiste subdominios por ahora)
 - [ ] **Paso 4** — API REST completa + APIs externas
 - [ ] **Paso 5** — Capa IA (triaje + consulta NL)
 - [ ] **Paso 6** — Dashboard completo

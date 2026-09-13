@@ -31,13 +31,16 @@ Cada técnica es un módulo independiente con salida normalizada:
 | `tls`          | Versión TLS, certificado, caducidad            | `cryptography`          |
 
 ### 2.3 Persistencia (PostgreSQL) — `src/atalaya/core`
-Modelo de datos relacional. Entidades previstas (Paso 3):
+Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
 
-- **Scan** — un escaneo (dominio objetivo, fecha, estado).
-- **Asset** — activo descubierto (subdominio/host, IP, puertos).
-- **Finding** — hallazgo (tipo, evidencia, severidad, remediación, `scan_id`).
+- **Scan** — un escaneo (dominio objetivo, fecha, estado, incidencias).
+- **Asset** — activo descubierto (host, IPs, alcance, puertos abiertos).
+- **Finding** — hallazgo (tipo, evidencia, severidad, remediación, `asset_id`).
 
-Relaciones: `Scan 1─N Asset`, `Asset 1─N Finding`.
+Relaciones: `Scan 1─N Asset`, `Asset 1─N Finding`. Las migraciones viven en
+`migrations/` (Alembic, motor async). `core/persistence.py` traduce un
+resultado de descubrimiento (`SubdomainScanResult`, de momento) a estas
+filas; un host con `leaks_internal_addressing` genera además un `Finding`.
 
 ### 2.4 Capa IA — `src/atalaya/ai`
 - `provider` — abstracción del LLM (Anthropic por defecto, intercambiable).
@@ -88,7 +91,7 @@ dominio
 
 | Requisito de la práctica | Dónde se resuelve                          |
 |--------------------------|--------------------------------------------|
-| Base de datos            | `core/database.py` + modelos (Paso 3)      |
+| Base de datos            | `core/models.py` + `core/persistence.py` (Paso 3 ✅) |
 | API / webhook            | `api/` (propia) + `discovery/` (consumo)   |
 | Aplicación web           | `dashboard/app.py`                         |
 | GitHub con historial     | Commits por fase                           |
@@ -98,7 +101,7 @@ dominio
 
 1. **Paso 1 — Arquitectura + esqueleto** ✅
 2. **Paso 2 — Motor de descubrimiento** (subdominios ✅ · puertos, cabeceras y TLS pendientes)
-3. **Paso 3 — Base de datos + modelos**
+3. **Paso 3 — Base de datos + modelos** ✅ (solo persiste subdominios por ahora)
 4. **Paso 4 — API REST completa + APIs externas**
 5. **Paso 5 — Capa IA (triaje + consulta NL)**
 6. **Paso 6 — Dashboard completo**
@@ -204,5 +207,6 @@ como hallazgo propio (Paso 5).
 ### 7.6 Integración prevista
 
 - **Paso 2 (puertos)** — `SubdomainScanResult.scan_targets()` alimenta el escaneo de puertos, ya filtrado de direcciones no enrutables.
-- **Paso 3 (BD)** — cada `SubdomainRecord` se corresponde con una fila de `Asset`.
+- **Paso 3 (BD)** — cada `SubdomainRecord` se corresponde con una fila de `Asset`
+  (✅ implementado en `core/persistence.py::save_subdomain_scan`).
 - **Paso 4 (API)** — los modelos se devuelven como respuesta de `POST /scans` sin conversión.
