@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: atalaya-db
+    environment:
+      POSTGRES_USER: atalaya
+      POSTGRES_PASSWORD: atalaya
+      POSTGRES_DB: atalaya
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atalaya"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: atalaya-api
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./reports:/app/reports
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: atalaya-dashboard
+    env_file: .env
+    environment:
+      ATALAYA_API_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./dashboard:/app/dashboard
+
+volumes:
+  pgdata:
