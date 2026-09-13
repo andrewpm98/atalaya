@@ -1,4 +1,4 @@
-.PHONY: help install dev api dashboard scan test lint fmt up down logs
+.PHONY: help install dev api dashboard scan test lint fmt up down logs migrate revision
 
 help:
 	@echo "Atalaya — comandos disponibles:"
@@ -9,6 +9,8 @@ help:
 	@echo "  make test       Ejecuta la batería de tests"
 	@echo "  make lint       Linter (ruff) + tipos (mypy)"
 	@echo "  make fmt        Formatea el código (ruff format)"
+	@echo "  make migrate    Aplica las migraciones pendientes (alembic upgrade head)"
+	@echo "  make revision MSG=\"...\"   Genera una migración a partir de los modelos"
 	@echo "  make up         Levanta todo el stack con docker-compose"
 	@echo "  make down       Detiene el stack"
 	@echo "  make logs       Muestra logs del stack"
@@ -34,6 +36,12 @@ lint:
 
 fmt:
 	ruff format src tests dashboard
+
+migrate:
+	alembic upgrade head
+
+revision:
+	alembic revision --autogenerate -m "$(MSG)"
 
 up:
 	docker compose up --build -d
