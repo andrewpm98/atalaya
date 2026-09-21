@@ -14,11 +14,18 @@ diferencial no es escanear (hay muchas herramientas que lo hacen), sino
 Núcleo de la aplicación. Expone la API REST propia (requisito de la práctica) y
 orquesta el resto de módulos. Endpoints principales:
 
-- `POST /scans` — lanza un escaneo sobre un dominio.
-- `GET  /scans`, `GET /scans/{id}` — consulta de escaneos.
-- `GET  /assets` — activos descubiertos.
-- `GET  /findings` — hallazgos priorizados por IA.
-- `POST /findings/ask` — consulta en lenguaje natural.
+- `POST /scans` ✅ — lanza un escaneo de subdominios y lo persiste.
+- `GET  /scans`, `GET /scans/{id}` ✅ — consulta de escaneos (404 si no existe).
+- `GET  /assets` ✅ — activos descubiertos, filtrables por `scan_id`.
+- `GET  /findings` ✅ — hallazgos, filtrables por `asset_id`/`scan_id`; sin
+  triaje IA todavía (severidad `unknown` hasta el Paso 5).
+- `POST /findings/ask` — consulta en lenguaje natural. Pendiente: depende de
+  la capa IA (Paso 5).
+
+`api/schemas.py` define la frontera Pydantic entre las tablas y la respuesta
+pública; `api/main.py` traduce `InvalidTargetError`/`UnauthorizedTargetError`
+a 400/403 vía `exception_handler`, en vez de que cada ruta gestione sus
+propios códigos de error.
 
 ### 2.2 Descubrimiento — `src/atalaya/discovery`
 Cada técnica es un módulo independiente con salida normalizada:
@@ -41,6 +48,12 @@ Relaciones: `Scan 1─N Asset`, `Asset 1─N Finding`. Las migraciones viven en
 `migrations/` (Alembic, motor async). `core/persistence.py` traduce un
 resultado de descubrimiento (`SubdomainScanResult`, de momento) a estas
 filas; un host con `leaks_internal_addressing` genera además un `Finding`.
+
+`core/repository.py` es la contraparte de lectura: `get_scan`, `list_scans`,
+`get_latest_scan`, `list_assets`, `list_findings` y `diff_scans()` (compara
+los hostnames de dos escaneos del mismo dominio — la razón de ser de
+persistir escaneos en el tiempo). La API (2.1) y el dashboard (2.6) consultan
+por aquí, no construyen `select()` propios.
 
 ### 2.4 Capa IA — `src/atalaya/ai`
 - `provider` — abstracción del LLM (Anthropic por defecto, intercambiable).
@@ -92,7 +105,7 @@ dominio
 | Requisito de la práctica | Dónde se resuelve                          |
 |--------------------------|--------------------------------------------|
 | Base de datos            | `core/models.py` + `core/persistence.py` (Paso 3 ✅) |
-| API / webhook            | `api/` (propia) + `discovery/` (consumo)   |
+| API / webhook            | `api/` (propia, Paso 4 🔨) + `discovery/` (consumo de crt.sh) |
 | Aplicación web           | `dashboard/app.py`                         |
 | GitHub con historial     | Commits por fase                           |
 | Reporte con portada      | `reporting/generator.py`                   |
@@ -102,7 +115,8 @@ dominio
 1. **Paso 1 — Arquitectura + esqueleto** ✅
 2. **Paso 2 — Motor de descubrimiento** (subdominios ✅ · puertos, cabeceras y TLS pendientes)
 3. **Paso 3 — Base de datos + modelos** ✅ (solo persiste subdominios por ahora)
-4. **Paso 4 — API REST completa + APIs externas**
+4. **Paso 4 — API REST completa + APIs externas** (`scans`/`assets`/`findings` ✅ ·
+   `/findings/ask` pendiente de la capa IA)
 5. **Paso 5 — Capa IA (triaje + consulta NL)**
 6. **Paso 6 — Dashboard completo**
 7. **Paso 7 — Generador de informes**
@@ -209,4 +223,5 @@ como hallazgo propio (Paso 5).
 - **Paso 2 (puertos)** — `SubdomainScanResult.scan_targets()` alimenta el escaneo de puertos, ya filtrado de direcciones no enrutables.
 - **Paso 3 (BD)** — cada `SubdomainRecord` se corresponde con una fila de `Asset`
   (✅ implementado en `core/persistence.py::save_subdomain_scan`).
-- **Paso 4 (API)** — los modelos se devuelven como respuesta de `POST /scans` sin conversión.
+- **Paso 4 (API)** ✅ — `POST /scans` devuelve el `Scan` persistido a través de
+  `api/schemas.py` (no se exponen los modelos ORM directamente).

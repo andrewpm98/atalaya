@@ -13,7 +13,7 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
 | Base de datos | PostgreSQL + SQLAlchemy async | 🔨 Modelos Scan/Asset/Finding + migraciones Alembic. Solo persiste subdominios; puertos/cabeceras/TLS aún no existen |
-| API o webhook | API REST propia **y** consumo de APIs externas | 🔨 Estructura lista, endpoints en 501 |
+| API o webhook | API REST propia **y** consumo de APIs externas | 🔨 `scans`/`assets`/`findings` implementados sobre datos reales; `/findings/ask` (consulta NL) en 501, depende de la capa IA |
 | Aplicación web | Dashboard Streamlit | 🔨 Versión mínima |
 | GitHub con historial | Commits por unidad lógica | ✅ 10 commits |
 | Reporte con portada | Informe generado por la herramienta | ⬜ Paso 7 |
@@ -49,13 +49,22 @@ src/atalaya/
 │   ├── database.py              Engine async + Base declarativa + get_session
 │   ├── models.py                Scan, Asset, Finding (SQLAlchemy 2.0)
 │   ├── persistence.py           save_subdomain_scan() — descubrimiento → BD
+│   ├── repository.py            Lectura: get_scan, list_scans, get_latest_scan,
+│   │                             list_assets, list_findings, diff_scans()
 │   ├── exceptions.py            AtalayaError, UnauthorizedTargetError, ...
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
 │   └── netutils.py              classify_ip() — 10 alcances de red
 ├── discovery/
 │   ├── models.py                SubdomainRecord, SubdomainScanResult
 │   └── subdomains.py            Enumeración completa (crt.sh + DNS)
-└── api/main.py                  FastAPI operativo, /health responde
+└── api/
+    ├── main.py                  FastAPI + exception_handler (dominio inválido → 400,
+    │                             no autorizado → 403)
+    ├── schemas.py                Esquemas Pydantic de respuesta (frontera BD ↔ API)
+    └── routes/
+        ├── scans.py              POST/GET /scans, GET /scans/{id} — reales
+        ├── assets.py              GET /assets?scan_id= — real
+        └── findings.py            GET /findings — real; POST /findings/ask en 501
 
 migrations/                      Alembic (async); URL desde settings.database_url
 ```
@@ -64,10 +73,12 @@ migrations/                      Alembic (async); URL desde settings.database_ur
 > dentro de `core/database.py`. Se separaron en `core/models.py` (entidades)
 > y `core/persistence.py` (traducción resultado de descubrimiento → filas)
 > para que el ciclo de vida del engine no dependa de qué entidades existen.
-> `core/database.py` conserva solo engine/Base/sesión.
+> `core/database.py` conserva solo engine/Base/sesión. `core/repository.py`
+> sigue el mismo principio para la lectura: los endpoints y el dashboard
+> consultan por aquí, nunca construyen su propio `select()`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **76 tests en verde.**
+55 objetivos de escaneo, 19 segundos. **88 tests en verde.**
 
 ### Pendiente (stubs con contrato definido)
 
@@ -76,7 +87,7 @@ Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
 | `discovery/ports.py` | Paso 2 | Escaneo asíncrono de puertos |
 | `discovery/headers.py` | Paso 2 | Cabeceras de seguridad HTTP |
 | `discovery/tls.py` | Paso 2 | Certificados y versión TLS |
-| `api/routes/*.py` | Paso 4 | 6 endpoints devuelven 501 a propósito |
+| `api/routes/findings.py::ask_natural_language` | Paso 5 | Consulta NL — depende de la capa IA |
 | `ai/provider.py`, `ai/triage.py` | Paso 5 | Capa de IA |
 | `dashboard/app.py` | Paso 6 | Panel completo |
 | `reporting/generator.py` | Paso 7 | Informe con portada |
@@ -93,7 +104,8 @@ dilo.
 2. **Paso 2 — Motor de descubrimiento** — subdominios ✅ · puertos, cabeceras, TLS ⬜
 3. **Paso 3 — Modelos de BD y persistencia** — Scan/Asset/Finding + migraciones ✅ ·
    solo subdominios persisten (puertos/cabeceras/TLS se conectan cuando existan)
-4. Paso 4 — Endpoints REST completos
+4. **Paso 4 — Endpoints REST** — `scans`/`assets`/`findings` (creación + lectura) ✅ ·
+   `/findings/ask` (consulta NL) pendiente de la capa IA
 5. Paso 5 — Capa de IA (triaje + consulta NL)
 6. Paso 6 — Dashboard completo
 7. Paso 7 — Informe con portada
@@ -101,6 +113,12 @@ dilo.
 Se adelantó el Paso 3 antes de completar el resto del descubrimiento, tal
 como se venía valorando: los módulos de puertos/cabeceras/TLS nacerán ya
 con destino de persistencia en vez de requerir adaptación posterior.
+
+Por el mismo motivo se adelantó el Paso 4 para `scans`/`assets`/`findings`
+sin esperar a la capa IA: son CRUD reales sobre lo que ya persiste el
+Paso 3. Solo `/findings/ask` se queda en 501 — preguntar en lenguaje
+natural no tiene contenido sin un LLM detrás, así que ese endpoint espera
+al Paso 5 en vez de simularse.
 
 **Plazo:** entrega a finales de septiembre. Priorizar cerrar los cinco
 requisitos obligatorios sobre pulir cualquiera de ellos.

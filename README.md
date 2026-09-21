@@ -126,6 +126,8 @@ Desarrollo por fases (ver `docs/ARQUITECTURA.md`):
 - [x] **Paso 3** — Base de datos + modelos (Scan/Asset/Finding, migraciones Alembic;
       solo persiste subdominios por ahora)
 - [ ] **Paso 4** — API REST completa + APIs externas
+  - [x] `scans` / `assets` / `findings` — creación y lectura real
+  - [ ] `/findings/ask` (consulta NL) — depende de la capa IA
 - [ ] **Paso 5** — Capa IA (triaje + consulta NL)
 - [ ] **Paso 6** — Dashboard completo
 - [ ] **Paso 7** — Generador de informes
