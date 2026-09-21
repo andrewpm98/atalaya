@@ -71,6 +71,22 @@ def api_post(path: str, json: dict[str, Any] | None = None) -> Any | None:
     return resp.json()
 
 
+def api_get_bytes(path: str) -> bytes | None:
+    """GET contra la API devolviendo el cuerpo crudo, no JSON — para el PDF
+    del informe (`/scans/{id}/report`). Mismo criterio de degradación que
+    `api_get`: nunca lanza, informa el error en la propia página."""
+    try:
+        with httpx.Client(base_url=API_URL, timeout=120.0) as client:
+            resp = client.get(path)
+    except httpx.HTTPError as exc:
+        st.error(f"No se pudo contactar con la API ({path}): {exc}")
+        return None
+    if resp.status_code >= 400:
+        st.error(f"{path} → {resp.status_code}: {_detail(resp)}")
+        return None
+    return resp.content
+
+
 def _detail(resp: httpx.Response) -> str:
     try:
         return str(resp.json().get("detail", resp.text))
@@ -125,6 +141,27 @@ def render_scan_detail(scan: dict[str, Any]) -> None:
     col1.metric("Activos", len(scan["assets"]))
     col2.metric("Hallazgos", total_findings)
     col3.metric("Sin triar", _sin_triar(scan))
+
+    # `st.download_button` necesita los bytes ya en mano al renderizarse —
+    # a diferencia de un botón normal, no admite generar el contenido en su
+    # propio callback. Por eso el PDF se pide a la API en un botón previo y
+    # se guarda en `session_state`, y solo entonces aparece el botón de
+    # descarga, con el mismo criterio de dos pasos que el triaje de arriba.
+    report_key = f"report_bytes_{scan['id']}"
+    if st.button("📄 Generar informe PDF", key=f"report-{scan['id']}"):
+        with st.spinner("Generando el informe..."):
+            pdf_bytes = api_get_bytes(f"/scans/{scan['id']}/report")
+        if pdf_bytes is not None:
+            st.session_state[report_key] = pdf_bytes
+
+    if st.session_state.get(report_key) is not None:
+        st.download_button(
+            "⬇️ Descargar informe PDF",
+            data=st.session_state[report_key],
+            file_name=f"atalaya_informe_{scan['domain']}_{scan['id']}.pdf",
+            mime="application/pdf",
+            key=f"download-{scan['id']}",
+        )
 
     st.markdown("#### Activos")
     if not scan["assets"]:

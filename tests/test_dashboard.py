@@ -26,12 +26,19 @@ _APP_PATH = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
 
 
 class _Resp:
-    """Doble de `httpx.Response`: solo lo que `dashboard/app.py` usa."""
+    """Doble de `httpx.Response`: solo lo que `dashboard/app.py` usa.
+
+    `content` acepta bytes tal cual (respuesta binaria, p. ej. el PDF de
+    `/scans/{id}/report`) o los codifica desde el payload — así el mismo
+    doble sirve tanto para `api_get`/`api_post` (JSON) como para
+    `api_get_bytes` (cuerpo crudo).
+    """
 
     def __init__(self, status_code: int, payload: Any) -> None:
         self.status_code = status_code
         self._payload = payload
         self.text = str(payload)
+        self.content = payload if isinstance(payload, bytes) else str(payload).encode()
 
     def json(self) -> Any:
         return self._payload
@@ -284,6 +291,50 @@ def test_triage_con_fallos_muestra_los_errores() -> None:
 
     assert not at.exception
     assert any("rate limit" in w.value for w in at.warning)
+
+
+# ─── Informe ────────────────────────────────────────────────────────────────
+
+
+def test_boton_informe_pide_el_pdf_y_habilita_la_descarga() -> None:
+    """El botón "Generar informe PDF" pide `GET /scans/{id}/report` y, con la
+    respuesta en mano, aparece el botón de descarga -- `st.download_button`
+    necesita los bytes ya disponibles al renderizarse, no puede pedirlos en
+    su propio clic (ver comentario en `dashboard/app.py`)."""
+    detalle = _scan_detail(findings=[_finding(severity="high")])  # ya triado: sin botón de triaje
+    pdf_bytes = b"%PDF-1.4 contenido de prueba"
+    get_map = {
+        "/scans": _Resp(200, [_scan_summary()]),
+        "/scans/1": _Resp(200, detalle),
+        "/scans/1/report": _Resp(200, pdf_bytes),
+    }
+
+    with patch("httpx.Client", _fake_client(get_map)):
+        at = AppTest.from_file(_APP_PATH, default_timeout=15)
+        at.run()
+        at.tabs[1].button[0].click().run()
+
+    assert not at.exception
+    assert len(at.tabs[1].download_button) == 1
+    assert "Descargar informe PDF" in at.tabs[1].download_button[0].label
+
+
+def test_informe_con_fallo_de_la_api_no_muestra_boton_de_descarga() -> None:
+    detalle = _scan_detail(findings=[_finding(severity="high")])
+    get_map = {
+        "/scans": _Resp(200, [_scan_summary()]),
+        "/scans/1": _Resp(200, detalle),
+        "/scans/1/report": _Resp(502, {"detail": "fallo generando el PDF"}),
+    }
+
+    with patch("httpx.Client", _fake_client(get_map)):
+        at = AppTest.from_file(_APP_PATH, default_timeout=15)
+        at.run()
+        at.tabs[1].button[0].click().run()
+
+    assert not at.exception
+    assert len(at.tabs[1].download_button) == 0
+    assert any("fallo generando el PDF" in e.value for e in at.tabs[1].error)
 
 
 # ─── Preguntar ──────────────────────────────────────────────────────────────
