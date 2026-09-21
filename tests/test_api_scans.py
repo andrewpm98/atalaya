@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
+from atalaya.config import settings
 from atalaya.discovery.models import (
     DiscoverySource,
     ResolutionStatus,
@@ -111,3 +112,34 @@ async def test_list_assets_y_findings_filtran_por_scan(client: TestClient, monke
     assert findings.status_code == 200
     assert len(findings.json()) == 1
     assert findings.json()[0]["severity"] == "unknown"
+
+
+# ─── GET /scans/{id}/report ──────────────────────────────────────────────────
+
+
+async def test_download_report_devuelve_pdf(
+    client: TestClient, monkeypatch, tmp_path
+) -> None:
+    """Prueba de extremo a extremo: escaneo real (persistencia) -> informe
+    real (Jinja2 + xhtml2pdf) -> respuesta HTTP. `reports_dir` se redirige a
+    `tmp_path` para no escribir en el directorio del proyecto durante los
+    tests."""
+    monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
+
+    async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
+        return _fake_result(domain)
+
+    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
+    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+
+    resp = client.get(f"/scans/{created['id']}/report")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.content.startswith(b"%PDF")
+    assert list(tmp_path.glob("*.pdf"))  # el informe se escribió a disco
+
+
+async def test_download_report_escaneo_inexistente_da_404(client: TestClient) -> None:
+    resp = client.get("/scans/999/report")
+    assert resp.status_code == 404

@@ -5,12 +5,14 @@ Paso 2-3 cubren descubrimiento de subdominios + persistencia; `create_scan`
 solo encadena ambos. Puertos/cabeceras/TLS se suman al mismo escaneo cuando
 esos módulos de descubrimiento existan (Paso 2, resto). `triage_scan`
 (Paso 5) es la puerta de entrada REST al triaje por IA: sin ella,
-`ai/triage.py` no sería alcanzable desde la API.
+`ai/triage.py` no sería alcanzable desde la API. `download_report`
+(Paso 7) cumple el mismo papel para `reporting/generator.py`.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atalaya.ai.provider import get_provider
@@ -21,6 +23,7 @@ from atalaya.core.database import get_session
 from atalaya.core.models import FindingSeverity, Scan
 from atalaya.core.persistence import save_subdomain_scan
 from atalaya.discovery.subdomains import enumerate_subdomains
+from atalaya.reporting.generator import generate_report
 
 router = APIRouter(prefix="/scans", tags=["escaneos"])
 
@@ -94,3 +97,26 @@ async def triage_scan(scan_id: int, session: AsyncSession = Depends(get_session)
     result = await triage_findings(provider, pendientes)
     await session.commit()
     return TriageResponse(scan_id=scan.id, triaged=result.triaged, errors=result.errors)
+
+
+@router.get("/{scan_id}/report")
+async def download_report(
+    scan_id: int, session: AsyncSession = Depends(get_session)
+) -> FileResponse:
+    """Genera (o regenera) el informe PDF de un escaneo y lo sirve para descarga.
+
+    Regenerar en cada descarga, en vez de servir un fichero cacheado sin
+    comprobar nada, evita servir un informe desactualizado si el escaneo se
+    ha triado con IA después de la última descarga.
+    """
+    scan = await repository.get_scan(session, scan_id)
+    if scan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Escaneo {scan_id} no encontrado"
+        )
+    path = await generate_report(scan)
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"atalaya_informe_{scan.domain}_{scan.id}.pdf",
+    )
