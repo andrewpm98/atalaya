@@ -12,7 +12,7 @@ Se definen con Pydantic por tres motivos:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -101,7 +101,7 @@ class SubdomainScanResult(BaseModel):
 
     domain: str = Field(description="Dominio raíz analizado")
     records: list[SubdomainRecord] = Field(default_factory=list)
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
     errors: list[str] = Field(
         default_factory=list,
@@ -218,6 +218,27 @@ class TlsScanResult(BaseModel):
     )
 
 
+class TakeoverCandidate(BaseModel):
+    """Candidato a *subdomain takeover*: un CNAME que apunta a un servicio de
+    terceros con un patrón asociado a este riesgo (GitHub Pages, S3, Azure...).
+
+    **Es un candidato por patrón DNS, no una confirmación.** Que el CNAME
+    coincida con un proveedor de la tabla no significa que el recurso
+    apuntado esté realmente sin reclamar — eso exigiría comprobar si el
+    servicio de terceros responde "no existe", y eso cruzaría a verificar
+    explotabilidad, prohibido explícitamente por la restricción de seguridad
+    #6 de CLAUDE.md. La herramienta señala el patrón de riesgo; decidir si es
+    explotable requiere autorización expresa y queda fuera de este proyecto.
+    """
+
+    hostname: str = Field(description="Host cuyo CNAME coincide con un patrón conocido")
+    cname: str = Field(description="Valor del registro CNAME resuelto")
+    provider: str = Field(description="Servicio de terceros identificado, p. ej. 'GitHub Pages'")
+    pattern_matched: str = Field(
+        description="Sufijo de la tabla de patrones que hizo match, p. ej. 'github.io'"
+    )
+
+
 class EnrichmentResult(BaseModel):
     """Resultado combinado de puertos, cabeceras y TLS sobre los hosts
     activos de un `SubdomainScanResult` (Paso 2, resto).
@@ -232,15 +253,36 @@ class EnrichmentResult(BaseModel):
     ports_by_ip: dict[str, list[int]] = Field(default_factory=dict)
     header_results: list[HeaderScanResult] = Field(default_factory=list)
     tls_results: list[TlsScanResult] = Field(default_factory=list)
+    takeover_candidates: list[TakeoverCandidate] = Field(
+        default_factory=list,
+        description="Candidatos a subdomain takeover, detectados sobre TODOS los "
+        "registros del escaneo (no solo los activos) por discovery/takeover.py",
+    )
 
     def findings_by_hostname(self) -> dict[str, list[DiscoveryFinding]]:
-        """Agrupa los hallazgos de cabeceras y TLS por host.
+        """Agrupa los hallazgos de cabeceras, TLS y takeover por host.
 
         Forma lista para `core/persistence.py::apply_discovery_findings`,
-        que necesita saber a qué `Asset` (por hostname) añadir cada uno.
+        que necesita saber a qué `Asset` (por hostname) añadir cada uno. Cada
+        `TakeoverCandidate` se traduce aquí a un `DiscoveryFinding`
+        (`finding_type="subdomain_takeover_risk"`) para que se persista con
+        el mismo mecanismo genérico que cabeceras y TLS, sin que
+        `core/persistence.py` necesite conocer este tipo de hallazgo.
         """
         grouped: dict[str, list[DiscoveryFinding]] = {}
         for item in (*self.header_results, *self.tls_results):
             if item.findings:
                 grouped.setdefault(item.hostname, []).extend(item.findings)
+        for candidate in self.takeover_candidates:
+            grouped.setdefault(candidate.hostname, []).append(
+                DiscoveryFinding(
+                    finding_type="subdomain_takeover_risk",
+                    evidence=(
+                        f"{candidate.hostname} tiene un CNAME hacia {candidate.cname}, "
+                        f"que coincide con el patrón de {candidate.provider} "
+                        f"('{candidate.pattern_matched}'). Riesgo de takeover si el "
+                        "recurso de terceros no está reclamado; no verificado."
+                    ),
+                )
+            )
         return grouped

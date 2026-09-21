@@ -16,6 +16,12 @@ y las IPs enrutables (`scan_targets()`): un host que no resuelve, o que solo
 resuelve a direccionamiento interno, no tiene un servicio HTTP/TLS real que
 inspeccionar, y sondearlo igualmente no aportaría nada más que tráfico
 innecesario hacia una dirección que no es un objetivo válido de escaneo.
+
+La detección de *subdomain takeover* (`discovery/takeover.py`) es la
+excepción deliberada a ese criterio: se ejecuta sobre **todos** los
+registros (`result.records`), no solo los activos, porque la señal que
+busca vive precisamente en los hosts que no resuelven por A/AAAA -- ver el
+docstring de `discovery/takeover.py`.
 """
 
 from __future__ import annotations
@@ -32,24 +38,30 @@ from atalaya.discovery.models import (
     TlsScanResult,
 )
 from atalaya.discovery.ports import scan_ports
+from atalaya.discovery.takeover import find_takeover_candidates
 from atalaya.discovery.tls import inspect_tls
 
 logger = logging.getLogger(__name__)
 
 
 async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
-    """Ejecuta puertos, cabeceras y TLS sobre los hosts activos de *result*.
+    """Ejecuta puertos, cabeceras, TLS y detección de takeover sobre *result*.
 
-    Las tres técnicas son independientes entre sí y se lanzan concurrentemente
-    (`asyncio.gather`), cada una acotada por su propio semáforo de
+    Puertos, cabeceras y TLS solo actúan sobre los hosts *activos*: son
+    independientes entre sí y se lanzan concurrentemente (`asyncio.gather`),
+    cada una acotada por su propio semáforo de
     `settings.enrichment_host_concurrency` hosts en paralelo — sin este
     límite, un escaneo con muchos subdominios activos dispararía cientos de
     conexiones simultáneas sin control (CLAUDE.md, restricción de seguridad 5).
+
+    La detección de takeover (`discovery/takeover.py::find_takeover_candidates`)
+    es la cuarta rama del `gather`, pero recibe *todos* los registros
+    (`result.records`), no solo los activos: sin hosts activos, las otras tres
+    técnicas no tienen nada que hacer, pero la búsqueda de takeover sigue
+    siendo relevante -- por eso ya no hay una salida temprana cuando
+    `result.active_records` está vacío.
     """
     active = result.active_records
-    if not active:
-        return EnrichmentResult()
-
     hostnames = [record.hostname for record in active]
     ips = result.scan_targets()
 
@@ -69,21 +81,24 @@ async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
         async with tls_semaphore:
             return await inspect_tls(hostname)
 
-    port_pairs, header_results, tls_results = await asyncio.gather(
+    port_pairs, header_results, tls_results, takeover_candidates = await asyncio.gather(
         asyncio.gather(*(_ports(ip) for ip in ips)),
         asyncio.gather(*(_headers(hostname) for hostname in hostnames)),
         asyncio.gather(*(_tls(hostname) for hostname in hostnames)),
+        find_takeover_candidates(result.records),
     )
 
     logger.info(
         "Enriquecimiento de %s completado: %d IPs escaneadas, %d hosts analizados "
-        "(cabeceras + TLS)",
+        "(cabeceras + TLS), %d candidatos a takeover",
         result.domain,
         len(port_pairs),
         len(hostnames),
+        len(takeover_candidates),
     )
     return EnrichmentResult(
         ports_by_ip=dict(port_pairs),
         header_results=list(header_results),
         tls_results=list(tls_results),
+        takeover_candidates=list(takeover_candidates),
     )
