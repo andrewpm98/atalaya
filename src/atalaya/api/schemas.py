@@ -66,3 +66,29 @@ class ScanSummary(BaseModel):
 
 class ScanDetail(ScanSummary):
     assets: list[AssetDetail] = Field(default_factory=list)
+
+
+class TriageResponse(BaseModel):
+    """Resultado de `POST /scans/{id}/triage`: cuántos hallazgos se triaron."""
+
+    scan_id: int
+    triaged: int
+    errors: list[str] = Field(default_factory=list)
+
+
+class AskRequest(BaseModel):
+    """Cuerpo de `POST /findings/ask`."""
+
+    domain: str = Field(description="Dominio sobre el que preguntar")
+    question: str = Field(min_length=1, description="Pregunta en lenguaje natural")
+    scan_id: int | None = Field(
+        default=None,
+        description="Escaneo concreto a consultar; por defecto, el último completado",
+    )
+
+
+class AskResponse(BaseModel):
+    scan_id: int
+    domain: str
+    question: str
+    answer: str

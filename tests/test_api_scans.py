@@ -9,45 +9,16 @@ memoria — igual que `db_session`, pero por request HTTP en vez de directa.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 
-import pytest_asyncio
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
-from atalaya.api.main import app
-from atalaya.core import models  # noqa: F401 - registra las tablas en Base.metadata
-from atalaya.core.database import Base, get_session
 from atalaya.discovery.models import (
     DiscoverySource,
     ResolutionStatus,
     SubdomainRecord,
     SubdomainScanResult,
 )
-
-
-@pytest_asyncio.fixture
-async def client() -> AsyncGenerator[TestClient, None]:
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-    async def _override_get_session() -> AsyncGenerator[AsyncSession, None]:
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = _override_get_session
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-    await engine.dispose()
 
 
 def _fake_result(domain: str) -> SubdomainScanResult:

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from atalaya import __version__
 from atalaya.api.routes import assets, findings, scans
-from atalaya.core.exceptions import InvalidTargetError, UnauthorizedTargetError
+from atalaya.core.exceptions import AIProviderError, InvalidTargetError, UnauthorizedTargetError
 
 app = FastAPI(
     title="Atalaya API",
@@ -35,6 +35,13 @@ async def _unauthorized_target_handler(
     request: Request, exc: UnauthorizedTargetError
 ) -> JSONResponse:
     return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(AIProviderError)
+async def _ai_provider_handler(request: Request, exc: AIProviderError) -> JSONResponse:
+    # 502: el fallo es de un servicio upstream (el proveedor de IA), no de
+    # la propia API ni de la petición del cliente.
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 @app.get("/health", tags=["sistema"])

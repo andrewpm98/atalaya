@@ -1,8 +1,11 @@
-"""Router de escaneos: lanzar y consultar escaneos de superficie de exposición.
+"""Router de escaneos: lanzar, consultar y triar escaneos de superficie de
+exposición.
 
 Paso 2-3 cubren descubrimiento de subdominios + persistencia; `create_scan`
 solo encadena ambos. Puertos/cabeceras/TLS se suman al mismo escaneo cuando
-esos módulos de descubrimiento existan (Paso 2, resto).
+esos módulos de descubrimiento existan (Paso 2, resto). `triage_scan`
+(Paso 5) es la puerta de entrada REST al triaje por IA: sin ella,
+`ai/triage.py` no sería alcanzable desde la API.
 """
 
 from __future__ import annotations
@@ -10,10 +13,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atalaya.api.schemas import ScanDetail, ScanRequest, ScanSummary
+from atalaya.ai.provider import get_provider
+from atalaya.ai.triage import triage_findings
+from atalaya.api.schemas import ScanDetail, ScanRequest, ScanSummary, TriageResponse
 from atalaya.core import repository
 from atalaya.core.database import get_session
-from atalaya.core.models import Scan
+from atalaya.core.models import FindingSeverity, Scan
 from atalaya.core.persistence import save_subdomain_scan
 from atalaya.discovery.subdomains import enumerate_subdomains
 
@@ -61,3 +66,31 @@ async def get_scan(scan_id: int, session: AsyncSession = Depends(get_session)) -
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Escaneo {scan_id} no encontrado"
         )
     return scan
+
+
+@router.post("/{scan_id}/triage", response_model=TriageResponse)
+async def triage_scan(scan_id: int, session: AsyncSession = Depends(get_session)) -> TriageResponse:
+    """Triaja con IA los hallazgos sin triar (`severity == unknown`) de un escaneo.
+
+    No repite el triaje de hallazgos ya triados: es idempotente frente a
+    llamadas repetidas y evita coste innecesario del proveedor de IA.
+    """
+    scan = await repository.get_scan(session, scan_id)
+    if scan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Escaneo {scan_id} no encontrado"
+        )
+
+    pendientes = [
+        finding
+        for asset in scan.assets
+        for finding in asset.findings
+        if finding.severity is FindingSeverity.UNKNOWN
+    ]
+    if not pendientes:
+        return TriageResponse(scan_id=scan.id, triaged=0, errors=[])
+
+    provider = get_provider()
+    result = await triage_findings(provider, pendientes)
+    await session.commit()
+    return TriageResponse(scan_id=scan.id, triaged=result.triaged, errors=result.errors)
