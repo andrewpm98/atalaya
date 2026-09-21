@@ -1,8 +1,14 @@
 """Pruebas de los endpoints `/scans`, `/assets` y `/findings`.
 
-`create_scan` se prueba sustituyendo `enumerate_subdomains` (la fuente
-externa) por un doble: esta suite prueba el cableado HTTP -> descubrimiento
--> persistencia, no la enumeración en sí (ya cubierta en `test_subdomains.py`).
+`create_scan` se prueba sustituyendo `enumerate_subdomains` y `enrich_scan`
+(las fuentes externas) por dobles: esta suite prueba el cableado HTTP ->
+descubrimiento -> persistencia, no la enumeración en sí (ya cubierta en
+`test_subdomains.py`) ni puertos/cabeceras/TLS (cubiertos en
+`test_ports.py`/`test_headers.py`/`test_tls.py`/`test_enrichment.py`). Sin
+mockear `enrich_scan`, un host `ACTIVE` en `_fake_result` dispararía
+conexiones de red reales al crear el escaneo -- justo lo que CLAUDE.md pide
+evitar ("Tests: deterministas y sin red").
+
 La sesión de BD se inyecta vía `app.dependency_overrides`, contra SQLite en
 memoria — igual que `db_session`, pero por request HTTP en vez de directa.
 """
@@ -16,6 +22,7 @@ from fastapi.testclient import TestClient
 from atalaya.config import settings
 from atalaya.discovery.models import (
     DiscoverySource,
+    EnrichmentResult,
     ResolutionStatus,
     SubdomainRecord,
     SubdomainScanResult,
@@ -42,11 +49,23 @@ def _fake_result(domain: str) -> SubdomainScanResult:
     return result
 
 
-async def test_create_scan_persiste_y_devuelve_detalle(client: TestClient, monkeypatch) -> None:
+def _mock_discovery(monkeypatch, *, enrichment: EnrichmentResult | None = None) -> None:
+    """Sustituye `enumerate_subdomains` y `enrich_scan` por dobles rápidos y
+    sin red, en el módulo del router (no en `discovery/`, que es donde se
+    resuelven las llamadas)."""
+
     async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
         return _fake_result(domain)
 
+    async def fake_enrich(result: SubdomainScanResult) -> EnrichmentResult:
+        return enrichment if enrichment is not None else EnrichmentResult()
+
     monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
+    monkeypatch.setattr("atalaya.api.routes.scans.enrich_scan", fake_enrich)
+
+
+async def test_create_scan_persiste_y_devuelve_detalle(client: TestClient, monkeypatch) -> None:
+    _mock_discovery(monkeypatch)
 
     resp = client.post("/scans", json={"domain": "ejemplo.com"})
 
@@ -76,10 +95,7 @@ async def test_create_scan_dominio_no_autorizado_da_403(
 
 
 async def test_list_and_get_scan(client: TestClient, monkeypatch) -> None:
-    async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
-        return _fake_result(domain)
-
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
+    _mock_discovery(monkeypatch)
 
     created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
 
@@ -96,10 +112,7 @@ async def test_list_and_get_scan(client: TestClient, monkeypatch) -> None:
 
 
 async def test_list_assets_y_findings_filtran_por_scan(client: TestClient, monkeypatch) -> None:
-    async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
-        return _fake_result(domain)
-
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
+    _mock_discovery(monkeypatch)
 
     created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
     scan_id = created["id"]
@@ -114,6 +127,47 @@ async def test_list_assets_y_findings_filtran_por_scan(client: TestClient, monke
     assert findings.json()[0]["severity"] == "unknown"
 
 
+async def test_create_scan_persiste_puertos_y_hallazgos_del_enriquecimiento(
+    client: TestClient, monkeypatch
+) -> None:
+    """`create_scan` no solo persiste subdominios: también aplica el
+    resultado de `enrich_scan` (puertos abiertos y hallazgos de
+    cabeceras/TLS) sobre los mismos activos, en la misma petición."""
+    from atalaya.discovery.models import DiscoveryFinding, HeaderScanResult, TlsScanResult
+
+    enrichment = EnrichmentResult(
+        ports_by_ip={"93.184.216.34": [80, 443]},
+        header_results=[
+            HeaderScanResult(
+                hostname="www.ejemplo.com",
+                checked_url="https://www.ejemplo.com/",
+                findings=[
+                    DiscoveryFinding(finding_type="hsts_missing", evidence="sin HSTS")
+                ],
+            )
+        ],
+        tls_results=[
+            TlsScanResult(
+                hostname="www.ejemplo.com",
+                findings=[
+                    DiscoveryFinding(
+                        finding_type="tls_version_obsoleta", evidence="negocia TLSv1.1"
+                    )
+                ],
+            )
+        ],
+    )
+    _mock_discovery(monkeypatch, enrichment=enrichment)
+
+    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+
+    www = next(a for a in created["assets"] if a["hostname"] == "www.ejemplo.com")
+    assert www["open_ports"] == [80, 443]
+    tipos = {f["finding_type"] for f in www["findings"]}
+    assert tipos == {"hsts_missing", "tls_version_obsoleta"}
+    assert all(f["severity"] == "unknown" for f in www["findings"])
+
+
 # ─── GET /scans/{id}/report ──────────────────────────────────────────────────
 
 
@@ -125,11 +179,7 @@ async def test_download_report_devuelve_pdf(
     `tmp_path` para no escribir en el directorio del proyecto durante los
     tests."""
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
-
-    async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
-        return _fake_result(domain)
-
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
+    _mock_discovery(monkeypatch)
     created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
 
     resp = client.get(f"/scans/{created['id']}/report")

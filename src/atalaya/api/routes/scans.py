@@ -1,9 +1,9 @@
 """Router de escaneos: lanzar, consultar y triar escaneos de superficie de
 exposición.
 
-Paso 2-3 cubren descubrimiento de subdominios + persistencia; `create_scan`
-solo encadena ambos. Puertos/cabeceras/TLS se suman al mismo escaneo cuando
-esos módulos de descubrimiento existan (Paso 2, resto). `triage_scan`
+`create_scan` encadena las cuatro fases de descubrimiento sobre el mismo
+escaneo: subdominios (Paso 2), puertos/cabeceras/TLS sobre los hosts activos
+(`enrich_scan`, Paso 2 resto) y persistencia (Paso 3). `triage_scan`
 (Paso 5) es la puerta de entrada REST al triaje por IA: sin ella,
 `ai/triage.py` no sería alcanzable desde la API. `download_report`
 (Paso 7) cumple el mismo papel para `reporting/generator.py`.
@@ -21,7 +21,8 @@ from atalaya.api.schemas import ScanDetail, ScanRequest, ScanSummary, TriageResp
 from atalaya.core import repository
 from atalaya.core.database import get_session
 from atalaya.core.models import FindingSeverity, Scan
-from atalaya.core.persistence import save_subdomain_scan
+from atalaya.core.persistence import apply_discovery_findings, apply_port_scan, save_subdomain_scan
+from atalaya.discovery.enrichment import enrich_scan
 from atalaya.discovery.subdomains import enumerate_subdomains
 from atalaya.reporting.generator import generate_report
 
@@ -32,14 +33,23 @@ router = APIRouter(prefix="/scans", tags=["escaneos"])
 async def create_scan(
     payload: ScanRequest, session: AsyncSession = Depends(get_session)
 ) -> Scan:
-    """Lanza un escaneo de subdominios sobre `payload.domain` y lo persiste.
+    """Lanza un escaneo completo sobre `payload.domain` y lo persiste.
 
     `enumerate_subdomains` valida y autoriza el dominio internamente (levanta
     `InvalidTargetError`/`UnauthorizedTargetError`, traducidas a HTTP por los
     manejadores de `api/main.py`): este endpoint no duplica esa comprobación.
+
+    `enrich_scan` solo actúa sobre hosts activos (`result.active_records`):
+    con `payload.resolve=False` esa lista está vacía y el enriquecimiento no
+    hace ninguna llamada de red, sin necesidad de una rama explícita aquí.
     """
     result = await enumerate_subdomains(payload.domain, resolve=payload.resolve)
     scan = await save_subdomain_scan(session, result)
+
+    enrichment = await enrich_scan(result)
+    apply_port_scan(scan, enrichment.ports_by_ip)
+    apply_discovery_findings(scan, enrichment.findings_by_hostname())
+
     await session.commit()
     # Se recarga con `selectinload`: `scan.assets` tiene todos los `Asset` (se
     # poblaron en memoria antes del flush), pero `asset.findings` solo está

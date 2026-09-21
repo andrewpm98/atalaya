@@ -15,7 +15,8 @@ import sys
 from atalaya import __version__
 from atalaya.core.database import SessionLocal
 from atalaya.core.exceptions import AtalayaError
-from atalaya.core.persistence import save_subdomain_scan
+from atalaya.core.persistence import apply_discovery_findings, apply_port_scan, save_subdomain_scan
+from atalaya.discovery.enrichment import enrich_scan
 from atalaya.discovery.models import ResolutionStatus
 from atalaya.discovery.subdomains import enumerate_subdomains
 
@@ -33,6 +34,9 @@ async def _run_subdomains(args: argparse.Namespace) -> int:
     if args.save:
         async with SessionLocal() as session:
             scan = await save_subdomain_scan(session, result)
+            enrichment = await enrich_scan(result)
+            apply_port_scan(scan, enrichment.ports_by_ip)
+            apply_discovery_findings(scan, enrichment.findings_by_hostname())
             await session.commit()
             print(f"[BD] Escaneo #{scan.id} guardado ({len(scan.assets)} activos).")
 
