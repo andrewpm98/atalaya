@@ -20,7 +20,8 @@ consultar la superficie de exposición **en lenguaje natural**.
    explica el impacto y propone cómo corregirlos.
 4. **Responde en lenguaje natural** — *"¿qué activos tienen TLS obsoleto y
    puertos de gestión abiertos?"*.
-5. **Informa** — genera un informe ejecutivo con portada (PDF/DOCX).
+5. **Informa** — genera un informe ejecutivo con portada en PDF, descargable
+   desde la API y desde el dashboard.
 
 ## Uso rápido: enumeración de subdominios
 
@@ -70,6 +71,20 @@ tipo de hallazgo y evidencia) — nunca la fila de base de datos en bruto — y
 responde con una severidad razonada, no una plantilla fija. Un fallo del
 proveedor de IA en un hallazgo no aborta los demás; se reporta en `errors`.
 
+## Uso rápido: informe con portada
+
+Ya operativo (Paso 7). Genera y descarga el PDF de un escaneo ya persistido:
+
+```bash
+curl -o informe.pdf http://localhost:8000/scans/1/report
+```
+
+Regenera el informe en cada descarga (nunca sirve una copia cacheada sin
+comprobar nada), así que siempre refleja el triaje más reciente. Incluye
+portada (dominio y fecha), resumen ejecutivo con contadores por severidad, y
+el detalle de cada activo y hallazgo con su impacto y remediación. También
+se descarga desde la pestaña «Escaneos» del dashboard.
+
 ## Arquitectura (resumen)
 
 ```
@@ -82,7 +97,7 @@ proveedor de IA en un hallazgo no aborta los demás; se reporta en `errors`.
              ▼                ▼                ▼                         ▼
       ┌────────────┐   ┌────────────┐   ┌────────────┐          ┌──────────────┐
       │Descubrimien│   │  Capa IA   │   │ PostgreSQL │          │  Informes    │
-      │to (scan)   │   │ (triaje)   │   │ (persist.) │          │ (PDF/DOCX)   │
+      │to (scan)   │   │ (triaje)   │   │ (persist.) │          │    (PDF)     │
       └─────┬──────┘   └─────┬──────┘   └────────────┘          └──────────────┘
             │                │
      APIs externas     LLM (Anthropic)
@@ -111,7 +126,7 @@ Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 | API o webhook          | API REST propia **y** consumo de APIs externas         |
 | Aplicación web         | Dashboard Streamlit (local o desplegado)               |
 | GitHub con historial   | Commits por fase, historial real                       |
-| Reporte con portada    | Informe generado por la propia herramienta             |
+| Reporte con portada    | PDF generado por la propia herramienta (`GET /scans/{id}/report`) |
 
 ## Puesta en marcha
 
@@ -153,8 +168,8 @@ Desarrollo por fases (ver `docs/ARQUITECTURA.md`):
   - [x] `LLMProvider` / `AnthropicProvider`
   - [x] Triaje de hallazgos con contexto estructurado
   - [x] Consulta en lenguaje natural sobre un escaneo
-- [ ] **Paso 6** — Dashboard completo
-- [ ] **Paso 7** — Generador de informes
+- [x] **Paso 6** — Dashboard completo (escaneos, triaje IA, consulta NL, informe)
+- [x] **Paso 7** — Generador de informes (PDF con portada, API + dashboard)
 
 ## Aviso legal
 

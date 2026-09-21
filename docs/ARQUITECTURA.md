@@ -73,13 +73,30 @@ por aquí, no construyen `select()` propios.
   (todos los activos y hallazgos, no uno aislado). Separado de `triage` porque
   ambos prompts necesitan un contexto de tamaño muy distinto.
 
-### 2.5 Informes — `src/atalaya/reporting`
-Genera un informe ejecutivo con portada (PDF/DOCX) a partir de un escaneo.
-Cubre el requisito de "reporte con portada" de forma automatizada.
+### 2.5 Informes — `src/atalaya/reporting` (Paso 7 ✅)
+Genera un informe ejecutivo en PDF a partir de un escaneo ya persistido:
+portada (dominio, fecha), resumen ejecutivo con contadores por severidad, y
+el detalle de cada activo y hallazgo con impacto y remediación. Cubre el
+requisito de "reporte con portada".
 
-### 2.6 Dashboard (Streamlit) — `dashboard/`
+- `generator.py` — `render_html()` (Jinja2, puro y síncrono, fácil de probar
+  sin generar un PDF real) y `generate_report()` (convierte a PDF con
+  `xhtml2pdf` en un hilo aparte vía `asyncio.to_thread`, para no bloquear el
+  loop de eventos con trabajo de CPU). Recibe un `Scan` ya cargado, no un
+  `scan_id` — mismo criterio que `ai/query.py::ask()`.
+- Se elige **xhtml2pdf** sobre WeasyPrint porque es Python puro: no depende
+  de Pango/Cairo/GTK, ausentes en un Windows sin ese runtime instalado.
+- El PDF se escribe de forma determinista en
+  `reports/atalaya_informe_{dominio}_{id}.pdf`: descargarlo de nuevo tras
+  triar hallazgos nuevos lo regenera y sobrescribe, en vez de acumular una
+  copia por cada clic de descarga.
+- Expuesto vía `GET /scans/{id}/report` (API) y un botón en la pestaña
+  «Escaneos» del dashboard.
+
+### 2.6 Dashboard (Streamlit) — `dashboard/` (Paso 6 ✅)
 Aplicación web que consume la API: lanzar escaneos, explorar activos y
-hallazgos, y consultar en lenguaje natural.
+hallazgos, triar con IA, consultar en lenguaje natural, y descargar el
+informe PDF de un escaneo.
 
 ## 3. Flujo de datos
 
@@ -96,7 +113,7 @@ dominio
 [Capa IA]  triaje: severidad + impacto + remediación
    │
    ├──▶ [Dashboard]  visualización y consulta NL
-   └──▶ [Informes]   PDF/DOCX con portada
+   └──▶ [Informes]   PDF con portada
 ```
 
 ## 4. Decisiones de diseño
@@ -120,7 +137,7 @@ dominio
 | API / webhook            | `api/` (propia, Paso 4 ✅) + `discovery/`/`ai/` (consumo de crt.sh y Anthropic) |
 | Aplicación web           | `dashboard/app.py`                         |
 | GitHub con historial     | Commits por fase                           |
-| Reporte con portada      | `reporting/generator.py`                   |
+| Reporte con portada      | `reporting/generator.py`, `GET /scans/{id}/report` |
 
 ## 6. Hoja de ruta
 
@@ -130,8 +147,8 @@ dominio
 4. **Paso 4 — API REST completa** ✅ (`scans`/`assets`/`findings`, `/scans/{id}/triage`,
    `/findings/ask`)
 5. **Paso 5 — Capa IA (triaje + consulta NL)** ✅
-6. **Paso 6 — Dashboard completo**
-7. **Paso 7 — Generador de informes**
+6. **Paso 6 — Dashboard completo** ✅
+7. **Paso 7 — Generador de informes** ✅ (PDF con portada, API + dashboard)
 
 
 ---

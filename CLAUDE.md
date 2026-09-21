@@ -13,10 +13,10 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
 | Base de datos | PostgreSQL + SQLAlchemy async | 🔨 Modelos Scan/Asset/Finding + migraciones Alembic. Solo persiste subdominios; puertos/cabeceras/TLS aún no existen |
-| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`) y consulta NL (`POST /findings/ask`) reales |
-| Aplicación web | Dashboard Streamlit | 🔨 Versión mínima |
-| GitHub con historial | Commits por unidad lógica | ✅ 26 commits |
-| Reporte con portada | Informe generado por la herramienta | ⬜ Paso 7 |
+| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL (`POST /findings/ask`) e informe (`GET /scans/{id}/report`) reales |
+| Aplicación web | Dashboard Streamlit | ✅ Escaneos, triaje IA, consulta NL, descarga de informe |
+| GitHub con historial | Commits por unidad lógica | ✅ commits por fase |
+| Reporte con portada | Informe generado por la herramienta | ✅ PDF con portada, resumen y hallazgos (`reporting/generator.py`) |
 
 **El historial de commits se evalúa.** No agrupar trabajo de varias fases en
 un commit único; el desarrollo progresivo es parte de lo que se califica.
@@ -62,17 +62,24 @@ src/atalaya/
 │   ├── triage.py                 triage_finding/triage_findings — contexto
 │   │                             estructurado, nunca un dump de la fila de BD
 │   └── query.py                  ask() — consulta NL sobre un escaneo completo
+├── reporting/
+│   ├── generator.py               generate_report()/render_html() — informe PDF
+│   │                               con portada (Jinja2 + xhtml2pdf)
+│   └── templates/report.html      Plantilla del informe
 └── api/
     ├── main.py                  FastAPI + exception_handler (dominio inválido → 400,
     │                             no autorizado → 403, fallo del proveedor IA → 502)
     ├── schemas.py                Esquemas Pydantic de respuesta (frontera BD ↔ API)
     └── routes/
         ├── scans.py              POST/GET /scans, GET /scans/{id},
-        │                         POST /scans/{id}/triage — reales
+        │                         POST /scans/{id}/triage,
+        │                         GET /scans/{id}/report — reales
         ├── assets.py              GET /assets?scan_id= — real
         └── findings.py            GET /findings, POST /findings/ask — reales
 
 migrations/                      Alembic (async); URL desde settings.database_url
+dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
+                                  consulta NL, descarga de informe
 ```
 
 > **Desviación del stub original:** este documento preveía los modelos
@@ -92,8 +99,20 @@ migrations/                      Alembic (async); URL desde settings.database_ur
 > triaje necesita una respuesta con forma garantizada, y eso se consigue
 > forzando una llamada a herramienta, no parseando JSON de texto libre.
 
+> **Desviación del stub original (Paso 7):** CLAUDE.md preveía
+> `generate_report(scan_id: int, fmt: str = "pdf") -> Path`. Se cambia
+> `scan_id: int` por `scan: Scan` ya cargado, por el mismo motivo que
+> `ai/query.py::ask()` recibe un `Scan` y no un id + sesión: quien llama
+> (el endpoint `GET /scans/{id}/report`) ya lo resuelve vía
+> `repository.get_scan()`, con activos y hallazgos precargados. Que este
+> módulo aceptara `scan_id` le exigiría su propia sesión de BD y duplicaría
+> esa consulta, acoplando la generación del informe a la capa de
+> persistencia sin necesidad. Internamente usa Jinja2 (`reporting/templates/
+> report.html`) + `xhtml2pdf`, no WeasyPrint: xhtml2pdf es Python puro y no
+> depende de Pango/Cairo/GTK, ausentes en un Windows sin ese runtime.
+
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **114 tests en verde.**
+55 objetivos de escaneo, 19 segundos. **137 tests en verde.**
 
 ### Pendiente (stubs con contrato definido)
 
@@ -102,8 +121,6 @@ Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
 | `discovery/ports.py` | Paso 2 | Escaneo asíncrono de puertos |
 | `discovery/headers.py` | Paso 2 | Cabeceras de seguridad HTTP |
 | `discovery/tls.py` | Paso 2 | Certificados y versión TLS |
-| `dashboard/app.py` | Paso 6 | Panel completo |
-| `reporting/generator.py` | Paso 7 | Informe con portada |
 
 Los stubs **no son código muerto**: fijan qué recibe y devuelve cada pieza.
 Respeta esas firmas salvo que haya razón para cambiarlas, y si cambias una,
@@ -121,8 +138,9 @@ dilo.
    `/scans/{id}/triage` y `/findings/ask`, añadidos al cerrar el Paso 5
 5. **Paso 5 — Capa de IA** ✅ — `LLMProvider`/`AnthropicProvider`, triaje de
    hallazgos con contexto estructurado, consulta NL sobre un escaneo
-6. Paso 6 — Dashboard completo
-7. Paso 7 — Informe con portada
+6. **Paso 6 — Dashboard completo** ✅ — escaneos, triaje IA, consulta NL
+7. **Paso 7 — Informe con portada** ✅ — PDF (Jinja2 + xhtml2pdf), descargable
+   desde `GET /scans/{id}/report` y desde el dashboard
 
 Se adelantó el Paso 3 antes de completar el resto del descubrimiento, tal
 como se venía valorando: los módulos de puertos/cabeceras/TLS nacerán ya
@@ -137,8 +155,10 @@ añadió al implementar el Paso 5 porque, sin una ruta que lo invoque,
 `ai/triage.py` sería código alcanzable solo desde tests — lo que CLAUDE.md
 pide evitar explícitamente ("los stubs no son código muerto").
 
-**Plazo:** entrega a finales de septiembre. Priorizar cerrar los cinco
-requisitos obligatorios sobre pulir cualquiera de ellos.
+**Plazo:** entrega a finales de septiembre. Los cinco requisitos obligatorios
+están cerrados (Paso 7 fue el último); el margen restante es para pulir
+descubrimiento (puertos/cabeceras/TLS, Paso 2) y robustecer lo ya entregado,
+no para nuevas fases.
 
 ---
 
@@ -240,6 +260,11 @@ cómo trata esto.
 - **Variabilidad del DNS.** Dos escaneos del mismo dominio no dan resultados
   idénticos (timeouts, balanceo, caché). Es normal, y refuerza la necesidad de
   persistir escaneos para distinguir un cambio real de una fluctuación.
+- **Informe solo en PDF, sin histórico.** `reporting/generator.py` sobrescribe
+  un único PDF por escaneo (`reports/atalaya_informe_{dominio}_{id}.pdf`) en
+  cada descarga; no guarda versiones anteriores ni ofrece DOCX (el parámetro
+  `fmt` del stub original se conserva como punto de extensión, pero solo
+  "pdf" está implementado).
 
 ---
 
@@ -247,7 +272,7 @@ cómo trata esto.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 114)
+pytest -q                            # tests (deben pasar los 137)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
