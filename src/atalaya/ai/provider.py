@@ -208,6 +208,13 @@ class GeminiProvider(LLMProvider):
         )
         response = await self._generate(model=self.model, contents=prompt, config=config)
         for candidate in response.candidates or []:
+            # `candidate.content` puede ser `None` -- se observó en vivo bajo
+            # presión de cuota del free tier de Gemini (respuesta sin
+            # contenido, p. ej. cortada por `finish_reason`). Sin este guard,
+            # `.parts` sobre `None` lanza `AttributeError` en vez de degradar
+            # a `AIProviderError` como el resto de fallos de esta función.
+            if candidate.content is None:
+                continue
             for part in candidate.content.parts or []:
                 call = part.function_call
                 if call is not None and call.name == tool_name:

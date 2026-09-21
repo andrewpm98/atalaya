@@ -167,6 +167,14 @@ def _gemini_no_call_response(text: str) -> SimpleNamespace:
     return SimpleNamespace(text=text, candidates=[candidate])
 
 
+def _gemini_empty_content_response() -> SimpleNamespace:
+    """Candidato con `content=None`: observado en vivo contra la API real
+    bajo presión de cuota del free tier (respuesta cortada sin contenido).
+    """
+    candidate = SimpleNamespace(content=None)
+    return SimpleNamespace(text=None, candidates=[candidate])
+
+
 async def test_gemini_complete_extrae_texto_de_la_respuesta() -> None:
     client = _gemini_client(response=_gemini_text_response("hola"))
     provider = GeminiProvider(client=client)
@@ -218,6 +226,19 @@ async def test_gemini_complete_tool_devuelve_los_args_de_la_llamada() -> None:
 
 async def test_gemini_complete_tool_sin_llamada_a_la_herramienta_lanza_error() -> None:
     client = _gemini_client(response=_gemini_no_call_response("no llamo a ninguna herramienta"))
+    provider = GeminiProvider(client=client)
+
+    with pytest.raises(AIProviderError, match="record_triage"):
+        await provider.complete_tool(
+            "prompt", tool_name="record_triage", tool_schema={"type": "object"}
+        )
+
+
+async def test_gemini_complete_tool_candidato_sin_content_no_lanza_attributeerror() -> None:
+    """Reproduce un fallo real observado contra la API en vivo: un candidato
+    con `content=None` (respuesta cortada bajo presión de cuota) debía
+    degradar a `AIProviderError`, no a un `AttributeError` sin controlar."""
+    client = _gemini_client(response=_gemini_empty_content_response())
     provider = GeminiProvider(client=client)
 
     with pytest.raises(AIProviderError, match="record_triage"):
