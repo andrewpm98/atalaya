@@ -49,6 +49,27 @@ aparte, porque filtrar direccionamiento interno es un hallazgo en sí mismo.
 
 > ⚠️ Respeta `SCAN_ALLOWLIST`. Analiza solo dominios propios o autorizados.
 
+## Uso rápido: triaje por IA y consulta en lenguaje natural
+
+Ya operativo (Paso 5). Requiere `ANTHROPIC_API_KEY` en `.env`. Con la API
+levantada (`make api`) y un escaneo ya persistido (`atalaya subdomains
+ejemplo.com --save`, o `POST /scans`):
+
+```bash
+# Triaja los hallazgos sin triar del escaneo #1 (idempotente)
+curl -X POST http://localhost:8000/scans/1/triage
+
+# Pregunta sobre la superficie ya escaneada de un dominio
+curl -X POST http://localhost:8000/findings/ask \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "ejemplo.com", "question": "¿algún activo filtra direccionamiento interno?"}'
+```
+
+El triaje recibe **contexto estructurado** (hostname, IPs, estado, fuentes,
+tipo de hallazgo y evidencia) — nunca la fila de base de datos en bruto — y
+responde con una severidad razonada, no una plantilla fija. Un fallo del
+proveedor de IA en un hallazgo no aborta los demás; se reporta en `errors`.
+
 ## Arquitectura (resumen)
 
 ```
@@ -125,10 +146,13 @@ Desarrollo por fases (ver `docs/ARQUITECTURA.md`):
   - [ ] Configuración TLS
 - [x] **Paso 3** — Base de datos + modelos (Scan/Asset/Finding, migraciones Alembic;
       solo persiste subdominios por ahora)
-- [ ] **Paso 4** — API REST completa + APIs externas
+- [x] **Paso 4** — API REST completa
   - [x] `scans` / `assets` / `findings` — creación y lectura real
-  - [ ] `/findings/ask` (consulta NL) — depende de la capa IA
-- [ ] **Paso 5** — Capa IA (triaje + consulta NL)
+  - [x] `/scans/{id}/triage`, `/findings/ask` — activados junto al Paso 5
+- [x] **Paso 5** — Capa IA
+  - [x] `LLMProvider` / `AnthropicProvider`
+  - [x] Triaje de hallazgos con contexto estructurado
+  - [x] Consulta en lenguaje natural sobre un escaneo
 - [ ] **Paso 6** — Dashboard completo
 - [ ] **Paso 7** — Generador de informes
 

@@ -17,10 +17,12 @@ orquesta el resto de módulos. Endpoints principales:
 - `POST /scans` ✅ — lanza un escaneo de subdominios y lo persiste.
 - `GET  /scans`, `GET /scans/{id}` ✅ — consulta de escaneos (404 si no existe).
 - `GET  /assets` ✅ — activos descubiertos, filtrables por `scan_id`.
-- `GET  /findings` ✅ — hallazgos, filtrables por `asset_id`/`scan_id`; sin
-  triaje IA todavía (severidad `unknown` hasta el Paso 5).
-- `POST /findings/ask` — consulta en lenguaje natural. Pendiente: depende de
-  la capa IA (Paso 5).
+- `GET  /findings` ✅ — hallazgos, filtrables por `asset_id`/`scan_id`;
+  `severity` es `unknown` hasta triarlos.
+- `POST /scans/{id}/triage` ✅ — triaja con IA los hallazgos `unknown` de un
+  escaneo ya persistido. Idempotente: no repite los ya triados.
+- `POST /findings/ask` ✅ — consulta en lenguaje natural sobre el último
+  escaneo completado de un dominio (o uno concreto vía `scan_id`).
 
 `api/schemas.py` define la frontera Pydantic entre las tablas y la respuesta
 pública; `api/main.py` traduce `InvalidTargetError`/`UnauthorizedTargetError`
@@ -55,11 +57,21 @@ los hostnames de dos escaneos del mismo dominio — la razón de ser de
 persistir escaneos en el tiempo). La API (2.1) y el dashboard (2.6) consultan
 por aquí, no construyen `select()` propios.
 
-### 2.4 Capa IA — `src/atalaya/ai`
-- `provider` — abstracción del LLM (Anthropic por defecto, intercambiable).
-- `triage` — recibe hallazgos crudos y devuelve severidad, impacto explicado y
-  remediación. Aquí se aplica el principio que el proyecto asume como central:
-  **dar a la IA contexto estructurado, no datos en bruto**.
+### 2.4 Capa IA — `src/atalaya/ai` (Paso 5 ✅)
+- `provider` — `LLMProvider` (interfaz, ABC) + `AnthropicProvider`. Dos formas
+  de pedir una respuesta: `complete()` (texto libre) y `complete_tool()`
+  (fuerza una llamada a herramienta con `tool_choice` fijo, para una
+  respuesta con forma garantizada — más fiable que pedir "responde en JSON"
+  sobre texto libre, que basta una frase de cortesía para romper).
+- `triage` — `triage_finding`/`triage_findings`: reciben un `Asset` y un
+  `Finding`, devuelven severidad razonada, impacto explicado y remediación
+  concreta. Aquí se aplica el principio que el proyecto asume como central:
+  **dar a la IA contexto estructurado** (`build_finding_context`, campos
+  seleccionados a propósito), **no un dump de la fila de BD**. Degradación
+  controlada: un fallo de un hallazgo no aborta el resto (`TriageBatchResult`).
+- `query` — `ask()`: consulta en lenguaje natural sobre un escaneo completo
+  (todos los activos y hallazgos, no uno aislado). Separado de `triage` porque
+  ambos prompts necesitan un contexto de tamaño muy distinto.
 
 ### 2.5 Informes — `src/atalaya/reporting`
 Genera un informe ejecutivo con portada (PDF/DOCX) a partir de un escaneo.
@@ -105,7 +117,7 @@ dominio
 | Requisito de la práctica | Dónde se resuelve                          |
 |--------------------------|--------------------------------------------|
 | Base de datos            | `core/models.py` + `core/persistence.py` (Paso 3 ✅) |
-| API / webhook            | `api/` (propia, Paso 4 🔨) + `discovery/` (consumo de crt.sh) |
+| API / webhook            | `api/` (propia, Paso 4 ✅) + `discovery/`/`ai/` (consumo de crt.sh y Anthropic) |
 | Aplicación web           | `dashboard/app.py`                         |
 | GitHub con historial     | Commits por fase                           |
 | Reporte con portada      | `reporting/generator.py`                   |
@@ -115,9 +127,9 @@ dominio
 1. **Paso 1 — Arquitectura + esqueleto** ✅
 2. **Paso 2 — Motor de descubrimiento** (subdominios ✅ · puertos, cabeceras y TLS pendientes)
 3. **Paso 3 — Base de datos + modelos** ✅ (solo persiste subdominios por ahora)
-4. **Paso 4 — API REST completa + APIs externas** (`scans`/`assets`/`findings` ✅ ·
-   `/findings/ask` pendiente de la capa IA)
-5. **Paso 5 — Capa IA (triaje + consulta NL)**
+4. **Paso 4 — API REST completa** ✅ (`scans`/`assets`/`findings`, `/scans/{id}/triage`,
+   `/findings/ask`)
+5. **Paso 5 — Capa IA (triaje + consulta NL)** ✅
 6. **Paso 6 — Dashboard completo**
 7. **Paso 7 — Generador de informes**
 
@@ -215,8 +227,9 @@ direcciones enrutables.
 
 **Direccionamiento interno como hallazgo.** Un subdominio público que resuelve
 a una IP privada no es un activo alcanzable, pero revela estructura de red
-interna. Se marca mediante `leaks_internal_addressing` y la capa IA lo tratará
-como hallazgo propio (Paso 5).
+interna. Se marca mediante `leaks_internal_addressing`, genera un `Finding`
+(`core/persistence.py`) y la capa IA lo tría como hallazgo propio
+(`POST /scans/{id}/triage`).
 
 ### 7.6 Integración prevista
 

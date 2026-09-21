@@ -13,9 +13,9 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
 | Base de datos | PostgreSQL + SQLAlchemy async | 🔨 Modelos Scan/Asset/Finding + migraciones Alembic. Solo persiste subdominios; puertos/cabeceras/TLS aún no existen |
-| API o webhook | API REST propia **y** consumo de APIs externas | 🔨 `scans`/`assets`/`findings` implementados sobre datos reales; `/findings/ask` (consulta NL) en 501, depende de la capa IA |
+| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`) y consulta NL (`POST /findings/ask`) reales |
 | Aplicación web | Dashboard Streamlit | 🔨 Versión mínima |
-| GitHub con historial | Commits por unidad lógica | ✅ 10 commits |
+| GitHub con historial | Commits por unidad lógica | ✅ 26 commits |
 | Reporte con portada | Informe generado por la herramienta | ⬜ Paso 7 |
 
 **El historial de commits se evalúa.** No agrupar trabajo de varias fases en
@@ -57,14 +57,20 @@ src/atalaya/
 ├── discovery/
 │   ├── models.py                SubdomainRecord, SubdomainScanResult
 │   └── subdomains.py            Enumeración completa (crt.sh + DNS)
+├── ai/
+│   ├── provider.py               LLMProvider (ABC) + AnthropicProvider
+│   ├── triage.py                 triage_finding/triage_findings — contexto
+│   │                             estructurado, nunca un dump de la fila de BD
+│   └── query.py                  ask() — consulta NL sobre un escaneo completo
 └── api/
     ├── main.py                  FastAPI + exception_handler (dominio inválido → 400,
-    │                             no autorizado → 403)
+    │                             no autorizado → 403, fallo del proveedor IA → 502)
     ├── schemas.py                Esquemas Pydantic de respuesta (frontera BD ↔ API)
     └── routes/
-        ├── scans.py              POST/GET /scans, GET /scans/{id} — reales
+        ├── scans.py              POST/GET /scans, GET /scans/{id},
+        │                         POST /scans/{id}/triage — reales
         ├── assets.py              GET /assets?scan_id= — real
-        └── findings.py            GET /findings — real; POST /findings/ask en 501
+        └── findings.py            GET /findings, POST /findings/ask — reales
 
 migrations/                      Alembic (async); URL desde settings.database_url
 ```
@@ -77,8 +83,17 @@ migrations/                      Alembic (async); URL desde settings.database_ur
 > sigue el mismo principio para la lectura: los endpoints y el dashboard
 > consultan por aquí, nunca construyen su propio `select()`.
 
+> **Desviación del stub original (Paso 5):** CLAUDE.md solo preveía
+> `provider.py` y `triage.py` para la capa IA. Se añadió `ai/query.py`
+> porque la consulta NL necesita el escaneo completo como contexto (todos
+> los activos y hallazgos), no un hallazgo aislado como el triaje — mezclar
+> ambos prompts en `triage.py` los habría acoplado sin necesidad. También se
+> amplió `LLMProvider` con `complete_tool()` (además de `complete()`): el
+> triaje necesita una respuesta con forma garantizada, y eso se consigue
+> forzando una llamada a herramienta, no parseando JSON de texto libre.
+
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **88 tests en verde.**
+55 objetivos de escaneo, 19 segundos. **114 tests en verde.**
 
 ### Pendiente (stubs con contrato definido)
 
@@ -87,8 +102,6 @@ Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
 | `discovery/ports.py` | Paso 2 | Escaneo asíncrono de puertos |
 | `discovery/headers.py` | Paso 2 | Cabeceras de seguridad HTTP |
 | `discovery/tls.py` | Paso 2 | Certificados y versión TLS |
-| `api/routes/findings.py::ask_natural_language` | Paso 5 | Consulta NL — depende de la capa IA |
-| `ai/provider.py`, `ai/triage.py` | Paso 5 | Capa de IA |
 | `dashboard/app.py` | Paso 6 | Panel completo |
 | `reporting/generator.py` | Paso 7 | Informe con portada |
 
@@ -104,9 +117,10 @@ dilo.
 2. **Paso 2 — Motor de descubrimiento** — subdominios ✅ · puertos, cabeceras, TLS ⬜
 3. **Paso 3 — Modelos de BD y persistencia** — Scan/Asset/Finding + migraciones ✅ ·
    solo subdominios persisten (puertos/cabeceras/TLS se conectan cuando existan)
-4. **Paso 4 — Endpoints REST** — `scans`/`assets`/`findings` (creación + lectura) ✅ ·
-   `/findings/ask` (consulta NL) pendiente de la capa IA
-5. Paso 5 — Capa de IA (triaje + consulta NL)
+4. **Paso 4 — Endpoints REST** ✅ — `scans`/`assets`/`findings`, más
+   `/scans/{id}/triage` y `/findings/ask`, añadidos al cerrar el Paso 5
+5. **Paso 5 — Capa de IA** ✅ — `LLMProvider`/`AnthropicProvider`, triaje de
+   hallazgos con contexto estructurado, consulta NL sobre un escaneo
 6. Paso 6 — Dashboard completo
 7. Paso 7 — Informe con portada
 
@@ -116,9 +130,12 @@ con destino de persistencia en vez de requerir adaptación posterior.
 
 Por el mismo motivo se adelantó el Paso 4 para `scans`/`assets`/`findings`
 sin esperar a la capa IA: son CRUD reales sobre lo que ya persiste el
-Paso 3. Solo `/findings/ask` se queda en 501 — preguntar en lenguaje
-natural no tiene contenido sin un LLM detrás, así que ese endpoint espera
-al Paso 5 en vez de simularse.
+Paso 3.
+
+`POST /scans/{id}/triage` no estaba en el diseño original del Paso 4; se
+añadió al implementar el Paso 5 porque, sin una ruta que lo invoque,
+`ai/triage.py` sería código alcanzable solo desde tests — lo que CLAUDE.md
+pide evitar explícitamente ("los stubs no son código muerto").
 
 **Plazo:** entrega a finales de septiembre. Priorizar cerrar los cinco
 requisitos obligatorios sobre pulir cualquiera de ellos.
@@ -230,7 +247,7 @@ cómo trata esto.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 76)
+pytest -q                            # tests (deben pasar los 114)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
