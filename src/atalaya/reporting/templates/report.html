@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<!--
+  Plantilla del informe ejecutivo (Paso 7). La renderiza Jinja2
+  (reporting/generator.py::render_html) y el HTML resultante lo convierte a
+  PDF xhtml2pdf (pisa). Por eso el CSS se queda deliberadamente básico: pisa
+  no implementa flexbox/grid ni border-collapse de forma fiable, así que el
+  maquetado usa tablas y bloques con position/float mínimos — lo mismo que
+  recomienda su documentación para salidas predecibles.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+    @page {
+        size: A4;
+        margin: 2.2cm 1.8cm 2cm 1.8cm;
+        @frame footer_frame {
+            -pdf-frame-content: footer_content;
+            bottom: 0.8cm; left: 1.8cm; right: 1.8cm; height: 1cm;
+        }
+    }
+    body {
+        font-family: Helvetica, Arial, sans-serif;
+        font-size: 10pt;
+        color: #1a1a2e;
+    }
+    #footer_content {
+        font-size: 8pt;
+        color: #888888;
+        text-align: center;
+    }
+
+    /* ─── Portada ─────────────────────────────────────────────────── */
+    /* pisa no soporta flexbox/grid para centrar verticalmente, y un
+       padding-top grande en un bloque con page-break-after parte el
+       contenido en varias páginas en vez de una (comportamiento observado,
+       no documentado). Una tabla de una celda con vertical-align: middle
+       es la técnica que sí produce una portada de una sola página. */
+    table.portada-wrap {
+        width: 100%;
+        height: 24cm;
+        page-break-after: always;
+    }
+    table.portada-wrap td {
+        text-align: center;
+        vertical-align: middle;
+    }
+    .portada .marca {
+        font-size: 14pt;
+        color: #4a4a68;
+        letter-spacing: 2px;
+    }
+    .portada h1 {
+        font-size: 26pt;
+        color: #1a1a2e;
+        margin-top: 0.6cm;
+        margin-bottom: 0.3cm;
+    }
+    .portada .dominio {
+        font-size: 18pt;
+        color: #2d5fbd;
+        margin-bottom: 1.2cm;
+    }
+    .portada .meta {
+        font-size: 10pt;
+        color: #555555;
+        line-height: 1.6;
+    }
+    .portada .confidencial {
+        margin-top: 3cm;
+        font-size: 9pt;
+        color: #999999;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    /* ─── Contenido ───────────────────────────────────────────────── */
+    h2 {
+        font-size: 14pt;
+        color: #1a1a2e;
+        border-bottom: 1.5px solid #2d5fbd;
+        padding-bottom: 4px;
+        margin-top: 20px;
+    }
+    h3 {
+        font-size: 11pt;
+        color: #1a1a2e;
+        margin-top: 14px;
+        margin-bottom: 4px;
+    }
+    p { line-height: 1.5; }
+    .aviso {
+        background-color: #fff4e5;
+        border: 1px solid #f0c36d;
+        padding: 8px 10px;
+        font-size: 9pt;
+        color: #7a5200;
+    }
+
+    table.resumen {
+        width: 100%;
+        margin-top: 10px;
+    }
+    table.resumen td {
+        width: 25%;
+        text-align: center;
+        border: 1px solid #dddddd;
+        padding: 10px 4px;
+    }
+    table.resumen .valor {
+        font-size: 18pt;
+        font-weight: bold;
+        color: #1a1a2e;
+    }
+    table.resumen .etiqueta {
+        font-size: 8pt;
+        color: #666666;
+        text-transform: uppercase;
+    }
+
+    table.activos {
+        width: 100%;
+        margin-top: 8px;
+        font-size: 8.5pt;
+    }
+    table.activos th {
+        background-color: #1a1a2e;
+        color: #ffffff;
+        text-align: left;
+        padding: 5px 6px;
+    }
+    table.activos td {
+        border-bottom: 1px solid #e2e2e2;
+        padding: 5px 6px;
+        vertical-align: top;
+    }
+    .badge {
+        padding: 1px 6px;
+        color: #ffffff;
+        font-size: 7.5pt;
+    }
+    .badge-critical { background-color: #c0392b; }
+    .badge-high     { background-color: #e07b1a; }
+    .badge-medium   { background-color: #d4ac0d; }
+    .badge-low      { background-color: #2d7dd2; }
+    .badge-unknown  { background-color: #888888; }
+
+    .hallazgo {
+        border: 1px solid #e2e2e2;
+        border-left: 4px solid #888888;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+    }
+    .hallazgo.sev-critical { border-left-color: #c0392b; }
+    .hallazgo.sev-high     { border-left-color: #e07b1a; }
+    .hallazgo.sev-medium   { border-left-color: #d4ac0d; }
+    .hallazgo.sev-low      { border-left-color: #2d7dd2; }
+    .hallazgo.sev-unknown  { border-left-color: #888888; }
+    .hallazgo .titulo {
+        font-weight: bold;
+        font-size: 10pt;
+    }
+    .hallazgo .evidencia {
+        font-size: 8.5pt;
+        color: #555555;
+        font-family: Courier, monospace;
+        margin: 3px 0;
+    }
+    .hallazgo .campo { font-size: 9pt; margin-top: 3px; }
+    .hallazgo .campo b { color: #1a1a2e; }
+    .sin-datos { color: #888888; font-style: italic; }
+</style>
+</head>
+<body>
+
+<div id="footer_content">Atalaya · Informe de Attack Surface Management · {{ domain }}</div>
+
+<!-- ─── Portada ─────────────────────────────────────────────────────── -->
+<table class="portada-wrap"><tr><td>
+<div class="portada">
+    <div class="marca">ATALAYA — ATTACK SURFACE MANAGEMENT</div>
+    <h1>Informe de superficie de exposición</h1>
+    <div class="dominio">{{ domain }}</div>
+    <div class="meta">
+        Escaneo #{{ scan_id }} · estado: {{ status }}<br/>
+        Iniciado: {{ started_at.strftime("%d/%m/%Y %H:%M UTC") if started_at else "—" }}<br/>
+        {% if finished_at %}Finalizado: {{ finished_at.strftime("%d/%m/%Y %H:%M UTC") }}<br/>{% endif %}
+        Informe generado el {{ generated_at.strftime("%d/%m/%Y a las %H:%M UTC") }}
+    </div>
+    <div class="confidencial">Documento confidencial — uso interno</div>
+</div>
+</td></tr></table>
+
+<!-- ─── Resumen ejecutivo ──────────────────────────────────────────── -->
+<h2>Resumen ejecutivo</h2>
+<p>
+    Este informe resume los resultados del escaneo de reconocimiento sobre
+    <b>{{ domain }}</b>: los activos descubiertos y los hallazgos de riesgo
+    identificados sobre ellos, con la severidad, el impacto y la
+    remediación que ha razonado el triaje por IA.
+</p>
+
+{% if errors %}
+<div class="aviso">
+    <b>Incidencias durante el escaneo:</b>
+    <ul>
+        {% for error in errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<table class="resumen">
+    <tr>
+        <td><div class="valor">{{ assets_count }}</div><div class="etiqueta">Activos</div></td>
+        <td><div class="valor">{{ assets_activos }}</div><div class="etiqueta">Activos accesibles</div></td>
+        <td><div class="valor">{{ findings_count }}</div><div class="etiqueta">Hallazgos</div></td>
+        <td><div class="valor">{{ leaks_count }}</div><div class="etiqueta">Filtran IP interna</div></td>
+    </tr>
+</table>
+
+<h3>Hallazgos por severidad</h3>
+<table class="resumen">
+    <tr>
+        {% for etiqueta, total in severity_counts %}
+        <td><div class="valor">{{ total }}</div><div class="etiqueta">{{ etiqueta }}</div></td>
+        {% endfor %}
+    </tr>
+</table>
+
+<!-- ─── Activos ─────────────────────────────────────────────────────── -->
+<h2>Activos descubiertos</h2>
+{% if assets %}
+<table class="activos">
+    <tr>
+        <th>Host</th>
+        <th>Estado</th>
+        <th>IPs</th>
+        <th>Puertos</th>
+        <th>Hallazgos</th>
+    </tr>
+    {% for asset in assets %}
+    <tr>
+        <td>{{ asset.hostname }}{% if asset.leaks_internal_addressing %} ⚠️{% endif %}</td>
+        <td>{{ asset.status }}</td>
+        <td>{{ asset.ip_addresses | join(", ") or "—" }}</td>
+        <td>{{ asset.open_ports | join(", ") or "—" }}</td>
+        <td>{{ asset.findings | length }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p class="sin-datos">No se descubrió ningún activo en este escaneo.</p>
+{% endif %}
+
+<!-- ─── Hallazgos ───────────────────────────────────────────────────── -->
+<h2>Hallazgos detallados</h2>
+{% if findings %}
+{% for finding in findings %}
+<div class="hallazgo sev-{{ finding.severity.value }}">
+    <div class="titulo">
+        <span class="badge badge-{{ finding.severity.value }}">{{ severity_label[finding.severity] }}</span>
+        {{ finding.finding_type }} — {{ finding.asset.hostname }}
+    </div>
+    <div class="evidencia">{{ finding.evidence }}</div>
+    {% if finding.impact %}
+    <div class="campo"><b>Impacto:</b> {{ finding.impact }}</div>
+    {% endif %}
+    {% if finding.remediation %}
+    <div class="campo"><b>Remediación:</b> {{ finding.remediation }}</div>
+    {% endif %}
+    {% if not finding.impact and not finding.remediation %}
+    <div class="campo sin-datos">Pendiente de triaje por IA.</div>
+    {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<p class="sin-datos">No se detectó ningún hallazgo de riesgo en este escaneo.</p>
+{% endif %}
+
+</body>
+</html>

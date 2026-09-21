@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     #: el coste de una tacada de llamadas simultáneas sin control.
     ai_concurrency: int = 5
 
+    # ─── Informes ─────────────────────────────────────────────────────
+    #: Directorio donde se escriben los informes PDF generados. Relativo al
+    #: directorio de trabajo del proceso salvo que se dé una ruta absoluta.
+    reports_dir: str = "reports"
+
     # ─── APIs externas de descubrimiento ──────────────────────────────
     shodan_api_key: str = ""
 
