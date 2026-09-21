@@ -17,6 +17,18 @@ class Settings(BaseSettings):
     ai_provider: str = "anthropic"
     anthropic_api_key: str = ""
     ai_model: str = "claude-sonnet-4-6"
+    #: Límite de tokens de salida por llamada. El triaje y la consulta NL
+    #: piden respuestas acotadas (severidad+impacto+remediación, o una
+    #: respuesta a una pregunta); no hace falta margen para generación larga.
+    ai_max_tokens: int = 1024
+    #: Timeout (segundos) por llamada al proveedor de IA.
+    ai_timeout: float = 60.0
+    #: Reintentos del SDK ante fallo transitorio (rate limit, 5xx).
+    ai_max_retries: int = 2
+    #: Triajes concurrentes al procesar varios hallazgos. Acotado por la
+    #: misma razón que `dns_concurrency`: no saturar al proveedor ni disparar
+    #: el coste de una tacada de llamadas simultáneas sin control.
+    ai_concurrency: int = 5
 
     # ─── APIs externas de descubrimiento ──────────────────────────────
     shodan_api_key: str = ""

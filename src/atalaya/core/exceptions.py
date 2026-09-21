@@ -21,3 +21,15 @@ class InvalidTargetError(AtalayaError):
 
 class DiscoveryError(AtalayaError):
     """Fallo irrecuperable durante una fase de descubrimiento."""
+
+
+class AIProviderError(AtalayaError):
+    """Fallo irrecuperable de la capa IA: proveedor no disponible o mal
+    configurado (API key ausente, error de red, respuesta sin la forma
+    esperada).
+
+    Se levanta en operaciones puntuales (`ask_natural_language`) donde no
+    hay una colección sobre la que degradar con gracia. El triaje de
+    hallazgos, que sí procesa una colección, la captura por elemento en vez
+    de dejarla propagar (ver `ai/triage.py`).
+    """
