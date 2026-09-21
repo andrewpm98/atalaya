@@ -12,7 +12,7 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
-| Base de datos | PostgreSQL + SQLAlchemy async | 🔨 Modelos Scan/Asset/Finding + migraciones Alembic. Solo persiste subdominios; puertos/cabeceras/TLS aún no existen |
+| Base de datos | PostgreSQL + SQLAlchemy async | ✅ Modelos Scan/Asset/Finding + migraciones Alembic. Persiste subdominios, puertos abiertos y hallazgos de cabeceras/TLS |
 | API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL (`POST /findings/ask`) e informe (`GET /scans/{id}/report`) reales |
 | Aplicación web | Dashboard Streamlit | ✅ Escaneos, triaje IA, consulta NL, descarga de informe |
 | GitHub con historial | Commits por unidad lógica | ✅ commits por fase |
@@ -48,15 +48,24 @@ src/atalaya/
 ├── core/
 │   ├── database.py              Engine async + Base declarativa + get_session
 │   ├── models.py                Scan, Asset, Finding (SQLAlchemy 2.0)
-│   ├── persistence.py           save_subdomain_scan() — descubrimiento → BD
+│   ├── persistence.py           save_subdomain_scan(), apply_port_scan(),
+│   │                             apply_discovery_findings() — descubrimiento → BD
 │   ├── repository.py            Lectura: get_scan, list_scans, get_latest_scan,
 │   │                             list_assets, list_findings, diff_scans()
 │   ├── exceptions.py            AtalayaError, UnauthorizedTargetError, ...
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
 │   └── netutils.py              classify_ip() — 10 alcances de red
 ├── discovery/
-│   ├── models.py                SubdomainRecord, SubdomainScanResult
-│   └── subdomains.py            Enumeración completa (crt.sh + DNS)
+│   ├── models.py                SubdomainRecord, SubdomainScanResult,
+│   │                             DiscoveryFinding, HeaderScanResult, TlsScanResult,
+│   │                             EnrichmentResult
+│   ├── subdomains.py            Enumeración completa (crt.sh + DNS)
+│   ├── ports.py                  scan_ports() — TCP asíncrono, puertos comunes
+│   ├── headers.py                 analyze_headers() — HSTS/CSP/XFO/XCTO/
+│   │                             Referrer-Policy/Permissions-Policy
+│   ├── tls.py                     inspect_tls() — versión, emisor, caducidad
+│   └── enrichment.py              enrich_scan() — orquesta las tres técnicas
+│                                 anteriores sobre los hosts activos
 ├── ai/
 │   ├── provider.py               LLMProvider (ABC) + AnthropicProvider
 │   ├── triage.py                 triage_finding/triage_findings — contexto
@@ -111,29 +120,34 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 > report.html`) + `xhtml2pdf`, no WeasyPrint: xhtml2pdf es Python puro y no
 > depende de Pango/Cairo/GTK, ausentes en un Windows sin ese runtime.
 
+> **Desviación del stub original (Paso 2, resto):** CLAUDE.md solo preveía
+> `ports.py`, `headers.py` y `tls.py`. Se añade `discovery/enrichment.py`
+> (`enrich_scan()`) para orquestar los tres, concurrentemente y con
+> concurrencia acotada, sobre los hosts activos de un
+> `SubdomainScanResult` — mismo motivo que separó `ai/query.py` de
+> `ai/triage.py`: compone módulos independientes, no pertenece a ninguno en
+> particular, y evita que `POST /scans` tenga que orquestar tres semáforos
+> directamente en el endpoint. Cada módulo devuelve `DiscoveryFinding`
+> (nuevo en `discovery/models.py`), no un `Finding` de SQLAlchemy — el
+> descubrimiento no conoce la capa de persistencia; `core/persistence.py`
+> traduce con `apply_port_scan()`/`apply_discovery_findings()`, mismo
+> patrón que `save_subdomain_scan()`. Puertos/cabeceras/TLS no generan
+> ningún código nuevo en `ai/triage.py` ni en `reporting/generator.py`:
+> ambos ya procesan cualquier `Finding`/`Asset.open_ports` de forma
+> genérica, sin mirar `finding_type`.
+
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **137 tests en verde.**
-
-### Pendiente (stubs con contrato definido)
-
-| Fichero | Fase | Qué falta |
-|---|---|---|
-| `discovery/ports.py` | Paso 2 | Escaneo asíncrono de puertos |
-| `discovery/headers.py` | Paso 2 | Cabeceras de seguridad HTTP |
-| `discovery/tls.py` | Paso 2 | Certificados y versión TLS |
-
-Los stubs **no son código muerto**: fijan qué recibe y devuelve cada pieza.
-Respeta esas firmas salvo que haya razón para cambiarlas, y si cambias una,
-dilo.
+55 objetivos de escaneo, 19 segundos. **170 tests en verde.**
 
 ---
 
 ## Hoja de ruta
 
 1. ~~Paso 1 — Arquitectura y esqueleto~~ ✅
-2. **Paso 2 — Motor de descubrimiento** — subdominios ✅ · puertos, cabeceras, TLS ⬜
+2. **Paso 2 — Motor de descubrimiento** ✅ — subdominios, puertos, cabeceras,
+   TLS, orquestados por `enrich_scan()` sobre los hosts activos de cada escaneo
 3. **Paso 3 — Modelos de BD y persistencia** — Scan/Asset/Finding + migraciones ✅ ·
-   solo subdominios persisten (puertos/cabeceras/TLS se conectan cuando existan)
+   persiste subdominios, puertos y hallazgos de cabeceras/TLS
 4. **Paso 4 — Endpoints REST** ✅ — `scans`/`assets`/`findings`, más
    `/scans/{id}/triage` y `/findings/ask`, añadidos al cerrar el Paso 5
 5. **Paso 5 — Capa de IA** ✅ — `LLMProvider`/`AnthropicProvider`, triaje de
@@ -155,10 +169,10 @@ añadió al implementar el Paso 5 porque, sin una ruta que lo invoque,
 `ai/triage.py` sería código alcanzable solo desde tests — lo que CLAUDE.md
 pide evitar explícitamente ("los stubs no son código muerto").
 
-**Plazo:** entrega a finales de septiembre. Los cinco requisitos obligatorios
-están cerrados (Paso 7 fue el último); el margen restante es para pulir
-descubrimiento (puertos/cabeceras/TLS, Paso 2) y robustecer lo ya entregado,
-no para nuevas fases.
+**Plazo:** entrega a finales de septiembre. Los siete pasos de la hoja de
+ruta y los cinco requisitos obligatorios están cerrados. El margen restante
+es para robustecer lo ya entregado (ver "Deuda técnica conocida") y preparar
+la defensa oral, no para nuevas fases.
 
 ---
 
@@ -221,9 +235,11 @@ cómo trata esto.
 4. **Comparación de dominios con el punto separador.** `endswith("ejemplo.com")`
    aceptaría `ejemplo.com.evil.net`, que un atacante puede registrar para
    inyectar activos ajenos en el inventario. Hay un test que lo cubre.
-5. **Escaneo de puertos: intrusividad acotada.** Cuando se implemente, limitar
-   concurrencia y ritmo. Un escaneo agresivo puede degradar el servicio del
-   objetivo y es indistinguible de un ataque.
+5. **Escaneo de puertos: intrusividad acotada.** `discovery/ports.py` limita
+   concurrencia (`PORT_SCAN_CONCURRENCY`) y usa una lista reducida de puertos
+   comunes por defecto (`COMMON_PORTS`), no un barrido de los 65535. Un
+   escaneo agresivo puede degradar el servicio del objetivo y es
+   indistinguible de un ataque.
 6. **Nunca verificar explotabilidad.** La herramienta señala patrones de riesgo
    (p. ej. un nombre apuntando a hosting no reclamado); no comprueba si son
    explotables. Eso excede el reconocimiento y requiere autorización expresa.
@@ -265,6 +281,21 @@ cómo trata esto.
   cada descarga; no guarda versiones anteriores ni ofrece DOCX (el parámetro
   `fmt` del stub original se conserva como punto de extensión, pero solo
   "pdf" está implementado).
+- **Puertos: solo `COMMON_PORTS`, sin banner grabbing.** `discovery/ports.py`
+  confirma si un puerto está abierto, no qué servicio ni versión corre
+  detrás (eso exigiría enviar payloads específicos por protocolo, más
+  intrusivo). Un barrido completo de los 65535 puertos tampoco está
+  contemplado, por la misma razón de intrusividad acotada.
+- **TLS: sin validar cadena de confianza ni hostname del certificado.**
+  `discovery/tls.py` inspecciona el certificado que presenta el servidor
+  (versión, emisor, caducidad) con `verify_mode=CERT_NONE` a propósito —
+  necesita poder reportar un certificado autofirmado o caducado, no
+  rechazarlo antes de verlo — pero no comprueba si la cadena es válida ni si
+  el certificado corresponde al hostname consultado (mismatch de SAN/CN).
+- **Cabeceras: sin seguir redirecciones entre esquemas ni evaluar CORS.**
+  `discovery/headers.py` cubre las seis cabeceras que pide el enunciado; no
+  evalúa `Access-Control-Allow-Origin` ni cookies (`Set-Cookie` con
+  `Secure`/`HttpOnly`/`SameSite`), fuera del alcance explícito de este paso.
 
 ---
 
@@ -272,7 +303,7 @@ cómo trata esto.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 137)
+pytest -q                            # tests (deben pasar los 170)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

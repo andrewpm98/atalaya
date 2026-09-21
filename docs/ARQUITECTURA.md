@@ -14,7 +14,8 @@ diferencial no es escanear (hay muchas herramientas que lo hacen), sino
 Núcleo de la aplicación. Expone la API REST propia (requisito de la práctica) y
 orquesta el resto de módulos. Endpoints principales:
 
-- `POST /scans` ✅ — lanza un escaneo de subdominios y lo persiste.
+- `POST /scans` ✅ — lanza un escaneo completo (subdominios + puertos +
+  cabeceras + TLS sobre los hosts activos) y lo persiste.
 - `GET  /scans`, `GET /scans/{id}` ✅ — consulta de escaneos (404 si no existe).
 - `GET  /assets` ✅ — activos descubiertos, filtrables por `scan_id`.
 - `GET  /findings` ✅ — hallazgos, filtrables por `asset_id`/`scan_id`;
@@ -29,15 +30,25 @@ pública; `api/main.py` traduce `InvalidTargetError`/`UnauthorizedTargetError`
 a 400/403 vía `exception_handler`, en vez de que cada ruta gestione sus
 propios códigos de error.
 
-### 2.2 Descubrimiento — `src/atalaya/discovery`
+### 2.2 Descubrimiento — `src/atalaya/discovery` (Paso 2 ✅)
 Cada técnica es un módulo independiente con salida normalizada:
 
 | Módulo         | Qué obtiene                                    | Fuente                  |
 |----------------|------------------------------------------------|-------------------------|
-| `subdomains`   | Subdominios ✅ implementado                     | crt.sh (CT logs) + DNS  |
-| `ports`        | Puertos/servicios abiertos                     | Escaneo asíncrono       |
-| `headers`      | Cabeceras de seguridad HTTP                    | header-analyzer (reuso) |
-| `tls`          | Versión TLS, certificado, caducidad            | `cryptography`          |
+| `subdomains`   | Subdominios                                    | crt.sh (CT logs) + DNS  |
+| `ports`        | Puertos TCP abiertos (`COMMON_PORTS` por defecto) | Conexión asíncrona, concurrencia acotada |
+| `headers`      | HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy | Petición HTTP(S) |
+| `tls`          | Versión de protocolo, emisor, caducidad del certificado | `cryptography` sobre el `ssl_object` de la conexión |
+| `enrichment`   | Orquesta `ports`+`headers`+`tls` sobre los hosts activos de un escaneo, concurrentemente | Compone los tres anteriores |
+
+`ports`/`headers`/`tls` nunca lanzan excepción: un host sin ese servicio (p.
+ej. sin HTTPS en el 443) se refleja en el campo `error` del resultado, mismo
+criterio de degradación controlada que `subdomains`. `enrichment.enrich_scan()`
+solo actúa sobre `SubdomainScanResult.active_records` — un host que no
+resuelve, o que solo resuelve a direccionamiento interno, no tiene servicio
+real que inspeccionar. Los tres módulos devuelven `DiscoveryFinding`
+(`discovery/models.py`), no un `Finding` de SQLAlchemy: la capa de
+descubrimiento no conoce la de persistencia.
 
 ### 2.3 Persistencia (PostgreSQL) — `src/atalaya/core`
 Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
@@ -47,9 +58,13 @@ Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
 - **Finding** — hallazgo (tipo, evidencia, severidad, remediación, `asset_id`).
 
 Relaciones: `Scan 1─N Asset`, `Asset 1─N Finding`. Las migraciones viven en
-`migrations/` (Alembic, motor async). `core/persistence.py` traduce un
-resultado de descubrimiento (`SubdomainScanResult`, de momento) a estas
-filas; un host con `leaks_internal_addressing` genera además un `Finding`.
+`migrations/` (Alembic, motor async). `core/persistence.py` traduce los
+resultados de descubrimiento a estas filas: `save_subdomain_scan()` (un
+`SubdomainScanResult` → `Scan`+`Asset`; un host con
+`leaks_internal_addressing` genera además un `Finding`), `apply_port_scan()`
+(`EnrichmentResult.ports_by_ip` → `Asset.open_ports`) y
+`apply_discovery_findings()` (hallazgos de cabeceras/TLS → `Finding`, con
+severidad `unknown` hasta el triaje).
 
 `core/repository.py` es la contraparte de lectura: `get_scan`, `list_scans`,
 `get_latest_scan`, `list_assets`, `list_findings` y `diff_scans()` (compara
@@ -142,8 +157,8 @@ dominio
 ## 6. Hoja de ruta
 
 1. **Paso 1 — Arquitectura + esqueleto** ✅
-2. **Paso 2 — Motor de descubrimiento** (subdominios ✅ · puertos, cabeceras y TLS pendientes)
-3. **Paso 3 — Base de datos + modelos** ✅ (solo persiste subdominios por ahora)
+2. **Paso 2 — Motor de descubrimiento** ✅ (subdominios, puertos, cabeceras y TLS)
+3. **Paso 3 — Base de datos + modelos** ✅ (persiste subdominios, puertos y hallazgos de cabeceras/TLS)
 4. **Paso 4 — API REST completa** ✅ (`scans`/`assets`/`findings`, `/scans/{id}/triage`,
    `/findings/ask`)
 5. **Paso 5 — Capa IA (triaje + consulta NL)** ✅
@@ -248,10 +263,16 @@ interna. Se marca mediante `leaks_internal_addressing`, genera un `Finding`
 (`core/persistence.py`) y la capa IA lo tría como hallazgo propio
 (`POST /scans/{id}/triage`).
 
-### 7.6 Integración prevista
+### 7.6 Integración
 
-- **Paso 2 (puertos)** — `SubdomainScanResult.scan_targets()` alimenta el escaneo de puertos, ya filtrado de direcciones no enrutables.
-- **Paso 3 (BD)** — cada `SubdomainRecord` se corresponde con una fila de `Asset`
-  (✅ implementado en `core/persistence.py::save_subdomain_scan`).
+- **Paso 2 (puertos, cabeceras, TLS)** ✅ — `SubdomainScanResult.scan_targets()`
+  alimenta el escaneo de puertos (`discovery/ports.py`), ya filtrado de
+  direcciones no enrutables; `SubdomainScanResult.active_records` alimenta
+  cabeceras y TLS (`discovery/headers.py`, `discovery/tls.py`), orquestados
+  por `discovery/enrichment.py::enrich_scan()`.
+- **Paso 3 (BD)** ✅ — cada `SubdomainRecord` se corresponde con una fila de
+  `Asset` (`core/persistence.py::save_subdomain_scan`); los puertos y
+  hallazgos del enriquecimiento se aplican con `apply_port_scan()` y
+  `apply_discovery_findings()`.
 - **Paso 4 (API)** ✅ — `POST /scans` devuelve el `Scan` persistido a través de
   `api/schemas.py` (no se exponen los modelos ORM directamente).

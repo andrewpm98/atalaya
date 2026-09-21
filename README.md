@@ -35,7 +35,9 @@ atalaya subdomains ejemplo.com --json         # salida estructurada
 atalaya subdomains ejemplo.com --save         # además, persiste el escaneo en BD
 ```
 
-`--save` requiere que las tablas existan (`alembic upgrade head` una vez).
+`--save` requiere que las tablas existan (`alembic upgrade head` una vez) y,
+además de subdominios, enriquece los hosts activos con puertos, cabeceras y
+TLS (ver más abajo) antes de persistir.
 
 La enumeración consulta los registros de **Certificate Transparency** vía
 crt.sh —técnica pasiva: no envía tráfico al objetivo— normaliza y deduplica
@@ -49,6 +51,25 @@ cuenta como activo alcanzable. Los que resuelven a IPs privadas se destacan
 aparte, porque filtrar direccionamiento interno es un hallazgo en sí mismo.
 
 > ⚠️ Respeta `SCAN_ALLOWLIST`. Analiza solo dominios propios o autorizados.
+
+## Uso rápido: puertos, cabeceras y TLS
+
+Ya operativo (Paso 2). `POST /scans` (y `atalaya subdomains --save`) enumera
+subdominios y, sobre los hosts que resultan **activos**, enriquece
+automáticamente cada uno con:
+
+- **Puertos** — conexión TCP a un conjunto acotado de puertos comunes (web,
+  correo, bases de datos, gestión remota), concurrencia limitada por host.
+- **Cabeceras de seguridad HTTP** — HSTS, CSP, X-Frame-Options,
+  X-Content-Type-Options, Referrer-Policy y Permissions-Policy.
+- **TLS** — versión de protocolo, emisor y caducidad del certificado;
+  marca como hallazgo un certificado caducado o a menos de 30 días de
+  caducar, y versiones obsoletas (TLS 1.0/1.1).
+
+No hace falta invocar nada aparte: es parte del mismo escaneo. Los hallazgos
+resultantes entran al mismo flujo que el resto — triaje por IA
+(`POST /scans/{id}/triage`) e informe (`GET /scans/{id}/report`) los
+procesan sin distinguir su origen.
 
 ## Uso rápido: triaje por IA y consulta en lenguaje natural
 
@@ -154,13 +175,13 @@ make dashboard    # en otra
 Desarrollo por fases (ver `docs/ARQUITECTURA.md`):
 
 - [x] **Paso 1** — Arquitectura + esqueleto del repositorio
-- [ ] **Paso 2** — Motor de descubrimiento
+- [x] **Paso 2** — Motor de descubrimiento
   - [x] Subdominios (Certificate Transparency + DNS)
-  - [ ] Puertos y servicios
-  - [ ] Cabeceras de seguridad HTTP
-  - [ ] Configuración TLS
+  - [x] Puertos y servicios
+  - [x] Cabeceras de seguridad HTTP
+  - [x] Configuración TLS
 - [x] **Paso 3** — Base de datos + modelos (Scan/Asset/Finding, migraciones Alembic;
-      solo persiste subdominios por ahora)
+      persiste subdominios, puertos y hallazgos de cabeceras/TLS)
 - [x] **Paso 4** — API REST completa
   - [x] `scans` / `assets` / `findings` — creación y lectura real
   - [x] `/scans/{id}/triage`, `/findings/ask` — activados junto al Paso 5
