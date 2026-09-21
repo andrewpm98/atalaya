@@ -37,7 +37,10 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from xhtml2pdf import pisa
 
+from atalaya.ai.provider import LLMProvider
+from atalaya.ai.report_writer import write_executive_summary
 from atalaya.config import settings
+from atalaya.core.exceptions import AIProviderError
 from atalaya.core.models import Finding, FindingSeverity, Scan
 
 logger = logging.getLogger(__name__)
@@ -68,14 +71,50 @@ _SEVERITY_LABEL = {
 }
 
 
-def build_report_context(scan: Scan) -> dict[str, object]:
+#: Peso de cada severidad en `risk_score` (0-100). La proporción entre pesos
+#: (crítica ≈ 2.5x alta ≈ 2.5x media ≈ 4x baja) es deliberada, no arbitraria:
+#: aproxima que un único hallazgo crítico ya debería acercar el informe a la
+#: banda alta del índice (dos críticas superan 50/100 sin necesidad de nada
+#: más), mientras que acumular hallazgos `low` por sí solos no debe empujar
+#: el score hacia el mismo terreno que un puñado de críticas/altas — no son
+#: comparables en impacto real. No hace falta más sofisticación (p. ej.
+#: ponderar por activo o por tipo de hallazgo): el objetivo es un número que
+#: sitúe el informe en una banda de un vistazo, no un score defendible como
+#: CVSS.
+_RISK_WEIGHTS: dict[FindingSeverity, int] = {
+    FindingSeverity.CRITICAL: 25,
+    FindingSeverity.HIGH: 10,
+    FindingSeverity.MEDIUM: 4,
+    FindingSeverity.LOW: 1,
+    FindingSeverity.UNKNOWN: 0,
+}
+
+
+def _compute_risk_score(counts: dict[FindingSeverity, int]) -> int:
+    """Calcula el `risk_score` (0-100) a partir de los contadores por
+    severidad. Acotado a 100: es un índice para el lector, no una suma sin
+    límite que un escaneo con muchos hallazgos `low` pudiera desbordar.
+    """
+    total = sum(_RISK_WEIGHTS[sev] * count for sev, count in counts.items())
+    return min(100, total)
+
+
+def build_report_context(
+    scan: Scan, executive_summary: str | None = None
+) -> dict[str, object]:
     """Construye el contexto que consume la plantilla Jinja2 del informe.
 
-    Igual principio que `ai/triage.py::build_finding_context` y
-    `ai/query.py::build_scan_context`: selección deliberada de lo que
-    necesita la plantilla, no las filas de BD tal cual. Aquí además se
-    precalculan los contadores (por severidad, activos accesibles) para que
-    la plantilla no lleve lógica de agregación.
+    Igual principio que `ai/triage.py::build_finding_context`: selección
+    deliberada de lo que necesita la plantilla, no las filas de BD tal cual.
+    Aquí además se precalculan los contadores (por severidad, activos
+    accesibles) para que la plantilla no lleve lógica de agregación.
+
+    `executive_summary` es opcional y ajeno a este cálculo: quien llama
+    (`generate_report`) ya decidió si hay resumen ejecutivo de IA disponible
+    o no (`None` si no hay proveedor, o si `ai/report_writer.py` falló). Esta
+    función solo lo coloca en el contexto junto al `risk_score`, que sí
+    calcula aquí porque depende únicamente de `severity_counts` — ya
+    calculado en esta misma función — sin necesitar IA.
     """
     findings: list[Finding] = [f for asset in scan.assets for f in asset.findings]
     counts = dict.fromkeys(_SEVERITY_ORDER, 0)
@@ -100,14 +139,16 @@ def build_report_context(scan: Scan) -> dict[str, object]:
         "severity_counts": [(_SEVERITY_LABEL[sev], counts[sev]) for sev in _SEVERITY_ORDER],
         "findings": findings_ordenados,
         "severity_label": _SEVERITY_LABEL,
+        "risk_score": _compute_risk_score(counts),
+        "executive_summary": executive_summary,
     }
 
 
-def render_html(scan: Scan) -> str:
+def render_html(scan: Scan, executive_summary: str | None = None) -> str:
     """Renderiza el HTML del informe. Separado de la conversión a PDF para
     poder probarlo sin invocar xhtml2pdf (ver `tests/test_reporting.py`)."""
     template = _env.get_template("report.html")
-    return template.render(**build_report_context(scan))
+    return template.render(**build_report_context(scan, executive_summary))
 
 
 def _html_to_pdf_bytes(html: str) -> bytes:
@@ -133,11 +174,54 @@ def _report_path(scan: Scan) -> Path:
     return Path(settings.reports_dir) / f"atalaya_informe_{scan.domain}_{scan.id}.pdf"
 
 
-async def generate_report(scan: Scan, fmt: str = "pdf") -> Path:
+async def _build_executive_summary(provider: LLMProvider, scan: Scan) -> str | None:
+    """Redacta el resumen ejecutivo con IA, o `None` si no se puede.
+
+    Aísla la parte de `generate_report` que sí puede fallar (la llamada al
+    proveedor) de la que no debe fallar nunca (generar el PDF): captura
+    `AIProviderError` aquí mismo, no la deja propagar, para que el informe
+    con portada — requisito obligatorio de la práctica antes de que
+    existiera la capa IA (ver CLAUDE.md) — nunca dependa de que un
+    proveedor externo esté disponible o configurado.
+    """
+    findings: list[Finding] = [f for asset in scan.assets for f in asset.findings]
+    critical = [f for f in findings if f.severity is FindingSeverity.CRITICAL]
+    high = [f for f in findings if f.severity is FindingSeverity.HIGH]
+    counts = dict.fromkeys(_SEVERITY_ORDER, 0)
+    for finding in findings:
+        counts[finding.severity] += 1
+    risk_score = _compute_risk_score(counts)
+
+    try:
+        return await write_executive_summary(
+            provider,
+            domain=scan.domain,
+            risk_score=risk_score,
+            critical_findings=critical,
+            high_findings=high,
+        )
+    except AIProviderError as exc:
+        logger.warning(
+            "Resumen ejecutivo del escaneo #%s (%s) no disponible: %s", scan.id, scan.domain, exc
+        )
+        return None
+
+
+async def generate_report(
+    scan: Scan, fmt: str = "pdf", provider: LLMProvider | None = None
+) -> Path:
     """Genera el informe de `scan` y devuelve la ruta del fichero escrito.
 
     Requiere que `scan.assets` y `asset.findings` ya estén cargados (p. ej.
-    obtenidos con `repository.get_scan()`), igual que `ai/query.py::ask()`.
+    obtenidos con `repository.get_scan()`).
+
+    `provider` es opcional: si se da, se usa `ai/report_writer.py::
+    write_executive_summary()` para incluir un resumen ejecutivo en lenguaje
+    natural. Si es `None`, o si el proveedor falla (`AIProviderError`), el
+    informe se genera igual con `executive_summary = None` — ver
+    `_build_executive_summary`. El informe con portada no puede depender de
+    la capa IA: era un requisito obligatorio de la práctica antes de que
+    esa capa existiera (ver CLAUDE.md, tabla de requisitos).
 
     Raises:
         ValueError: si `fmt` no es "pdf" — único formato implementado; el
@@ -147,7 +231,9 @@ async def generate_report(scan: Scan, fmt: str = "pdf") -> Path:
     if fmt != "pdf":
         raise ValueError(f"formato de informe no soportado: {fmt!r} (solo 'pdf')")
 
-    html = render_html(scan)
+    executive_summary = await _build_executive_summary(provider, scan) if provider is not None else None
+
+    html = render_html(scan, executive_summary)
     pdf_bytes = await asyncio.to_thread(_html_to_pdf_bytes, html)
 
     path = _report_path(scan)

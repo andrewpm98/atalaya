@@ -51,6 +51,31 @@ class _FakeProvider(LLMProvider):
         return self._tool_output
 
 
+class _FakeRoutingProvider(LLMProvider):
+    """Doble de `LLMProvider` para `POST /findings/ask`, que desde que pasa
+    por `ai/prompter.py::route_and_answer()` hace dos llamadas a
+    `complete_tool` con nombres de herramienta distintos (`route_query` y,
+    según el enrutado, `record_analysis` o
+    `record_takeover_assessment_batch`) en vez de una sola a `complete()`.
+    `responses` mapea `tool_name` -> resultado (dict), igual patrón que
+    `tests/test_ai_prompter.py::_FakeProvider`.
+    """
+
+    def __init__(self, responses: dict[str, Any], *, error: Exception | None = None) -> None:
+        self._responses = responses
+        self._error = error
+
+    async def complete(self, prompt: str, *, system: str | None = None) -> str:
+        raise NotImplementedError("no usado por route_and_answer")
+
+    async def complete_tool(
+        self, prompt: str, *, tool_name: str, tool_schema: dict[str, Any], system: str | None = None
+    ) -> dict[str, Any]:
+        if self._error is not None:
+            raise self._error
+        return self._responses[tool_name]
+
+
 def _fake_result(domain: str) -> SubdomainScanResult:
     result = SubdomainScanResult(domain=domain)
     result.records = [
@@ -149,7 +174,20 @@ async def test_ask_responde_sobre_el_ultimo_escaneo_del_dominio(
 ) -> None:
     scan_id = _create_scan_con_finding(client, monkeypatch, domain="ejemplo.com")
 
-    fake_provider = _FakeProvider(text="Sí, interno.ejemplo.com filtra red interna.")
+    fake_provider = _FakeRoutingProvider(
+        {
+            "route_query": {
+                "agent": "analyst",
+                "refined_question": "¿algo filtra red interna?",
+            },
+            "record_analysis": {
+                "answer": "Sí, interno.ejemplo.com filtra red interna.",
+                "patterns": ["direccionamiento interno expuesto"],
+                "concerning_combinations": [],
+                "priorities": ["Eliminar el registro DNS obsoleto"],
+            },
+        }
+    )
     monkeypatch.setattr("atalaya.api.routes.findings.get_provider", lambda: fake_provider)
 
     resp = client.post(
@@ -161,6 +199,8 @@ async def test_ask_responde_sobre_el_ultimo_escaneo_del_dominio(
     body = resp.json()
     assert body["scan_id"] == scan_id
     assert body["answer"] == "Sí, interno.ejemplo.com filtra red interna."
+    assert body["patterns"] == ["direccionamiento interno expuesto"]
+    assert body["priorities"] == ["Eliminar el registro DNS obsoleto"]
 
 
 async def test_ask_sin_escaneo_previo_da_404(client: TestClient) -> None:
@@ -172,7 +212,7 @@ async def test_ask_sin_escaneo_previo_da_404(client: TestClient) -> None:
 
 async def test_ask_proveedor_caido_da_502(client: TestClient, monkeypatch) -> None:
     _create_scan_con_finding(client, monkeypatch)
-    fake_provider = _FakeProvider(error=AIProviderError("proveedor caído"))
+    fake_provider = _FakeRoutingProvider({}, error=AIProviderError("proveedor caído"))
     monkeypatch.setattr("atalaya.api.routes.findings.get_provider", lambda: fake_provider)
 
     resp = client.post(

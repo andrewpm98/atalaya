@@ -88,7 +88,44 @@ class AskRequest(BaseModel):
 
 
 class AskResponse(BaseModel):
+    """Respuesta de `POST /findings/ask`.
+
+    Desde que el endpoint pasa por `ai/prompter.py::route_and_answer()` (que
+    devuelve siempre un `AnalystResult`, venga del agente de visión global o
+    del de takeover), la respuesta trae más que un `answer` de texto libre:
+    `patterns`/`concerning_combinations`/`priorities` son señal real que ya
+    razonó el modelo (patrones del conjunto, combinaciones preocupantes, qué
+    atender primero). Se exponen todos en vez de recortar a solo `answer`:
+    descartarlos aquí obligaría a quien consuma la API (el dashboard, o
+    cualquier cliente futuro) a volver a pedirlos con una segunda llamada, y
+    no hay motivo de seguridad ni de tamaño de payload para ocultarlos. Con
+    `default_factory=list` la respuesta no rompe si el agente de takeover
+    (que hoy puebla `answer`/`concerning_combinations`/`priorities` pero deja
+    `patterns` vacío) es el que respondió.
+    """
+
     scan_id: int
     domain: str
     question: str
     answer: str
+    patterns: list[str] = Field(default_factory=list)
+    concerning_combinations: list[str] = Field(default_factory=list)
+    priorities: list[str] = Field(default_factory=list)
+
+
+class ScanDiffOut(BaseModel):
+    """Respuesta de `GET /scans/{scan_id}/diff/{other_scan_id}`.
+
+    `previous_scan_id`/`current_scan_id` documentan cuál de los dos escaneos
+    se trató como "previo" y cuál como "actual" — no necesariamente en el
+    mismo orden en que se pidieron en la URL (ver `scans.py::diff_scan`),
+    así que el cliente no debe asumir que `previous_scan_id == scan_id` de
+    la ruta.
+    """
+
+    previous_scan_id: int
+    current_scan_id: int
+    nuevos: list[str] = Field(default_factory=list)
+    desaparecidos: list[str] = Field(default_factory=list)
+    comunes: list[str] = Field(default_factory=list)
+    analysis: str

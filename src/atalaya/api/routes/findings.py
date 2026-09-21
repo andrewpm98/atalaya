@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from atalaya.ai.prompter import route_and_answer
 from atalaya.ai.provider import get_provider
-from atalaya.ai.query import ask as ask_scan
 from atalaya.api.schemas import AskRequest, AskResponse, FindingOut
 from atalaya.core import repository
 from atalaya.core.database import get_session
@@ -33,6 +33,18 @@ async def ask_natural_language(
 
     Usa `payload.scan_id` si se indica; si no, el último escaneo completado
     de `payload.domain` (ver `core/repository.py::get_latest_scan`).
+
+    La resolución del `Scan` no cambia respecto a antes de introducir la
+    capa de agentes: sigue siendo responsabilidad de este endpoint, no de
+    `ai/prompter.py` (que recibe el `Scan` ya resuelto, igual que antes
+    recibía `ai/query.py::ask()`). Lo que sí cambia es a quién se delega la
+    pregunta: `route_and_answer()` decide internamente si la responde el
+    agente de visión global (`ai/analyst.py`) o el de riesgo de takeover
+    (`ai/takeover_detective.py`), y devuelve siempre un `AnalystResult` —
+    `ai/query.py::ask()` (que solo devolvía un `str` de prosa libre) queda
+    sin llamador tras este cambio y se elimina junto con su test dedicado
+    (`tests/test_ai_query.py`); no lo usa nada más (comprobado con
+    `grep -rn "ai\\.query" src tests`).
     """
     if payload.scan_id is not None:
         scan = await repository.get_scan(session, payload.scan_id)
@@ -46,5 +58,13 @@ async def ask_natural_language(
         )
 
     provider = get_provider()
-    answer = await ask_scan(provider, scan, payload.question)
-    return AskResponse(scan_id=scan.id, domain=scan.domain, question=payload.question, answer=answer)
+    result = await route_and_answer(provider, scan=scan, question=payload.question)
+    return AskResponse(
+        scan_id=scan.id,
+        domain=scan.domain,
+        question=payload.question,
+        answer=result.answer,
+        patterns=result.patterns,
+        concerning_combinations=result.concerning_combinations,
+        priorities=result.priorities,
+    )

@@ -16,10 +16,13 @@ memoria — igual que `db_session`, pero por request HTTP en vez de directa.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi.testclient import TestClient
 
+from atalaya.ai.provider import LLMProvider
 from atalaya.config import settings
+from atalaya.core.exceptions import AIProviderError
 from atalaya.discovery.models import (
     DiscoverySource,
     EnrichmentResult,
@@ -27,6 +30,27 @@ from atalaya.discovery.models import (
     SubdomainRecord,
     SubdomainScanResult,
 )
+
+
+class _FakeDiffProvider(LLMProvider):
+    """Doble de `LLMProvider` para `GET /scans/{id}/diff/{other_id}`:
+    `analyze_diff` usa `complete()` (prosa libre), no `complete_tool()`.
+    """
+
+    def __init__(self, *, text: str | None = None, error: Exception | None = None) -> None:
+        self._text = text
+        self._error = error
+
+    async def complete(self, prompt: str, *, system: str | None = None) -> str:
+        if self._error is not None:
+            raise self._error
+        assert self._text is not None
+        return self._text
+
+    async def complete_tool(
+        self, prompt: str, *, tool_name: str, tool_schema: dict[str, Any], system: str | None = None
+    ) -> dict[str, Any]:
+        raise NotImplementedError("no usado por analyze_diff")
 
 
 def _fake_result(domain: str) -> SubdomainScanResult:
@@ -168,6 +192,121 @@ async def test_create_scan_persiste_puertos_y_hallazgos_del_enriquecimiento(
     assert all(f["severity"] == "unknown" for f in www["findings"])
 
 
+# ─── GET /scans/{id}/diff/{other_id} ─────────────────────────────────────────
+
+
+def _fake_result_con_hosts(domain: str, *hostnames: str) -> SubdomainScanResult:
+    result = SubdomainScanResult(domain=domain)
+    result.records = [
+        SubdomainRecord(
+            hostname=hostname,
+            status=ResolutionStatus.ACTIVE,
+            ip_addresses=["93.184.216.34"],
+            sources=[DiscoverySource.CRTSH],
+        )
+        for hostname in hostnames
+    ]
+    result.finished_at = datetime.now(timezone.utc)
+    return result
+
+
+def _crear_dos_escaneos(client: TestClient, monkeypatch, domain: str = "ejemplo.com") -> tuple[int, int]:
+    """Persiste dos escaneos sucesivos de `domain` con activos distintos:
+    `old.<domain>` desaparece y `new.<domain>` aparece; `www.<domain>` es
+    común a ambos."""
+
+    async def fake_enrich(result: SubdomainScanResult) -> EnrichmentResult:
+        return EnrichmentResult()
+
+    monkeypatch.setattr("atalaya.api.routes.scans.enrich_scan", fake_enrich)
+
+    async def fake_enumerate_1(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
+        return _fake_result_con_hosts(domain, f"www.{domain}", f"old.{domain}")
+
+    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate_1)
+    primero = client.post("/scans", json={"domain": domain}).json()
+
+    async def fake_enumerate_2(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
+        return _fake_result_con_hosts(domain, f"www.{domain}", f"new.{domain}")
+
+    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate_2)
+    segundo = client.post("/scans", json={"domain": domain}).json()
+
+    return primero["id"], segundo["id"]
+
+
+async def test_diff_scan_compara_activos_y_devuelve_analisis_ia(
+    client: TestClient, monkeypatch
+) -> None:
+    scan_id_1, scan_id_2 = _crear_dos_escaneos(client, monkeypatch)
+
+    fake_provider = _FakeDiffProvider(text="La superficie de exposición se mantiene estable.")
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: fake_provider)
+
+    resp = client.get(f"/scans/{scan_id_1}/diff/{scan_id_2}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["previous_scan_id"] == scan_id_1
+    assert body["current_scan_id"] == scan_id_2
+    assert body["nuevos"] == ["new.ejemplo.com"]
+    assert body["desaparecidos"] == ["old.ejemplo.com"]
+    assert body["comunes"] == ["www.ejemplo.com"]
+    assert body["analysis"] == "La superficie de exposición se mantiene estable."
+
+
+async def test_diff_scan_es_independiente_del_orden_de_los_ids_en_la_url(
+    client: TestClient, monkeypatch
+) -> None:
+    """Pedir `/diff/` con los ids al revés da la misma comparación: `previous`
+    se decide por `started_at`, no por qué id aparece primero en la ruta."""
+    scan_id_1, scan_id_2 = _crear_dos_escaneos(client, monkeypatch)
+
+    fake_provider = _FakeDiffProvider(text="Sin cambios preocupantes.")
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: fake_provider)
+
+    resp = client.get(f"/scans/{scan_id_2}/diff/{scan_id_1}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["previous_scan_id"] == scan_id_1
+    assert body["current_scan_id"] == scan_id_2
+    assert body["nuevos"] == ["new.ejemplo.com"]
+    assert body["desaparecidos"] == ["old.ejemplo.com"]
+
+
+async def test_diff_scan_dominios_distintos_da_400(client: TestClient, monkeypatch) -> None:
+    _mock_discovery(monkeypatch)
+    escaneo_a = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+
+    _mock_discovery(monkeypatch)
+    escaneo_b = client.post("/scans", json={"domain": "otro.com"}).json()
+
+    resp = client.get(f"/scans/{escaneo_a['id']}/diff/{escaneo_b['id']}")
+
+    assert resp.status_code == 400
+
+
+async def test_diff_scan_escaneo_inexistente_da_404(client: TestClient, monkeypatch) -> None:
+    _mock_discovery(monkeypatch)
+    escaneo = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+
+    resp = client.get(f"/scans/{escaneo['id']}/diff/999")
+
+    assert resp.status_code == 404
+
+
+async def test_diff_scan_proveedor_caido_da_502(client: TestClient, monkeypatch) -> None:
+    scan_id_1, scan_id_2 = _crear_dos_escaneos(client, monkeypatch)
+
+    fake_provider = _FakeDiffProvider(error=AIProviderError("proveedor caído"))
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: fake_provider)
+
+    resp = client.get(f"/scans/{scan_id_1}/diff/{scan_id_2}")
+
+    assert resp.status_code == 502
+
+
 # ─── GET /scans/{id}/report ──────────────────────────────────────────────────
 
 
@@ -177,7 +316,13 @@ async def test_download_report_devuelve_pdf(
     """Prueba de extremo a extremo: escaneo real (persistencia) -> informe
     real (Jinja2 + xhtml2pdf) -> respuesta HTTP. `reports_dir` se redirige a
     `tmp_path` para no escribir en el directorio del proyecto durante los
-    tests."""
+    tests.
+
+    Sin proveedor de IA configurado (la fixture autouse `_sin_claves_reales`
+    de `conftest.py` neutraliza las claves), este es también el camino que
+    ejercita la degradación de la Tarea 3: `download_report` captura el
+    `AIProviderError` que lanza `get_provider()` al no haber clave, y el PDF
+    se descarga igual, sin resumen ejecutivo."""
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
     _mock_discovery(monkeypatch)
     created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
@@ -193,3 +338,43 @@ async def test_download_report_devuelve_pdf(
 async def test_download_report_escaneo_inexistente_da_404(client: TestClient) -> None:
     resp = client.get("/scans/999/report")
     assert resp.status_code == 404
+
+
+async def test_download_report_con_proveedor_disponible_incluye_resumen_ejecutivo(
+    client: TestClient, monkeypatch, tmp_path
+) -> None:
+    """Con un proveedor de IA disponible, `download_report` se lo pasa a
+    `generate_report()` (Tarea 3): el PDF se sigue descargando con 200, y
+    `ai/report_writer.py::write_executive_summary()` se invoca de verdad."""
+    monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
+    _mock_discovery(monkeypatch)
+    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+
+    fake_provider = _FakeDiffProvider(text="Resumen ejecutivo de prueba.")
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: fake_provider)
+
+    resp = client.get(f"/scans/{created['id']}/report")
+
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF")
+
+
+async def test_download_report_proveedor_configurado_pero_caido_no_impide_la_descarga(
+    client: TestClient, monkeypatch, tmp_path
+) -> None:
+    """Distinto de "sin clave" (`test_download_report_devuelve_pdf`): aquí
+    `get_provider()` sí devuelve un proveedor, pero falla al generar el
+    resumen (`AIProviderError` desde `complete()`). El informe debe
+    descargarse igual, con 200 — no un 502, a diferencia de
+    `POST /findings/ask` y `GET /scans/{id}/diff/{other_id}`."""
+    monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
+    _mock_discovery(monkeypatch)
+    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+
+    fake_provider = _FakeDiffProvider(error=AIProviderError("proveedor caído"))
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: fake_provider)
+
+    resp = client.get(f"/scans/{created['id']}/report")
+
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF")

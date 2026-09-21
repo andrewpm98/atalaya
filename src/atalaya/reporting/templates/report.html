@@ -209,8 +209,21 @@
 </div>
 {% endif %}
 
+{% if executive_summary %}
+{% for parrafo in executive_summary.split('\n') %}
+{% if parrafo.strip() %}<p>{{ parrafo }}</p>{% endif %}
+{% endfor %}
+{% else %}
+<p class="sin-datos">
+    Resumen ejecutivo en lenguaje natural no disponible para este informe
+    (proveedor de IA no configurado o no disponible en el momento de
+    generarlo). El detalle de activos y hallazgos, más abajo, es completo.
+</p>
+{% endif %}
+
 <table class="resumen">
     <tr>
+        <td><div class="valor">{{ risk_score }}</div><div class="etiqueta">Índice de riesgo (0-100)</div></td>
         <td><div class="valor">{{ assets_count }}</div><div class="etiqueta">Activos</div></td>
         <td><div class="valor">{{ assets_activos }}</div><div class="etiqueta">Activos accesibles</div></td>
         <td><div class="valor">{{ findings_count }}</div><div class="etiqueta">Hallazgos</div></td>

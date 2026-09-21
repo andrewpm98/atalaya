@@ -67,10 +67,21 @@ src/atalaya/
 │   └── enrichment.py              enrich_scan() — orquesta las tres técnicas
 │                                 anteriores sobre los hosts activos
 ├── ai/
-│   ├── provider.py               LLMProvider (ABC) + AnthropicProvider
+│   ├── provider.py               LLMProvider (ABC) + AnthropicProvider + GeminiProvider
 │   ├── triage.py                 triage_finding/triage_findings — contexto
 │   │                             estructurado, nunca un dump de la fila de BD
-│   └── query.py                  ask() — consulta NL sobre un escaneo completo
+│   ├── prompter.py               route_and_answer() — enruta una pregunta en
+│   │                             lenguaje natural a analyst o takeover_detective
+│   ├── analyst.py                analyze_scan() — visión global de un escaneo
+│   ├── takeover_detective.py     assess_takeover_risk() — prioriza candidatos
+│   │                             a subdomain takeover ya detectados
+│   ├── report_writer.py          write_executive_summary() — resumen ejecutivo
+│   │                             del informe PDF, en lenguaje no técnico
+│   └── diff_analyst.py           analyze_diff() — valora el diff entre dos escaneos
+│
+│   `ai/query.py::ask()` (consulta NL original) se retiró: `POST /findings/ask`
+│   pasa por `prompter.py`, que reemplaza su función y devuelve más señal
+│   (patrones, combinaciones preocupantes, prioridades), no solo prosa libre.
 ├── reporting/
 │   ├── generator.py               generate_report()/render_html() — informe PDF
 │   │                               con portada (Jinja2 + xhtml2pdf)
