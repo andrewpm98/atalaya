@@ -56,6 +56,30 @@ class Settings(BaseSettings):
     #: Servidores DNS a usar, separados por comas. Vacío = los del sistema.
     dns_resolvers: str = ""
 
+    # ─── Descubrimiento: puertos ────────────────────────────────────────
+    #: Timeout (segundos) por conexión TCP individual.
+    port_scan_timeout: float = 2.0
+    #: Conexiones simultáneas dentro del escaneo de un único host. Acota la
+    #: intrusividad (CLAUDE.md, restricción de seguridad 5): un barrido
+    #: agresivo degrada el servicio del objetivo y es indistinguible de un
+    #: ataque.
+    port_scan_concurrency: int = 100
+
+    # ─── Descubrimiento: cabeceras HTTP ─────────────────────────────────
+    #: Timeout (segundos) por petición HTTP de análisis de cabeceras.
+    header_scan_timeout: float = 10.0
+
+    # ─── Descubrimiento: TLS ─────────────────────────────────────────────
+    #: Timeout (segundos) por conexión TLS de inspección de certificado.
+    tls_scan_timeout: float = 5.0
+
+    # ─── Enriquecimiento (puertos + cabeceras + TLS) ────────────────────
+    #: Hosts procesados en paralelo por cada técnica al enriquecer un
+    #: escaneo ya resuelto. Igual motivo que `dns_concurrency`: sin este
+    #: límite, un escaneo con muchos subdominios activos dispararía cientos
+    #: de conexiones simultáneas sin control.
+    enrichment_host_concurrency: int = 10
+
     # ─── Aplicación ───────────────────────────────────────────────────
     api_host: str = "0.0.0.0"
     api_port: int = 8000
