@@ -37,6 +37,7 @@ def _sin_claves_reales(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(settings, "shodan_api_key", "")
     monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "gemini_api_key", "")
 
 
 @pytest_asyncio.fixture

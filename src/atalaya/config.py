@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     ai_provider: str = "anthropic"
     anthropic_api_key: str = ""
     ai_model: str = "claude-sonnet-4-6"
+    #: Clave y modelo de Gemini (Google AI Studio), segunda implementación de
+    #: `LLMProvider` -- activa con `AI_PROVIDER=gemini`. Independiente de
+    #: `anthropic_api_key`/`ai_model`: cada proveedor tiene su propia clave y
+    #: modelo, coherente con que la capa IA solo dependa de la interfaz.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
     #: Límite de tokens de salida por llamada. El triaje y la consulta NL
     #: piden respuestas acotadas (severidad+impacto+remediación, o una
     #: respuesta a una pregunta); no hace falta margen para generación larga.

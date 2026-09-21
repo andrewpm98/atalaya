@@ -5,7 +5,9 @@
 directamente. Cambiar de proveedor es escribir una nueva subclase sin tocar
 lógica de negocio — la decisión de diseño que ya anticipaba CLAUDE.md
 ("Capa IA tras interfaz `LLMProvider`: el modelo es configuración, no
-dependencia rígida").
+dependencia rígida"). `GeminiProvider` es la prueba de que la interfaz
+cumple esa promesa: ninguna línea de `triage.py`, `query.py` ni de los
+agentes de `ai/` cambió para incorporarlo.
 
 **Desviación del stub original:** el contrato inicial solo tenía
 `complete(prompt, system) -> str`. Se añade `complete_tool()`: el triaje
@@ -24,6 +26,9 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import anthropic
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 
 from atalaya.config import settings
 from atalaya.core.exceptions import AIProviderError
@@ -140,13 +145,95 @@ class AnthropicProvider(LLMProvider):
             raise AIProviderError(f"fallo del proveedor Anthropic: {exc}") from exc
 
 
+class GeminiProvider(LLMProvider):
+    """Implementación sobre el SDK oficial de Google (`google-genai`, Gemini).
+
+    Usa `client.aio.models.generate_content` (cliente asíncrono del SDK
+    consolidado), coherente con "todo asíncrono" (CLAUDE.md) — no hay una
+    variante sync que envolver en un hilo, el SDK ya expone la async
+    directamente.
+    """
+
+    def __init__(self, client: genai.Client | None = None) -> None:
+        self.model = settings.gemini_model
+        if client is not None:
+            # Punto de inyección para tests: un doble que implemente
+            # `.aio.models.generate_content(...)` sin tocar la red.
+            self._client = client
+            return
+        if not settings.gemini_api_key:
+            raise AIProviderError(
+                "GEMINI_API_KEY no configurada. Defínela en .env para usar la capa IA."
+            )
+        self._client = genai.Client(api_key=settings.gemini_api_key)
+
+    async def complete(self, prompt: str, *, system: str | None = None) -> str:
+        config = genai_types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=settings.ai_max_tokens,
+        )
+        response = await self._generate(model=self.model, contents=prompt, config=config)
+        text = response.text
+        if not text:
+            raise AIProviderError("el modelo no devolvió texto en la respuesta")
+        return text
+
+    async def complete_tool(
+        self,
+        prompt: str,
+        *,
+        tool_name: str,
+        tool_schema: dict[str, Any],
+        system: str | None = None,
+    ) -> dict[str, Any]:
+        function = genai_types.FunctionDeclaration(
+            name=tool_name,
+            description=f"Registra el resultado como {tool_name}.",
+            parameters_json_schema=tool_schema,
+        )
+        config = genai_types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=settings.ai_max_tokens,
+            tools=[genai_types.Tool(function_declarations=[function])],
+            # `mode="ANY"` + `allowed_function_names=[tool_name]` es el
+            # equivalente en Gemini del `tool_choice={"type": "tool", "name":
+            # ...}` fijo de Anthropic: fuerza la llamada a exactamente esta
+            # herramienta, no "alguna de las disponibles".
+            tool_config=genai_types.ToolConfig(
+                function_calling_config=genai_types.FunctionCallingConfig(
+                    mode="ANY",
+                    allowed_function_names=[tool_name],
+                )
+            ),
+        )
+        response = await self._generate(model=self.model, contents=prompt, config=config)
+        for candidate in response.candidates or []:
+            for part in candidate.content.parts or []:
+                call = part.function_call
+                if call is not None and call.name == tool_name:
+                    return dict(call.args)
+        raise AIProviderError(f"el modelo no llamó a la herramienta {tool_name!r}")
+
+    async def _generate(self, **kwargs: Any) -> Any:
+        """Envuelve `models.generate_content`: cualquier fallo del SDK se
+        traduce a `AIProviderError`, mismo criterio que
+        `AnthropicProvider._create`.
+        """
+        try:
+            return await self._client.aio.models.generate_content(**kwargs)
+        except genai_errors.APIError as exc:
+            raise AIProviderError(f"fallo del proveedor Gemini: {exc}") from exc
+
+
 def get_provider() -> LLMProvider:
     """Instancia el proveedor configurado en `settings.ai_provider`.
 
-    Solo `anthropic` está implementado. La interfaz existe para que sumar
-    otro proveedor sea una nueva subclase + una rama aquí, no un cambio en
-    `triage.py` ni en `query.py`.
+    `anthropic` y `gemini` están implementados. La interfaz existe para que
+    sumar otro proveedor sea una nueva subclase + una rama aquí, no un
+    cambio en `triage.py` ni en `query.py`.
     """
     if settings.ai_provider == "anthropic":
         return AnthropicProvider()
+    if settings.ai_provider == "gemini":
+        return GeminiProvider()
     raise AIProviderError(f"proveedor de IA no soportado: {settings.ai_provider!r}")

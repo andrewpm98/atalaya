@@ -24,6 +24,7 @@ dependencies = [
     "cryptography>=42.0",
     # IA
     "anthropic>=0.34",
+    "google-genai>=1.0",
     # Dashboard
     "streamlit>=1.37",
     # Informes
