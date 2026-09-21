@@ -164,3 +164,82 @@ class SubdomainScanResult(BaseModel):
             "duration_seconds": self.duration_seconds,
             "errors": len(self.errors),
         }
+
+
+class DiscoveryFinding(BaseModel):
+    """Hallazgo producido por un módulo de descubrimiento (cabeceras, TLS...).
+
+    Forma mínima y deliberadamente igual a los campos de escritura de
+    `core.models.Finding` (`finding_type`, `evidence`): cualquier módulo que
+    detecte un riesgo devuelve esto, no un `Finding` de SQLAlchemy — el
+    descubrimiento no conoce la capa de persistencia, igual que
+    `SubdomainRecord` tampoco la conoce. La severidad nace siempre `unknown`;
+    la razona el triaje por IA (Paso 5), nunca el propio módulo de
+    descubrimiento.
+    """
+
+    finding_type: str = Field(description="Categoría del hallazgo, p. ej. 'hsts_missing'")
+    evidence: str = Field(description="Qué se observó exactamente, en lenguaje claro")
+
+
+class HeaderScanResult(BaseModel):
+    """Resultado del análisis de cabeceras de seguridad HTTP de un host."""
+
+    hostname: str
+    checked_url: str | None = Field(
+        default=None, description="URL efectivamente consultada (esquema incluido)"
+    )
+    findings: list[DiscoveryFinding] = Field(default_factory=list)
+    error: str | None = Field(
+        default=None,
+        description="Motivo por el que no se pudo completar el análisis, si aplica",
+    )
+
+
+class TlsScanResult(BaseModel):
+    """Resultado de la inspección TLS de un host."""
+
+    hostname: str
+    port: int = 443
+    protocol_version: str | None = Field(
+        default=None, description="Versión de protocolo negociada, p. ej. 'TLSv1.2'"
+    )
+    issuer: str | None = None
+    not_valid_before: datetime | None = None
+    not_valid_after: datetime | None = None
+    days_remaining: int | None = Field(
+        default=None, description="Días hasta la caducidad; negativo si ya caducó"
+    )
+    findings: list[DiscoveryFinding] = Field(default_factory=list)
+    error: str | None = Field(
+        default=None,
+        description="Motivo por el que no se pudo completar la inspección, si aplica",
+    )
+
+
+class EnrichmentResult(BaseModel):
+    """Resultado combinado de puertos, cabeceras y TLS sobre los hosts
+    activos de un `SubdomainScanResult` (Paso 2, resto).
+
+    Producido por `discovery/enrichment.py::enrich_scan`, que orquesta los
+    tres módulos concurrentemente. Vive en `discovery/models.py`, no en
+    `enrichment.py`, por el mismo motivo que el resto de modelos de
+    descubrimiento: es la forma de intercambio entre la capa de
+    descubrimiento (sin estado, sin BD) y `core/persistence.py`.
+    """
+
+    ports_by_ip: dict[str, list[int]] = Field(default_factory=dict)
+    header_results: list[HeaderScanResult] = Field(default_factory=list)
+    tls_results: list[TlsScanResult] = Field(default_factory=list)
+
+    def findings_by_hostname(self) -> dict[str, list[DiscoveryFinding]]:
+        """Agrupa los hallazgos de cabeceras y TLS por host.
+
+        Forma lista para `core/persistence.py::apply_discovery_findings`,
+        que necesita saber a qué `Asset` (por hostname) añadir cada uno.
+        """
+        grouped: dict[str, list[DiscoveryFinding]] = {}
+        for item in (*self.header_results, *self.tls_results):
+            if item.findings:
+                grouped.setdefault(item.hostname, []).extend(item.findings)
+        return grouped
