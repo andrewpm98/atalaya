@@ -233,6 +233,44 @@ async def test_enumerate_marca_activos(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_enumerate_combina_crtsh_y_shodan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un host reportado por ambas fuentes conserva las dos; uno reportado
+    solo por Shodan aparece igualmente, con esa única fuente."""
+
+    async def fake_shodan(domain: str, client=None) -> tuple[set[str], list[str]]:
+        return {"www.ejemplo.com", "api.ejemplo.com"}, []
+
+    monkeypatch.setattr("atalaya.discovery.subdomains.fetch_shodan_subdomains", fake_shodan)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=json.dumps([{"name_value": "www.ejemplo.com"}]))
+
+    async with _client_con_respuesta(handler) as client:
+        resultado = await enumerate_subdomains(DOMAIN, resolve=False, client=client)
+
+    por_host = {r.hostname: set(r.sources) for r in resultado.records}
+    assert por_host["www.ejemplo.com"] == {DiscoverySource.CRTSH, DiscoverySource.SHODAN}
+    assert por_host["api.ejemplo.com"] == {DiscoverySource.SHODAN}
+    assert por_host["ejemplo.com"] == set()  # dominio raíz, no reportado por ninguna fuente
+
+
+@pytest.mark.asyncio
+async def test_enumerate_propaga_incidencias_de_shodan(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_shodan(domain: str, client=None) -> tuple[set[str], list[str]]:
+        return set(), ["Shodan no disponible tras 3 intentos: 503"]
+
+    monkeypatch.setattr("atalaya.discovery.subdomains.fetch_shodan_subdomains", fake_shodan)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=json.dumps([]))
+
+    async with _client_con_respuesta(handler) as client:
+        resultado = await enumerate_subdomains(DOMAIN, resolve=False, client=client)
+
+    assert "Shodan no disponible tras 3 intentos: 503" in resultado.errors
+
+
+@pytest.mark.asyncio
 async def test_enumerate_rechaza_dominio_invalido() -> None:
     with pytest.raises(InvalidTargetError):
         await enumerate_subdomains("no-es-un-dominio")

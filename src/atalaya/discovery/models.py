@@ -28,6 +28,7 @@ class DiscoverySource(str, Enum):
     """
 
     CRTSH = "crt.sh"
+    SHODAN = "shodan"
     DNS = "dns"
 
 

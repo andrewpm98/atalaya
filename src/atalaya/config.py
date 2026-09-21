@@ -36,7 +36,16 @@ class Settings(BaseSettings):
     reports_dir: str = "reports"
 
     # ─── APIs externas de descubrimiento ──────────────────────────────
+    #: Fuente opcional de enumeración de subdominios (`discovery/shodan.py`),
+    #: segunda fuente junto a crt.sh. Sin ella, `fetch_shodan_subdomains` se
+    #: omite sin generar ninguna incidencia: amplía cobertura, no es un
+    #: requisito (a diferencia de crt.sh, que es la fuente primaria).
     shodan_api_key: str = ""
+    shodan_url: str = "https://api.shodan.io"
+    #: Reintentos ante fallo transitorio de la API de Shodan. Igual criterio
+    #: que `crtsh_retries`: una fuente externa gratuita/de pago puede fallar
+    #: puntualmente sin que eso deba invalidar el resto del escaneo.
+    shodan_retries: int = 3
 
     #: Endpoint de Certificate Transparency. Parametrizado para poder
     #: apuntar a una réplica o a un servicio equivalente sin tocar código.

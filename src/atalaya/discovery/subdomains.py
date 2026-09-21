@@ -1,20 +1,25 @@
-"""Descubrimiento de subdominios vía Certificate Transparency (crt.sh) y DNS.
+"""Descubrimiento de subdominios vía Certificate Transparency (crt.sh),
+Shodan y DNS.
 
 Estrategia en tres fases:
 
-1. **Recolección** — se consulta crt.sh, que indexa los registros de
-   Certificate Transparency. Cada certificado TLS emitido públicamente queda
-   registrado en logs auditables, por lo que consultarlos revela subdominios
-   sin enviar un solo paquete a la infraestructura objetivo. Es la técnica de
-   enumeración pasiva con mejor relación cobertura/intrusividad.
+1. **Recolección** — se consultan dos fuentes pasivas en paralelo: crt.sh,
+   que indexa los registros de Certificate Transparency, y opcionalmente
+   Shodan (`discovery/shodan.py`), que indexa DNS observado por su propio
+   escaneo. Ninguna envía tráfico a la infraestructura objetivo. crt.sh es
+   la fuente primaria y obligatoria; Shodan es una ampliación de cobertura
+   que se omite sin más si no hay `SHODAN_API_KEY` configurada — revela
+   hosts que nunca tuvieron un certificado TLS público, que crt.sh no puede
+   ver por diseño.
 
 2. **Normalización** — los datos de CT son ruidosos: comodines (`*.dominio`),
    mayúsculas, puntos finales, duplicados y entradas fuera de alcance. Se
    normaliza todo y se descarta lo que no pertenece al dominio analizado.
 
-3. **Verificación** — un certificado emitido no implica un host activo. Se
-   resuelve cada candidato por DNS, de forma concurrente y acotada, para
-   distinguir la superficie *histórica* de la *real*.
+3. **Verificación** — un certificado emitido, o un registro DNS indexado, no
+   implica un host activo *hoy*. Se resuelve cada candidato por DNS, de
+   forma concurrente y acotada, para distinguir la superficie *histórica* de
+   la *real*.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from atalaya.discovery.models import (
     SubdomainRecord,
     SubdomainScanResult,
 )
+from atalaya.discovery.shodan import fetch_shodan_subdomains
 
 logger = logging.getLogger(__name__)
 
@@ -271,21 +277,36 @@ async def enumerate_subdomains(
     result = SubdomainScanResult(domain=target)
     logger.info("Iniciando enumeración de subdominios para %s", target)
 
-    # Fases 1-2 - recolección y normalización
-    hostnames, errors = await fetch_crtsh(target, client=client)
-    result.errors.extend(errors)
+    # Fases 1-2 - recolección y normalización. Ambas fuentes son independientes
+    # entre sí (hosts distintos, sin autenticación compartida), se consultan
+    # concurrentemente en vez de una tras otra.
+    (hostnames_crtsh, errors_crtsh), (hostnames_shodan, errors_shodan) = await asyncio.gather(
+        fetch_crtsh(target, client=client),
+        fetch_shodan_subdomains(target, client=client),
+    )
+    result.errors.extend(errors_crtsh)
+    result.errors.extend(errors_shodan)
 
-    # El propio dominio raíz siempre forma parte de la superficie.
-    hostnames.add(target)
+    # Un mismo host puede aparecer en ambas fuentes; se conserva de cuál (o
+    # de cuáles) procede cada uno, para trazabilidad del hallazgo.
+    sources_by_hostname: dict[str, set[DiscoverySource]] = {}
+    for hostname in hostnames_crtsh:
+        sources_by_hostname.setdefault(hostname, set()).add(DiscoverySource.CRTSH)
+    for hostname in hostnames_shodan:
+        sources_by_hostname.setdefault(hostname, set()).add(DiscoverySource.SHODAN)
+
+    # El propio dominio raíz siempre forma parte de la superficie, aunque
+    # ninguna fuente lo haya reportado explícitamente.
+    sources_by_hostname.setdefault(target, set())
 
     if not resolve:
         result.records = [
             SubdomainRecord(
                 hostname=h,
                 status=ResolutionStatus.NO_ANSWER,
-                sources=[DiscoverySource.CRTSH],
+                sources=sorted(sources_by_hostname[h], key=lambda s: s.value),
             )
-            for h in sorted(hostnames)
+            for h in sorted(sources_by_hostname)
         ]
         result.finished_at = datetime.now(timezone.utc)
         return result
@@ -294,8 +315,13 @@ async def enumerate_subdomains(
     resolver = build_resolver()
     semaphore = asyncio.Semaphore(settings.dns_concurrency)
     tasks = [
-        resolve_hostname(hostname, resolver, [DiscoverySource.CRTSH], semaphore)
-        for hostname in sorted(hostnames)
+        resolve_hostname(
+            hostname,
+            resolver,
+            sorted(sources_by_hostname[hostname], key=lambda s: s.value),
+            semaphore,
+        )
+        for hostname in sorted(sources_by_hostname)
     ]
     records = await asyncio.gather(*tasks)
 

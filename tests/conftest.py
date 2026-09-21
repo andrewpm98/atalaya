@@ -10,14 +10,33 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from atalaya.api.main import app
+from atalaya.config import settings
 from atalaya.core import models  # noqa: F401 - registra las tablas en Base.metadata
 from atalaya.core.database import Base, get_session
+
+
+@pytest.fixture(autouse=True)
+def _sin_claves_reales(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutraliza las claves de API que pueda haber en el `.env` local.
+
+    Mismo principio que `DATABASE_URL` arriba: la suite debe ser determinista
+    y no depender del entorno de quien la ejecuta. Sin esto, una
+    `SHODAN_API_KEY` real en el `.env` de desarrollo activaría llamadas de
+    red reales desde pruebas que asumen esa fuente desactivada (p. ej. la
+    orquestación de `enumerate_subdomains`), y el resultado de la suite
+    pasaría a depender de qué claves tenga configuradas quien la ejecute.
+    Cada prueba que sí necesite ejercitar el camino "con clave" la fija de
+    forma explícita con su propio `monkeypatch`.
+    """
+    monkeypatch.setattr(settings, "shodan_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
 
 
 @pytest_asyncio.fixture
