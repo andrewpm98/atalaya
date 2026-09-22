@@ -6,6 +6,15 @@
 **Estado:** Completado y verificado (triaje con dobles deterministas; capa de
 transporte con Anthropic verificada en vivo — sin clave real, ver sección 6)
 
+> **Actualización posterior (ampliación post-Paso 7):** la verificación
+> pendiente señalada en la sección 6.2 y en la tabla de "Próximos pasos"
+> —triaje real contra el modelo de Anthropic, sin dobles— ya se completó
+> en cuanto hubo `ANTHROPIC_API_KEY` disponible. Ver
+> `memorias/Memoria_Ampliacion_Agentes_Atalaya.md`, sección 6.6, para el
+> detalle (incluye también los cinco agentes de IA añadidos después de
+> este paso). El resto de esta memoria se deja tal cual se escribió, como
+> registro histórico del estado en el Paso 5.
+
 ---
 
 ## 1. Resumen ejecutivo

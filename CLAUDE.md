@@ -462,16 +462,20 @@ respectivamente.
   cubre ~20 proveedores citados habitualmente (GitHub Pages, Heroku, S3,
   Azure...), no una lista cerrada — mismo criterio de honestidad que
   `COMMON_PORTS`.
-- **Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
-  Anthropic.** `ai/analyst.py`, `ai/takeover_detective.py`,
-  `ai/report_writer.py`, `ai/diff_analyst.py` y `ai/prompter.py` están
-  probados con dobles deterministas y, algunos, verificados en vivo contra
-  **Gemini** real (que sí tiene clave activa) — pero no contra Anthropic,
-  el proveedor por defecto del proyecto (`AI_PROVIDER=anthropic` en
-  `.env`), por no disponer de `ANTHROPIC_API_KEY`. Repetir antes de la
-  defensa si se consigue la clave: es la misma interfaz, así que si
-  funciona con Gemini funciona con Anthropic, pero queda como verificación
-  formal pendiente, no dada por hecha.
+- ~~**Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
+  Anthropic.**~~ **Resuelto.** Con `ANTHROPIC_API_KEY` ya disponible, se
+  verificaron en vivo los seis agentes (incluido `ai/triage.py`, que
+  tampoco se había probado nunca contra el modelo real de Anthropic desde
+  el Paso 5) sobre datos reales: `triage_finding` sobre un hallazgo real
+  de `mediamarkt.es` (severidad `LOW` razonada correctamente),
+  `analyst.analyze_scan` sobre un escaneo mediano y sobre el escaneo
+  grande de `github.com` (117 activos/204 hallazgos — el caso que rompía
+  con Gemini antes del arreglo de la sección de arriba; con Anthropic
+  nunca falló), `prompter.route_and_answer` en sus dos rutas (general →
+  analyst, takeover → takeover_detective), `assess_takeover_risk` sobre
+  un candidato construido a mano, `analyze_diff` sobre dos escaneos
+  reales, y `write_executive_summary`. Las seis respuestas fueron
+  coherentes y bien razonadas.
 - ~~**`POST /findings/ask` con Gemini: fallo 502 observado una vez, sin
   reproducir.**~~ **Resuelto: no era la cuota, eran dos bugs reales de
   `GeminiProvider.complete_tool()`**, ambos reproducidos en vivo contra la

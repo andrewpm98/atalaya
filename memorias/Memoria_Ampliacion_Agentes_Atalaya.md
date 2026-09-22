@@ -7,11 +7,12 @@
 obligatorio de la entrega, profundiza el componente diferencial (capa IA) y
 la calidad percibida de cara a la defensa oral.
 **Estado:** Completa. Shodan, subdomain takeover, sistema de agentes de IA,
-`GeminiProvider`, cableado a la API, rediseño visual del dashboard y un
+`GeminiProvider`, cableado a la API, rediseño visual del dashboard, un
 bug real de `GeminiProvider` encontrado y corregido durante la
-verificación del dashboard — todo implementado, verificado de forma
-independiente (no solo aceptado del resumen de cada subagente) y en
-`origin/main`.
+verificación del dashboard, y verificación en vivo de los seis agentes
+contra **los dos proveedores** (Gemini y, en último lugar, Anthropic) —
+todo implementado, verificado de forma independiente (no solo aceptado
+del resumen de cada subagente) y en `origin/main`.
 
 ---
 
@@ -401,6 +402,53 @@ llamada real propia a `analyze_scan()` sobre el escaneo real de
 `github.com` — el caso exacto que antes rompía — que funcionó
 correctamente tras el arreglo.
 
+### 6.6 Verificación en vivo contra Anthropic: cierra la última pieza pendiente
+
+Hasta este punto, la capa IA se había verificado en vivo únicamente
+contra Gemini (`GEMINI_API_KEY` disponible desde el principio) —
+incluido `ai/triage.py`, que tampoco se había probado nunca contra el
+modelo real de Anthropic desde su implementación en el Paso 5 (la
+memoria de esa fase ya lo dejaba anotado como verificación pendiente). En
+cuanto hubo `ANTHROPIC_API_KEY` disponible, se ejecutaron los seis
+agentes contra datos reales de la base de datos de desarrollo, sin
+ningún doble:
+
+- **`triage_finding`** — un hallazgo real (`hsts_max_age_bajo`,
+  `mediamarkt.es`): severidad razonada como `LOW` (correcto: el HSTS
+  existe, solo con un `max-age` corto), impacto y remediación concretos
+  con el valor exacto a configurar.
+- **`analyst.analyze_scan`** — sobre un escaneo mediano
+  (`mediamarkt.es`, 99 activos) y sobre el escaneo grande de
+  `github.com` (117 activos, 204 hallazgos — el mismo caso que rompía
+  con Gemini antes del arreglo de la sección 6.5; con Anthropic nunca
+  falló, ni antes ni después). En ambos, el análisis identificó
+  correctamente que un volumen alto de hallazgos `unknown` no equivale a
+  "sin riesgo" y debe triarse antes de asumir que el dominio está limpio
+  — una distinción que no estaba en el prompt de forma explícita, el
+  modelo la razonó por sí mismo a partir del contexto.
+- **`prompter.route_and_answer`** — verificadas las dos rutas de
+  enrutado con preguntas reales: una pregunta general se enrutó a
+  `analyst` con una respuesta coherente; una pregunta explícita sobre
+  *subdomain takeover* se enrutó a `takeover_detective`, que respondió
+  correctamente que no había candidatos en ese escaneo concreto (no
+  inventó ninguno).
+- **`assess_takeover_risk`** — sobre un `TakeoverCandidate` construido a
+  mano (CNAME de `blog.mediamarkt.es` hacia un patrón de GitHub Pages):
+  prioridad `alta`, con el razonamiento correcto (GitHub Pages tiene
+  historial documentado de takeover) y **sin** afirmar que el recurso
+  esté confirmado como secuestrable — cumple la restricción de seguridad
+  #6 también con este proveedor, no solo con Gemini.
+- **`analyze_diff`** — sobre dos escaneos reales de `scanme.nmap.org`
+  (`#1` y `#4`): diff sin cambios, análisis coherente con esa ausencia de
+  cambios.
+- **`write_executive_summary`** — resumen ejecutivo coherente citando el
+  `risk_score` recibido.
+
+Ninguna de las seis llamadas falló. Con esto, la capa IA completa queda
+verificada en vivo contra **los dos proveedores** que implementa
+`LLMProvider`, cerrando la última pieza de deuda técnica que quedaba de
+toda esta ampliación.
+
 ---
 
 ## 7. Cableado a la API
@@ -687,13 +735,8 @@ ya cubierto en memorias anteriores:
   clave de pago para aportar subdominios reales.
 - **Tabla de patrones de takeover no exhaustiva** (~20 proveedores) — deuda
   técnica documentada, no silenciada, mismo criterio que `COMMON_PORTS`.
-- **Verificación en vivo de los 5 agentes nuevos, pendiente con Anthropic**
-  (el proveedor por defecto del proyecto). Probados con dobles
-  deterministas y verificados en vivo contra **Gemini** (interfaz
-  compartida, así que si funciona con uno funciona con el otro), pero no
-  contra Anthropic por no disponer de esa clave en este entorno — queda
-  como verificación formal pendiente antes de la defensa, no dada por
-  hecha solo porque funcionó con el otro proveedor.
+- ~~**Verificación en vivo de los 5 agentes nuevos, pendiente con
+  Anthropic.**~~ **Resuelta** — sección 6.6.
 - **Sin caché ni límite global de coste de IA entre los seis agentes.**
   Cada uno acota su propia concurrencia (heredada de `settings.ai_*`),
   pero no hay un límite agregado de gasto por sesión de usuario.
