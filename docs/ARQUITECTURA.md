@@ -177,9 +177,13 @@ Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
 para parecer una herramienta comercial de seguridad (referentes: Shodan,
 VirusTotal, Maltego), no la demo por defecto de Streamlit: fondo oscuro,
 tipografía monoespaciada para datos técnicos, acento único, rojo reservado
-a severidad crítica. *(Sección a completar/verificar con el detalle final
-de esa fase — ver `memorias/` para el proceso completo, incluido el bug de
-renderizado encontrado y corregido.)*
+a severidad crítica. Selectores escritos contra el DOM real de Streamlit
+1.63 (`data-testid`, no `data-baseweb`: los widgets migraron de BaseWeb a
+react-aria y los selectores antiguos dejan de pintar sin dar error).
+Verificado con capturas de pantalla reales, no solo con la suite de tests
+(`tests/test_dashboard.py` comprueba comportamiento, nunca estilo).
+Detalle completo del proceso, incluidos los bugs de renderizado
+encontrados y corregidos, en `memorias/Memoria_Ampliacion_Agentes_Atalaya.md`.
 
 ## 3. Flujo de datos
 
@@ -257,9 +261,10 @@ obligatorios:
 9. **Sistema de agentes de IA** ✅ — 5 agentes nuevos sobre `LLMProvider`
    (prompter, analyst, takeover_detective, report_writer, diff_analyst),
    `GeminiProvider`, endpoint de diff, resumen ejecutivo del informe.
-10. **Dashboard: diseño visual profesional** 🔨 — estética de herramienta
-    comercial de seguridad, `risk_score` como métrica principal. *(Detalle
-    completo del proceso en `memorias/`.)*
+10. **Dashboard: diseño visual profesional** ✅ — estética de herramienta
+    comercial de seguridad, `risk_score` como métrica principal, verificado
+    con capturas de pantalla reales. *(Detalle completo del proceso en
+    `memorias/`.)*
 
 ---
 

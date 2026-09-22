@@ -226,8 +226,8 @@ Ampliación posterior, más allá de los requisitos obligatorios:
 - [x] `GeminiProvider` — segundo proveedor de IA intercambiable
 - [x] `GET /scans/{id}/diff/{other_id}` — comparación de escaneos con IA
 - [x] `risk_score` y resumen ejecutivo con IA en el informe PDF
-- [ ] Rediseño visual del dashboard (estética de herramienta comercial de
-      seguridad) — en curso
+- [x] Rediseño visual del dashboard (estética de herramienta comercial de
+      seguridad), verificado con capturas de pantalla reales
 
 ## Aviso legal
 

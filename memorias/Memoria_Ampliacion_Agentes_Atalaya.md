@@ -6,9 +6,12 @@
 (todos cerrados, ver `Memoria_Paso1` a `Memoria_Paso7`) — no es un requisito
 obligatorio de la entrega, profundiza el componente diferencial (capa IA) y
 la calidad percibida de cara a la defensa oral.
-**Estado:** Shodan, subdomain takeover, sistema de agentes de IA, `GeminiProvider`
-y cableado a la API — completados y verificados. Rediseño visual del
-dashboard — en curso al cierre de esta memoria (ver sección 8).
+**Estado:** Completa. Shodan, subdomain takeover, sistema de agentes de IA,
+`GeminiProvider`, cableado a la API, rediseño visual del dashboard y un
+bug real de `GeminiProvider` encontrado y corregido durante la
+verificación del dashboard — todo implementado, verificado de forma
+independiente (no solo aceptado del resumen de cada subagente) y en
+`origin/main`.
 
 ---
 
@@ -42,8 +45,14 @@ Resultados tangibles:
 - **Resumen ejecutivo con IA en el informe PDF**, con un `risk_score`
   calculado de forma determinista (sin IA) y compartido entre el PDF y el
   dashboard.
-- **260 tests en verde** (170 al cierre del Paso 7), sin contar el trabajo
-  final del rediseño del dashboard (sección 8).
+- **Rediseño visual completo del dashboard** (`dashboard/app.py`), con
+  estética de herramienta comercial de seguridad, verificado con capturas
+  de pantalla reales — ver sección 8.
+- **Un bug real de `GeminiProvider` encontrado y corregido** tras la
+  verificación del dashboard: `complete_tool()` fallaba en dos escenarios
+  reales (razonamiento agotando el presupuesto de tokens; decodificación
+  restringida rota en prompts grandes) — ver sección 6.5.
+- **266 tests en verde** (170 al cierre del Paso 7).
 - **Un sistema de subagentes de Claude Code** (`.claude/agents/`) para
   dividir el trabajo de esta ampliación en piezas independientes,
   verificadas una a una antes de pasar a la siguiente.
@@ -339,6 +348,59 @@ solo con dobles:
   frente a 5631 bytes sin resumen — diferencia coherente con la ausencia
   del texto).
 
+### 6.5 Bug real encontrado y corregido: dos fallos distintos con el mismo síntoma opaco
+
+Durante la verificación visual del dashboard (sección 8), `POST
+/findings/ask` con Gemini devolvió una vez
+`502: "el modelo no llamó a la herramienta 'record_analysis'"`. Ocurrió
+cerca de agotarse la cuota diaria gratuita de Gemini (~20 peticiones/día),
+así que se documentó como deuda técnica sin confirmar: no estaba claro si
+era un bug real o una respuesta degradada por presión de cuota.
+
+Investigado aparte, con cuota ya disponible: **no era la cuota.** Eran dos
+bugs reales y distintos en `GeminiProvider.complete_tool()`, ambos
+reproducidos en vivo contra la API real:
+
+1. **`max_output_tokens` de Gemini no significa lo mismo que `max_tokens`
+   de Anthropic.** Los modelos 2.5 razonan siempre, con presupuesto
+   dinámico, y ese razonamiento **se descuenta de `max_output_tokens`**.
+   Mapear `settings.ai_max_tokens` directamente sobre ese campo dejaba que
+   el razonamiento se comiera el límite y la generación se cortara *antes*
+   de emitir la llamada a herramienta: `finish_reason=MAX_TOKENS`,
+   `candidate.content=None` — la causa real, no la cuota, del bug de
+   `content=None` que ya se había parcheado en la sección 6.3 (el guard
+   estaba bien; el diagnóstico de por qué ocurría, no). **Arreglo:**
+   `thinking_config` con un presupuesto de razonamiento acotado (512
+   tokens), **sumado** a `ai_max_tokens`, no restado de él — así
+   `ai_max_tokens` vuelve a significar lo mismo en los dos proveedores.
+2. **`mode="ANY"` (decodificación restringida, para garantizar la llamada)
+   se rompe en prompts grandes.** Con el escaneo real de `github.com`
+   persistido en esta misma sesión (117 activos, 204 hallazgos, ~17.500
+   tokens de prompt), Gemini devuelve `finish_reason=
+   MALFORMED_FUNCTION_CALL`, sin contenido, con cualquier límite de
+   tokens probado. El mismo prompt exacto se responde correctamente con
+   `mode="AUTO"`. **Arreglo:** un reintento único en `AUTO` solo ante ese
+   `finish_reason` — se pierde la *garantía* de la llamada, por eso no es
+   el modo por defecto, pero si el modelo responde con texto en vez de
+   llamar a la herramienta se sigue degradando a `AIProviderError`, nunca
+   a una respuesta sin forma.
+
+El mensaje de error incluye ahora el `finish_reason`: antes, `MAX_TOKENS`,
+`MALFORMED_FUNCTION_CALL` y "el modelo contestó con texto" eran
+indistinguibles, que es exactamente por lo que el fallo original se
+atribuyó a la cuota. El dato que descarta esa hipótesis de forma
+definitiva: agotar la cuota de verdad produce un error **distinto**
+(`fallo del proveedor Gemini: 429 RESOURCE_EXHAUSTED`, verificado en
+vivo) — nunca el síntoma que se había documentado.
+
+Verificado de forma independiente por el coordinador de la sesión (no
+solo aceptado del resumen de quien lo investigó): campos del SDK
+(`ThinkingConfig`, `thinking_budget`, el valor `MALFORMED_FUNCTION_CALL`
+del enum `FinishReason`) confirmados contra el paquete instalado, y una
+llamada real propia a `analyze_scan()` sobre el escaneo real de
+`github.com` — el caso exacto que antes rompía — que funcionó
+correctamente tras el arreglo.
+
 ---
 
 ## 7. Cableado a la API
@@ -391,9 +453,6 @@ pantalla no contradiga al que aparece en el PDF del mismo escaneo.
 
 ## 8. Dashboard: diseño visual profesional
 
-*(Sección a completar al cierre de esta fase — en curso al escribir esta
-memoria.)*
-
 ### 8.1 Contexto y encargo
 
 Rediseño completo de `dashboard/app.py` con criterio estético de
@@ -429,36 +488,168 @@ correctamente (masthead, paleta, tipografía, tabla de escaneos, leyenda de
 severidad y bandas de `risk_score` en el sidebar, todo visible y
 correctamente estilizado).
 
-### 8.3 Estado al cierre de esta memoria
+### 8.3 Segunda pasada: lo que el primer intento daba por hecho sin serlo
 
-*(Completar con el resultado final del subagente `atalaya-dashboard`:
-cambios de pulido aplicados, verificación visual final con capturas reales
-que alguien haya mirado, decisión sobre el commit "WIP" que quedó de un
-intento anterior, y conteo de tests final.)*
+El primer intento (sección 8.2) dejó ~1086 líneas de CSS que, una vez
+arreglado el bug de renderizado, **parecían** aplicarse — pero una
+revisión más rigurosa (auditando los 157 selectores de `_CSS` contra el
+DOM real con Playwright) encontró que el rediseño casi no se estaba
+aplicando: 43 selectores apuntaban a clases de una versión de Streamlit
+que ya no existe. Ninguno de estos era cosmético:
+
+1. **Pestañas, casillas y campos de entrada no restyleados.** Streamlit
+   1.63 migró sus widgets de BaseWeb a **react-aria**: selectores como
+   `[data-baseweb="tab"]` o `[data-baseweb="input"]` dejaron de tener a
+   qué apuntar. No daban error, simplemente no pintaban nada — las
+   pestañas se veían exactamente como las de Streamlit por defecto, pese
+   a que el CSS "de control segmentado" existía en el fichero. Reescrito
+   contra el DOM real (`[data-testid="stTab"]`, `*RootElement`,
+   `[role="group"]`, `[role="listbox"]`).
+2. **El solapamiento del sidebar no era solo "N/A" contra "SCORE" (el
+   síntoma puntual que se había detectado antes de despachar esta
+   pasada): era estructural, en todos los bloques.** Streamlit resta
+   `1rem` al contenedor de cada bloque markdown para cancelar el margen
+   del último párrafo; el HTML propio de Atalaya no acaba en párrafo, así
+   que cada bloque medía 16px menos que su contenido real y se solapaba
+   con el siguiente. Arreglo: un envoltorio `.atl-blk` (`flow-root` +
+   margen propio), centralizado en un helper `_html()` para que no haya
+   que recordarlo en cada sitio donde se inyecta HTML.
+3. **`st.html()` (la corrección de la sección 8.2) sanea el HTML con
+   DOMPurify, que borra entera cualquier etiqueta cuyo texto contenga
+   algo con forma de etiqueta** (defensa contra mXSS). Escribir «`<p>`» o
+   «`<input>`» dentro de un simple *comentario* CSS tumbaba la hoja de
+   estilos completa, sin error ni aviso: la aplicación aparecía sin
+   pintar. Diagnosticado bisecando bloque a bloque con una sonda
+   Playwright. Por el mismo motivo, las tres etiquetas `<link>` de Google
+   Fonts también se borraban — las tipografías nunca llegaban a
+   cargarse, y caían en la alternativa del sistema sin que se notase.
+   Corregido cargándolas con `@import` dentro de `<style>`, que sí
+   sobrevive al saneado.
+4. **Los cuatro tipos de aviso de Streamlit (`success`/`warning`/
+   `error`/`info`) se veían como la misma caja gris.** El color del filo
+   se aplicaba sobre el hijo del contenedor (que no tiene borde propio),
+   no sobre el contenedor con borde. Un error y un éxito eran
+   indistinguibles. Corregido con selectores `:has()`
+   (`[data-testid="stAlertContainer"]:has([data-testid=
+   "stAlertContentError"])`, etc.).
+5. **`IndexError` latente al colorear un activo por severidad.** La
+   función que calcula la peor severidad de un activo podía devolver un
+   índice fuera de la escala conocida; usarlo directamente para indexar
+   revienta el detalle completo del escaneo. Acotado, con un test que lo
+   demuestra revirtiendo el arreglo (el test falla con
+   `tuple index out of range` si se deshace).
+
+Cada uno se verificó por separado con capturas de pantalla reales
+(Playwright, `_shot.py`), no solo con la ejecución de la suite de tests —
+`tests/test_dashboard.py` comprueba comportamiento con `AppTest`, nunca
+estilo.
+
+### 8.4 Decisiones de diseño adicionales
+
+- **Masthead como barra de aplicación** (sangrado hasta los bordes,
+  degradado de panel), no un título suelto.
+- **`theme.font` (tema de Streamlit) en monoespaciada**: es lo único que
+  llega al `<canvas>` de `st.dataframe` (glide-data-grid), al que
+  **ninguna regla CSS alcanza** — la tabla de escaneos es dato técnico, y
+  ahora se lee en columnas alineadas. `_CSS` devuelve la tipografía sans
+  a lo que sí es prosa (notas explicativas, impacto/remediación,
+  respuesta del modelo). Los colores del tema (`redColor`,
+  `orangeColor`...) se alinearon con la escala de severidad propia, para
+  que ningún rojo de la interfaz contradiga al de "crítico".
+- **Color de severidad de cada activo vía `st.container(key=...)`**
+  (clase `st-key-<clave>`, API **pública** de Streamlit), no colores de
+  markdown (`:red[...]`, que usan la paleta por defecto de Streamlit y no
+  la escala de severidad propia).
+- **Tabla de escaneos al ancho de su contenido**, no columnas de anchura
+  fija — se acabaron las celdas de 300px para un id de una cifra.
+- **`risk_score` como hero visual** del detalle de un escaneo: gauge con
+  marcas cada 25 puntos, reparto por severidad alineado, antes que
+  cualquier otra información — cumple literalmente "es lo primero que se
+  ve al abrir un escaneo".
+
+### 8.5 Verificación visual: qué se vio realmente
+
+Capturas de pantalla reales (Playwright, `_shot.py`), revisadas una a una
+por quien coordinó la sesión, no solo descritas de memoria por quien las
+generó:
+
+- **Pantalla de inicio** — masthead `◈ ATALAYA` con línea de capacidades,
+  pestañas como control segmentado mono/versalitas, formulario acotado
+  sobre panel oscuro, sidebar con leyenda de severidad y bandas de score
+  sin ningún solapamiento. Confirmado: no queda ningún rasgo visual de
+  Streamlit por defecto.
+- **Detalle de un escaneo real** (`scanme.nmap.org`) — tabla monoespaciada
+  al ancho de sus datos, cabecera `SCAN #4 · scanme.nmap.org`, hero de
+  `risk_score` con gauge y reparto por severidad, tira de contadores,
+  incidencias con filo ámbar, y el primer activo con filo de color según
+  su peor severidad. Confirmado como la prueba más directa del criterio:
+  comparable a Shodan/VirusTotal, no a una demo.
+- **Hallazgos triados por IA real** (Gemini) dentro del detalle — etiqueta
+  de severidad, tipo en mono, evidencia atenuada, impacto y remediación
+  en prosa con la tipografía sans, línea acotada para legibilidad.
+- **Estado con la API caída** — aviso con filo rojo, la aplicación sigue
+  navegable, sin traza de excepción visible.
+- **Una salvedad declarada explícitamente por quien verificó, no
+  ocultada:** para poder fotografiar el panel de "Preguntar" sin gastar
+  la cuota diaria de Gemini (ya agotada en ese punto de la sesión), se
+  usó un proxy temporal que sustituía únicamente la respuesta de
+  `/findings/ask` por un texto fijo — el *render* de esa captura es el
+  real, el *texto* de la respuesta en esa única captura concreta no lo
+  es. El proxy se borró al terminar; no llegó a formar parte del código
+  del proyecto.
+
+### 8.6 Estado final
+
+`dashboard/app.py` pasó de ~287 líneas (Paso 6) a ~1269. `tests/
+test_dashboard.py`: 16 → 18 casos (dos nuevos: severidad fuera de escala,
+formato de marcas de tiempo), ninguno de los 12 comportamientos del
+contrato original debilitado. Nuevo `.streamlit/config.toml` (tema
+coordinado con `_CSS` para lo que el CSS no alcanza). El commit "WIP"
+automático que había quedado de la primera interrupción se deshizo
+(`git reset --soft`) y se sustituyó por un commit real con mensaje que
+explica el porqué, no un simple volcado.
 
 ---
 
 ## 9. El sistema de agentes de Claude Code (tooling de desarrollo)
 
 Distinto de los agentes de IA de Atalaya (sección 5), esta ampliación se
-construyó coordinando **cuatro subagentes de Claude Code**
-(`.claude/agents/`), cada uno con responsabilidad exclusiva y sin solape,
-despachados en orden con verificación independiente entre cada uno:
+construyó coordinando **subagentes de Claude Code** (`.claude/agents/`),
+cada uno con responsabilidad exclusiva y sin solape, despachados en orden
+con verificación independiente entre cada uno:
 
 1. **`atalaya-discovery`** — Shodan y subdomain takeover (secciones 3-4).
 2. **`atalaya-ai-agents`** — los cinco agentes de IA (sección 5).
 3. **`atalaya-api`** — cableado a la API (sección 7).
-4. **`atalaya-dashboard`** — rediseño visual (sección 8).
+4. **`atalaya-dashboard`** — rediseño visual, en dos pasadas: una primera
+   que dejó el CSS sin aplicarse del todo (sección 8.2) y una segunda,
+   más rigurosa, que auditó cada selector contra el DOM real (sección
+   8.3).
+5. Un despacho adicional, fuera de la secuencia original, para investigar
+   y resolver el bug de `GeminiProvider` que la pasada 4 había dejado
+   documentado como "observado una vez, sin reproducir" (sección 6.5).
 
-Cada uno se verificó contra tres criterios antes de pasar al siguiente:
-(1) tests en verde, (2) integración real comprobada (no solo el resumen
-del propio subagente), (3) un caso de prueba manual real. En dos casos
+Cada uno se verificó contra tres criterios antes de darse por bueno: (1)
+tests en verde, (2) integración real comprobada (no solo el resumen del
+propio subagente), (3) un caso de prueba manual real. En varios casos
 concretos esa verificación independiente encontró defectos que el
-subagente no había visto: el problema de `content=None` en `GeminiProvider`
-(sección 6.3, encontrado por `atalaya-api` al probar en vivo) y el bug de
-`st.markdown`/CSS del dashboard (sección 8.2, encontrado por el
-coordinador antes de continuar). Ninguno de los dos se dio por bueno sin
-corregirlo primero.
+subagente no había visto, o que había atribuido a una causa equivocada:
+
+- `content=None` en `GeminiProvider` (sección 6.3), encontrado por
+  `atalaya-api` al probar en vivo — atribuido en su momento a presión de
+  cuota, causa que resultó incorrecta (ver siguiente punto).
+- El bug de `st.markdown`/CSS del dashboard (sección 8.2), encontrado por
+  el coordinador antes de continuar con el resto del trabajo.
+- Los selectores obsoletos, el solapamiento estructural del sidebar, el
+  saneado de DOMPurify y el `IndexError` latente (sección 8.3), que una
+  primera pasada de rediseño no había detectado pese a parecer terminada.
+- La causa real del 502 de Gemini (sección 6.5): no era la cuota —
+  eran dos bugs concretos y reproducibles, diagnosticados solo al
+  insistir en reproducir en vivo en vez de aceptar la explicación más
+  cómoda.
+
+Ninguno se dio por bueno sin corregirlo y volver a verificar primero — es
+el mismo criterio en las cinco rondas, no una excepción puntual.
 
 **Nota sobre el mecanismo:** los `.claude/agents/*.md` no se recargan
 dentro de una sesión ya iniciada — solo están disponibles como
@@ -506,8 +697,13 @@ ya cubierto en memorias anteriores:
 - **Sin caché ni límite global de coste de IA entre los seis agentes.**
   Cada uno acota su propia concurrencia (heredada de `settings.ai_*`),
   pero no hay un límite agregado de gasto por sesión de usuario.
-- **Dashboard: pendiente de cierre** al escribir esta memoria — ver
-  sección 8.3.
+- **Cuota gratuita de Gemini muy ajustada para pruebas manuales**
+  (~20 peticiones/día en `gemini-2.5-flash`): se agota rápido combinando
+  triaje, prompter, diff e informe en la misma sesión de verificación. Es
+  un límite de cuánto se puede probar en vivo en una sola sesión, no del
+  código — y fue precisamente la causa de que el bug real de la sección
+  6.5 se diagnosticara mal la primera vez (se atribuyó a la cuota sin
+  serlo).
 
 ---
 
@@ -618,7 +814,7 @@ esta ampliación no era necesaria para ninguno de ellos:
 |---|---|
 | Base de datos | ✅ Sin cambios de fondo (nuevo `finding_type`, mismo mecanismo genérico) |
 | API o webhook | ✅ Amplía: diff, prompter, Shodan/Gemini como consumo externo |
-| Aplicación web | ✅ Rediseño visual en curso, funcionalidad sin cambios |
+| Aplicación web | ✅ Rediseño visual completo, verificado con capturas reales, funcionalidad sin cambios |
 | GitHub con historial | ✅ Commits por unidad lógica de esta ampliación |
 | Reporte con portada | ✅ Amplía: `risk_score` + resumen ejecutivo con IA |
 
@@ -631,8 +827,15 @@ Esta ampliación no cierra ningún requisito pendiente — todos lo estaban ya
 no una dependencia rígida") en un hecho demostrado con dos proveedores
 reales, y una limitación documentada desde el Paso 2 ("fuente única, sin
 CNAME") en dos módulos completos, probados y verificados sobre datos
-reales. El método no cambió respecto al resto del proyecto: cada pieza se
-verificó de forma independiente antes de aceptarse, y los dos defectos
-reales que aparecieron en el proceso (`GeminiProvider` con `content=None`,
-el CSS del dashboard) se encontraron *precisamente* por insistir en esa
-verificación en vez de aceptar el resumen de quien hizo el trabajo.
+reales. También deja el dashboard con un aspecto verificado como
+comparable al de una herramienta comercial, no solo declarado como tal.
+
+El método no cambió respecto al resto del proyecto: cada pieza se
+verificó de forma independiente antes de aceptarse, nunca por el resumen
+de quien la construyó. Los defectos reales que aparecieron en el proceso
+—`content=None` en `GeminiProvider`, el CSS del dashboard sin aplicarse,
+los selectores obsoletos y el solapamiento estructural que una primera
+revisión no detectó, y finalmente la causa real (no la cuota) del 502 de
+Gemini— se encontraron *precisamente* por insistir en esa verificación en
+cada ronda, incluida la última, en vez de dar algo por resuelto porque
+sonaba plausible.
