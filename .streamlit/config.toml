@@ -1,0 +1,46 @@
+# Tema base del dashboard (`dashboard/app.py`).
+#
+# El aspecto se define en dos sitios y no es duplicación: el CSS inyectado en
+# `app.py` reescribe el DOM HTML que genera Streamlit, pero `st.dataframe` se
+# pinta sobre un `<canvas>` (glide-data-grid) al que ninguna regla CSS llega —
+# sus colores solo salen de aquí. Lo mismo vale para su tipografía: `font`
+# es lo único que llega al canvas, y por eso está en monoespaciada — la tabla
+# de escaneos es dato técnico (id, dominio, marca de tiempo) y se lee en
+# columnas alineadas. El texto explicativo sigue en Inter porque `_CSS` fija
+# la familia sans en el DOM, que es donde vive.
+#
+# Los valores de color deben coincidir con las variables `:root` de `_CSS`.
+[theme]
+base = "dark"
+primaryColor = "#00c8e8"
+backgroundColor = "#070a0f"
+secondaryBackgroundColor = "#0d1117"
+textColor = "#e4edf6"
+linkColor = "#00c8e8"
+borderColor = "#1b2430"
+dataframeBorderColor = "#1b2430"
+dataframeHeaderBackgroundColor = "#131a23"
+codeBackgroundColor = "#0a0f16"
+codeTextColor = "#00c8e8"
+font = "'JetBrains Mono', 'Cascadia Mono', Consolas, monospace"
+codeFont = "'JetBrains Mono', 'Cascadia Mono', Consolas, monospace"
+headingFont = "'Inter', 'Segoe UI', sans-serif"
+baseRadius = "small"
+showWidgetBorder = true
+
+# Paleta de los colores con nombre de Streamlit (`st.badge`, avisos,
+# `:red[...]` en markdown). Se alinean con la escala de severidad de `_CSS`
+# para que nada de la interfaz use un rojo o un naranja distintos a los de
+# la escala — el rojo solo significa «crítico».
+redColor = "#ff4d4d"
+orangeColor = "#ff9640"
+yellowColor = "#e3c341"
+blueColor = "#4f9dfb"
+greenColor = "#39d353"
+grayColor = "#66798c"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

@@ -30,6 +30,10 @@ reports/*.pdf
 reports/*.docx
 scans/
 
+# Capturas de verificación visual (_shot.py) — evidencia de sesión, no
+# deliverable versionado; se regeneran con la app en marcha.
+.claude/shots/
+
 # IDE / SO
 .idea/
 .vscode/

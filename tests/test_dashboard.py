@@ -13,12 +13,16 @@ que la API real esté caída: por eso ninguna prueba la levanta.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Self
 from unittest.mock import patch
 
 import httpx
 from streamlit.testing.v1 import AppTest
+
+from atalaya.core.models import FindingSeverity
+from atalaya.reporting.generator import _compute_risk_score
 
 #: Ruta absoluta: `AppTest.from_file` resuelve una ruta relativa contra el
 #: fichero que llama, no contra el directorio de trabajo del proceso.
@@ -153,6 +157,22 @@ def _scan_summary(scan_id: int = 1) -> dict[str, Any]:
         "finished_at": "2026-01-01T00:00:05",
         "errors": [],
     }
+
+
+#: El score de riesgo se pinta con HTML propio (`render_risk_score`), no con
+#: `st.metric`: es un número grande con banda de color, algo que `st.metric`
+#: no permite. Para comprobarlo sin acoplarse al texto exacto del bloque, se
+#: extrae el número de su marca.
+_SCORE_RE = re.compile(r'class="atl-hero-num">(\d+)<')
+
+
+def _score_mostrado(at: AppTest) -> int | None:
+    """Score de riesgo renderizado en el detalle, o `None` si no hay."""
+    for elemento in at.markdown:
+        encontrado = _SCORE_RE.search(elemento.value)
+        if encontrado:
+            return int(encontrado.group(1))
+    return None
 
 
 def _run_app(get_map: dict[str, Any], post_map: dict[str, Any] | None = None) -> AppTest:
@@ -291,6 +311,135 @@ def test_triage_con_fallos_muestra_los_errores() -> None:
 
     assert not at.exception
     assert any("rate limit" in w.value for w in at.warning)
+
+
+# ─── Score de riesgo ────────────────────────────────────────────────────────
+
+
+def test_score_de_riesgo_coincide_con_el_del_informe() -> None:
+    """El número que ve el usuario en el dashboard y el `risk_score` del PDF
+    del mismo escaneo salen de fórmulas *distintas* (el dashboard no importa
+    `atalaya.reporting`: es un cliente HTTP puro de la API). Que no se
+    separen no lo garantiza el intérprete, lo garantiza esta prueba, que sí
+    mira los dos lados a la vez.
+    """
+    severidades = ["critical", "critical", "high", "medium", "low", "unknown"]
+    findings = [_finding(sev) for sev in severidades]
+    esperado = _compute_risk_score(
+        {sev: sum(1 for s in severidades if s == sev.value) for sev in FindingSeverity}
+    )
+
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, _scan_detail(findings=findings)),
+        }
+    )
+
+    assert not at.exception
+    assert esperado == 65  # 2x25 + 10 + 4 + 1; `unknown` no puntúa
+    assert _score_mostrado(at) == esperado
+    assert any("RIESGO ALTO" in m.value for m in at.tabs[1].markdown)
+
+
+def test_score_de_riesgo_se_acota_a_100() -> None:
+    """Cinco críticos suman 125 en bruto; el índice es 0-100, no una suma
+    sin límite (mismo acotado que `reporting/generator.py`)."""
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, _scan_detail(findings=[_finding("critical")] * 5)),
+        }
+    )
+
+    assert not at.exception
+    assert _score_mostrado(at) == 100
+    assert any("RIESGO CRÍTICO" in m.value for m in at.tabs[1].markdown)
+
+
+def test_score_ignora_los_hallazgos_sin_triar_pero_lo_advierte() -> None:
+    """Un hallazgo sin triar pesa 0: el score mide riesgo confirmado, no
+    trabajo pendiente. Como eso puede leerse mal (score bajo ≠ superficie
+    segura), la tarjeta tiene que decir cuántos quedan sin triar.
+    """
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, _scan_detail(findings=[_finding()] * 3)),
+        }
+    )
+
+    assert not at.exception
+    assert _score_mostrado(at) == 0
+    assert any("3 hallazgo(s) sin triar no puntúan" in m.value for m in at.tabs[1].markdown)
+
+
+def test_severidad_desconocida_para_el_cliente_no_rompe_el_detalle() -> None:
+    """Una severidad que este cliente no conoce (porque la API la añadiera
+    después) tiene que degradar a `unknown`, no tumbar la página.
+
+    No es hipotético: el detalle colorea cada activo por su peor severidad y
+    esa severidad se usa como índice sobre `_SEVERITY_ORDER`; sin acotar el
+    rango, un valor ajeno a la escala se salía del índice y reventaba el
+    render del escaneo entero. Mismo criterio de degradación controlada que
+    `api_get`.
+    """
+    ajeno = _finding(severity="high")
+    ajeno["severity"] = "catastrophic"
+
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, _scan_detail(findings=[ajeno])),
+        }
+    )
+
+    assert not at.exception
+    assert _score_mostrado(at) == 0  # no puntúa: cuenta como sin triar
+    assert len(at.tabs[1].expander) == 1  # el activo se sigue pintando
+
+
+def test_marcas_de_tiempo_se_muestran_legibles() -> None:
+    """Las fechas se pintan como `2026-01-01 00:00:05`, no en ISO crudo.
+
+    La API devuelve `datetime.isoformat()`, con la `T` separadora y hasta seis
+    decimales de segundo. Esa precisión no ayuda a situar un escaneo y ensancha
+    todas las columnas que la muestran, así que el dashboard la recorta al
+    segundo antes de enseñarla.
+    """
+    detalle = _scan_detail()
+    detalle["started_at"] = "2026-01-01T00:00:05.123456"
+
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, detalle),
+        }
+    )
+
+    assert not at.exception
+    textos = [m.value for m in at.tabs[1].markdown]
+    assert any("2026-01-01 00:00:05" in t for t in textos)
+    assert not any("00:00:05.123456" in t for t in textos)
+
+
+def test_score_se_muestra_antes_que_los_activos() -> None:
+    """Jerarquía del detalle: el score es la métrica principal y va arriba,
+    antes de la lista de activos — aunque en el código se rellene después
+    del botón de triaje (que puede releer el escaneo y cambiar el número).
+    """
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, _scan_detail(findings=[_finding("high")])),
+        }
+    )
+
+    assert not at.exception
+    textos = [m.value for m in at.tabs[1].markdown]
+    posicion_score = next(i for i, t in enumerate(textos) if _SCORE_RE.search(t))
+    posicion_activos = next(i for i, t in enumerate(textos) if "atl-sec" in t and "Activos" in t)
+    assert posicion_score < posicion_activos
 
 
 # ─── Informe ────────────────────────────────────────────────────────────────
