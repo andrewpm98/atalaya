@@ -223,7 +223,10 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 > generate_content`), activable con `AI_PROVIDER=gemini`. Fuerza la llamada
 > a herramienta con `FunctionCallingConfig(mode="ANY",
 > allowed_function_names=[...])` — equivalente Gemini del `tool_choice`
-> fijo de Anthropic. Ninguna línea de `triage.py`, ni de los agentes
+> fijo de Anthropic — con presupuesto de razonamiento acotado y un
+> reintento en `mode="AUTO"` ante `MALFORMED_FUNCTION_CALL` (ver "Deuda
+> técnica conocida": los dos son arreglos de bugs reproducidos en vivo, no
+> precauciones especulativas). Ninguna línea de `triage.py`, ni de los agentes
 > nuevos, cambió para incorporarlo: es la prueba de que la interfaz cumple
 > lo que promete. Verificado contra el modelo real (no solo dobles):
 > `complete()`, `complete_tool()` y `triage_finding()` end-to-end con
@@ -242,11 +245,12 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 > depender de ella. Asimetría deliberada, documentada en el propio código.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **262 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **266 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación posterior: Shodan, takeover, 5 agentes de
 IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del dashboard —
 severidad fuera de la escala y formato de las marcas de tiempo, ver
-"Dashboard: diseño visual").
+"Dashboard: diseño visual"; +4 al corregir el *tool calling* de Gemini, ver
+"Deuda técnica conocida").
 
 ---
 
@@ -468,17 +472,44 @@ respectivamente.
   defensa si se consigue la clave: es la misma interfaz, así que si
   funciona con Gemini funciona con Anthropic, pero queda como verificación
   formal pendiente, no dada por hecha.
-- **`POST /findings/ask` con Gemini: fallo 502 observado una vez, sin
-  reproducir.** Durante la verificación del dashboard, `prompter →
-  analyst` devolvió `"el modelo no llamó a la herramienta
-  'record_analysis'"` con `GeminiProvider`. `ai/analyst.py::_TOOL_SCHEMA`
-  es un JSON Schema estándar (tipos básicos, arrays de string, sin
-  features exóticas) — revisado y descartado como causa obvia. Ocurrió
-  cerca de agotarse la cuota diaria gratuita de Gemini (ver punto
-  siguiente), lo que apunta a una respuesta degradada por cuota antes que
-  a una incompatibilidad real de *tool calling*, pero **no se confirmó**:
-  no se pudo reproducir con cuota ya agotada. Repetir con cuota fresca
-  antes de asumir que está resuelto o de intentar un arreglo a ciegas.
+- ~~**`POST /findings/ask` con Gemini: fallo 502 observado una vez, sin
+  reproducir.**~~ **Resuelto: no era la cuota, eran dos bugs reales de
+  `GeminiProvider.complete_tool()`**, ambos reproducidos en vivo contra la
+  API real con cuota disponible. `ai/analyst.py::_TOOL_SCHEMA` quedó
+  definitivamente descartado como causa.
+  1. **`max_output_tokens` de Gemini no significa lo mismo que `max_tokens`
+     de Anthropic.** Los modelos 2.5 razonan siempre y sus tokens de
+     razonamiento **se descuentan de `max_output_tokens`**; mapear
+     `settings.ai_max_tokens` directamente dejaba que el razonamiento se
+     comiera el límite y la generación se cortara *antes* de emitir la
+     llamada a herramienta → `finish_reason=MAX_TOKENS`,
+     `candidate.content=None`, y por tanto el mensaje `"el modelo no llamó a
+     la herramienta 'record_analysis'"`. Es también la causa real del
+     `candidate.content=None` que ya se había parcheado antes atribuyéndolo
+     a la cuota. **Arreglo:** `thinking_config` con presupuesto acotado
+     (`_GEMINI_THINKING_BUDGET = 512`) **sumado** a `ai_max_tokens`, que así
+     vuelve a significar lo mismo en los dos proveedores: tokens para la
+     respuesta.
+  2. **`mode="ANY"` rompe la decodificación restringida en prompts
+     grandes.** Con un escaneo de 117 activos / 204 hallazgos, Gemini
+     devuelve `finish_reason=MALFORMED_FUNCTION_CALL`, sin contenido y sin
+     consumir tokens de salida — con cualquier límite de tokens. El mismo
+     prompt se responde correctamente con `mode="AUTO"`. **Arreglo:**
+     reintento único en `AUTO` solo ante ese `finish_reason` (se pierde la
+     *garantía* de la llamada, por eso no es el modo por defecto, pero si
+     el modelo contesta con texto se sigue degradando a `AIProviderError`,
+     nunca a una respuesta sin forma).
+  3. **El mensaje de error era opaco.** MAX_TOKENS, MALFORMED_FUNCTION_CALL
+     y "el modelo contestó con texto" producían el mismo texto, que es por
+     lo que el fallo se atribuyó a la cuota durante una sesión entera. Ahora
+     el `finish_reason` va en el mensaje. Dato que lo confirma: agotar la
+     cuota da un error **distinto** (`fallo del proveedor Gemini: 429
+     RESOURCE_EXHAUSTED`, verificado en vivo), así que la hipótesis de la
+     cuota nunca encajó con el síntoma.
+
+  Verificado en vivo antes y después del arreglo (mismos casos: fallaban,
+  ahora responden) y cubierto con 4 tests de regresión deterministas en
+  `tests/test_ai_provider.py`.
 - **Cuota gratuita de Gemini: ~20 peticiones/día**, se agota rápido
   combinando triaje + prompter + diff + informe en la misma sesión de
   pruebas. Verlo como límite de verificación manual, no del código.
@@ -516,7 +547,7 @@ respectivamente.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 260)
+pytest -q                            # tests (deben pasar los 266)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

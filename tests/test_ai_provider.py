@@ -21,8 +21,15 @@ from typing import Any
 import anthropic
 import pytest
 from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 
-from atalaya.ai.provider import AnthropicProvider, GeminiProvider, get_provider
+from atalaya.ai.provider import (
+    _GEMINI_THINKING_BUDGET,
+    AnthropicProvider,
+    GeminiProvider,
+    get_provider,
+)
+from atalaya.config import settings
 from atalaya.core.exceptions import AIProviderError
 
 
@@ -134,17 +141,27 @@ async def test_complete_tool_sin_llamada_a_la_herramienta_lanza_error() -> None:
 class _FakeGenerateContent:
     response: Any = None
     error: Exception | None = None
+    #: Respuestas sucesivas, para los casos con reintento (`mode="ANY"` que
+    #: falla y se reintenta en `AUTO`). Si está vacío se devuelve siempre
+    #: `response`, como antes.
+    responses: list[Any] = field(default_factory=list)
     calls: list[dict[str, object]] = field(default_factory=list)
 
     async def generate_content(self, **kwargs: object) -> Any:
         self.calls.append(kwargs)
         if self.error is not None:
             raise self.error
+        if self.responses:
+            return self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
         return self.response
 
 
-def _gemini_client(response: Any = None, error: Exception | None = None) -> SimpleNamespace:
-    models = _FakeGenerateContent(response=response, error=error)
+def _gemini_client(
+    response: Any = None,
+    error: Exception | None = None,
+    responses: list[Any] | None = None,
+) -> SimpleNamespace:
+    models = _FakeGenerateContent(response=response, error=error, responses=responses or [])
     return SimpleNamespace(aio=SimpleNamespace(models=models))
 
 
@@ -172,6 +189,15 @@ def _gemini_empty_content_response() -> SimpleNamespace:
     bajo presión de cuota del free tier (respuesta cortada sin contenido).
     """
     candidate = SimpleNamespace(content=None)
+    return SimpleNamespace(text=None, candidates=[candidate])
+
+
+def _gemini_cut_response(reason: genai_types.FinishReason) -> SimpleNamespace:
+    """Candidato sin contenido y con `finish_reason`, tal como devuelve la API
+    real cuando la generación se corta (`MAX_TOKENS`) o la decodificación
+    restringida de `mode="ANY"` se rompe (`MALFORMED_FUNCTION_CALL`).
+    """
+    candidate = SimpleNamespace(content=None, finish_reason=reason)
     return SimpleNamespace(text=None, candidates=[candidate])
 
 
@@ -245,6 +271,87 @@ async def test_gemini_complete_tool_candidato_sin_content_no_lanza_attributeerro
         await provider.complete_tool(
             "prompt", tool_name="record_triage", tool_schema={"type": "object"}
         )
+
+
+async def test_gemini_complete_tool_reserva_presupuesto_de_razonamiento() -> None:
+    """`max_output_tokens` de Gemini incluye los tokens de razonamiento, a
+    diferencia del `max_tokens` de Anthropic. Mapear `ai_max_tokens` a secas
+    dejaba que el razonamiento se comiera el límite y la respuesta se cortara
+    antes de emitir la llamada (reproducido en vivo, ver `_GEMINI_THINKING_
+    BUDGET`): el presupuesto de razonamiento va acotado y **sumado** aparte.
+    """
+    client = _gemini_client(response=_gemini_tool_response("record_triage", {"severity": "high"}))
+    provider = GeminiProvider(client=client)
+
+    await provider.complete_tool(
+        "prompt", tool_name="record_triage", tool_schema={"type": "object"}
+    )
+
+    config = client.aio.models.calls[0]["config"]
+    assert config.thinking_config.thinking_budget == _GEMINI_THINKING_BUDGET
+    assert config.max_output_tokens == settings.ai_max_tokens + _GEMINI_THINKING_BUDGET
+
+
+async def test_gemini_complete_tool_reintenta_en_auto_si_la_llamada_sale_malformada() -> None:
+    """`MALFORMED_FUNCTION_CALL`: la decodificación restringida de
+    `mode="ANY"` se rompe sobre prompts grandes (reproducido en vivo con un
+    escaneo de 117 activos). El mismo prompt sí se responde con `AUTO`, así
+    que se reintenta una vez en vez de devolver un 502.
+    """
+    client = _gemini_client(
+        responses=[
+            _gemini_cut_response(genai_types.FinishReason.MALFORMED_FUNCTION_CALL),
+            _gemini_tool_response("record_analysis", {"answer": "ok"}),
+        ]
+    )
+    provider = GeminiProvider(client=client)
+
+    resultado = await provider.complete_tool(
+        "prompt", tool_name="record_analysis", tool_schema={"type": "object"}
+    )
+
+    assert resultado == {"answer": "ok"}
+    modos = [
+        llamada["config"].tool_config.function_calling_config.mode.value
+        for llamada in client.aio.models.calls
+    ]
+    assert modos == ["ANY", "AUTO"]
+    # En `AUTO` no se restringe el nombre: es lo que evita la decodificación
+    # restringida que falló en el primer intento.
+    assert client.aio.models.calls[1][
+        "config"
+    ].tool_config.function_calling_config.allowed_function_names is None
+
+
+async def test_gemini_complete_tool_malformada_dos_veces_lanza_error_con_el_motivo() -> None:
+    client = _gemini_client(
+        response=_gemini_cut_response(genai_types.FinishReason.MALFORMED_FUNCTION_CALL)
+    )
+    provider = GeminiProvider(client=client)
+
+    with pytest.raises(AIProviderError, match="MALFORMED_FUNCTION_CALL"):
+        await provider.complete_tool(
+            "prompt", tool_name="record_analysis", tool_schema={"type": "object"}
+        )
+
+    assert len(client.aio.models.calls) == 2
+
+
+async def test_gemini_complete_tool_truncada_no_reintenta_y_dice_el_motivo() -> None:
+    """`MAX_TOKENS` no se reintenta: repetir la misma petición daría el mismo
+    corte. Lo que sí cambia es que el motivo va en el mensaje — sin él, este
+    fallo y "el modelo contestó con texto" eran indistinguibles, y el fallo
+    real llegó a atribuirse a la cuota del free tier.
+    """
+    client = _gemini_client(response=_gemini_cut_response(genai_types.FinishReason.MAX_TOKENS))
+    provider = GeminiProvider(client=client)
+
+    with pytest.raises(AIProviderError, match="MAX_TOKENS"):
+        await provider.complete_tool(
+            "prompt", tool_name="record_analysis", tool_schema={"type": "object"}
+        )
+
+    assert len(client.aio.models.calls) == 1
 
 
 def test_gemini_sin_api_key_lanza_ai_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
