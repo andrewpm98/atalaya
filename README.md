@@ -13,15 +13,21 @@ consultar la superficie de exposición **en lenguaje natural**.
 
 ## ¿Qué hace?
 
-1. **Descubre** — subdominios (Certificate Transparency + DNS), puertos y
-   servicios, cabeceras de seguridad HTTP y configuración TLS.
-2. **Evalúa** — asigna riesgo a cada activo y hallazgo.
-3. **Prioriza con IA** — un LLM ordena los hallazgos por severidad real,
-   explica el impacto y propone cómo corregirlos.
-4. **Responde en lenguaje natural** — *"¿qué activos tienen TLS obsoleto y
-   puertos de gestión abiertos?"*.
-5. **Informa** — genera un informe ejecutivo con portada en PDF, descargable
-   desde la API y desde el dashboard.
+1. **Descubre** — subdominios (Certificate Transparency + Shodan + DNS),
+   puertos y servicios, cabeceras de seguridad HTTP, configuración TLS, y
+   riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de
+   terceros).
+2. **Evalúa** — asigna riesgo a cada activo y hallazgo; compara escaneos
+   en el tiempo (diff) para detectar expansión de superficie.
+3. **Prioriza con IA** — un sistema de **agentes especializados** (no un
+   único prompt genérico) ordena los hallazgos por severidad real, explica
+   el impacto, prioriza candidatos de takeover y propone cómo corregirlos.
+   Anthropic (Claude) o Gemini, intercambiables.
+4. **Responde en lenguaje natural** — *"¿qué activos son más peligrosos?"*
+   — enrutado automáticamente al agente adecuado.
+5. **Informa** — genera un informe ejecutivo con portada, `risk_score` y
+   resumen en lenguaje natural, en PDF, descargable desde la API y desde
+   el dashboard.
 
 ## Uso rápido: enumeración de subdominios
 
@@ -69,28 +75,44 @@ automáticamente cada uno con:
 No hace falta invocar nada aparte: es parte del mismo escaneo. Los hallazgos
 resultantes entran al mismo flujo que el resto — triaje por IA
 (`POST /scans/{id}/triage`) e informe (`GET /scans/{id}/report`) los
-procesan sin distinguir su origen.
+procesan sin distinguir su origen. Lo mismo aplica al riesgo de
+*subdomain takeover*: se detecta automáticamente sobre los hosts que no
+resuelven por A/AAAA (donde vive la señal de un CNAME abandonado), sin
+ninguna petición HTTP al recurso de terceros — reconocimiento pasivo, sin
+verificar explotabilidad.
 
-## Uso rápido: triaje por IA y consulta en lenguaje natural
+**Segunda fuente de enumeración:** con `SHODAN_API_KEY` en `.env`, se
+consulta también la API DNS de Shodan, concurrentemente con crt.sh.
+Opcional: sin clave, se omite sin ninguna incidencia.
 
-Ya operativo (Paso 5). Requiere `ANTHROPIC_API_KEY` en `.env`. Con la API
-levantada (`make api`) y un escaneo ya persistido (`atalaya subdomains
-ejemplo.com --save`, o `POST /scans`):
+## Uso rápido: agentes de IA y consulta en lenguaje natural
+
+Ya operativo. Requiere `ANTHROPIC_API_KEY` **o** `GEMINI_API_KEY` en `.env`
+(según `AI_PROVIDER=anthropic|gemini` — ambos proveedores son
+intercambiables, la lógica de negocio no depende de cuál esté activo). Con
+la API levantada (`make api`) y un escaneo ya persistido (`atalaya
+subdomains ejemplo.com --save`, o `POST /scans`):
 
 ```bash
 # Triaja los hallazgos sin triar del escaneo #1 (idempotente)
 curl -X POST http://localhost:8000/scans/1/triage
 
-# Pregunta sobre la superficie ya escaneada de un dominio
+# Pregunta sobre la superficie ya escaneada — un agente "Prompter" decide
+# si la responde el analista de visión global o el detective de takeover
 curl -X POST http://localhost:8000/findings/ask \
   -H "Content-Type: application/json" \
-  -d '{"domain": "ejemplo.com", "question": "¿algún activo filtra direccionamiento interno?"}'
+  -d '{"domain": "ejemplo.com", "question": "¿qué activos son más peligrosos?"}'
+
+# Compara dos escaneos del mismo dominio, con valoración de IA
+curl http://localhost:8000/scans/1/diff/2
 ```
 
 El triaje recibe **contexto estructurado** (hostname, IPs, estado, fuentes,
 tipo de hallazgo y evidencia) — nunca la fila de base de datos en bruto — y
 responde con una severidad razonada, no una plantilla fija. Un fallo del
 proveedor de IA en un hallazgo no aborta los demás; se reporta en `errors`.
+Es uno de **seis agentes especializados**, cada uno con su propio contexto
+y criterio (detalle en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md)).
 
 ## Uso rápido: informe con portada
 
@@ -102,9 +124,10 @@ curl -o informe.pdf http://localhost:8000/scans/1/report
 
 Regenera el informe en cada descarga (nunca sirve una copia cacheada sin
 comprobar nada), así que siempre refleja el triaje más reciente. Incluye
-portada (dominio y fecha), resumen ejecutivo con contadores por severidad, y
-el detalle de cada activo y hallazgo con su impacto y remediación. También
-se descarga desde la pestaña «Escaneos» del dashboard.
+portada (dominio y fecha), `risk_score`, resumen ejecutivo con IA (opcional
+— sin proveedor disponible, el informe se genera igual, sin resumen) y el
+detalle de cada activo y hallazgo con su impacto y remediación. También se
+descarga desde la pestaña «Escaneos» del dashboard.
 
 ## Arquitectura (resumen)
 
@@ -117,13 +140,14 @@ se descarga desde la pestaña «Escaneos» del dashboard.
              ┌────────────────────────────────┼────────────────────────┐
              ▼                ▼                ▼                         ▼
       ┌────────────┐   ┌────────────┐   ┌────────────┐          ┌──────────────┐
-      │Descubrimien│   │  Capa IA   │   │ PostgreSQL │          │  Informes    │
-      │to (scan)   │   │ (triaje)   │   │ (persist.) │          │    (PDF)     │
-      └─────┬──────┘   └─────┬──────┘   └────────────┘          └──────────────┘
-            │                │
-     APIs externas     LLM (Anthropic)
-   (crt.sh, OSV,       Claude
-    Shodan)
+      │Descubrimien│   │  Agentes   │   │ PostgreSQL │          │  Informes    │
+      │to (scan +  │   │  de IA     │   │ (persist.) │          │  (PDF + IA)  │
+      │ takeover)  │   │ (triaje,   │   └────────────┘          └──────────────┘
+      └─────┬──────┘   │ prompter,  │
+            │          │ analyst... │
+     APIs externas     └─────┬──────┘
+   (crt.sh, Shodan)          │
+                    Claude (Anthropic) o Gemini
 ```
 
 Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
@@ -135,7 +159,7 @@ Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 | API             | FastAPI + Uvicorn                   |
 | Base de datos   | PostgreSQL (SQLAlchemy 2.0 async)   |
 | Descubrimiento  | httpx, dnspython, cryptography      |
-| IA              | Anthropic (Claude), abstraído       |
+| IA              | Anthropic (Claude) o Google Gemini, abstraídos tras `LLMProvider` |
 | Dashboard web   | Streamlit                           |
 | Orquestación    | Docker Compose                      |
 
@@ -144,7 +168,7 @@ Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 | Requisito              | En Atalaya                                              |
 |------------------------|--------------------------------------------------------|
 | Base de datos          | PostgreSQL con modelos de activos / escaneos / hallazgos |
-| API o webhook          | API REST propia **y** consumo de APIs externas         |
+| API o webhook          | API REST propia **y** consumo de APIs externas (crt.sh, Shodan, Anthropic/Gemini) |
 | Aplicación web         | Dashboard Streamlit (local o desplegado)               |
 | GitHub con historial   | Commits por fase, historial real                       |
 | Reporte con portada    | PDF generado por la propia herramienta (`GET /scans/{id}/report`) |
@@ -154,7 +178,7 @@ Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 ### Con Docker (recomendado)
 
 ```bash
-cp .env.example .env      # rellena ANTHROPIC_API_KEY
+cp .env.example .env      # rellena ANTHROPIC_API_KEY o GEMINI_API_KEY (según AI_PROVIDER)
 make up                   # levanta db + api + dashboard
 ```
 
@@ -191,6 +215,19 @@ Desarrollo por fases (ver `docs/ARQUITECTURA.md`):
   - [x] Consulta en lenguaje natural sobre un escaneo
 - [x] **Paso 6** — Dashboard completo (escaneos, triaje IA, consulta NL, informe)
 - [x] **Paso 7** — Generador de informes (PDF con portada, API + dashboard)
+
+Los siete pasos son la entrega evaluable de la práctica; están cerrados.
+Ampliación posterior, más allá de los requisitos obligatorios:
+
+- [x] Shodan como segunda fuente de enumeración de subdominios (opcional)
+- [x] Detección de riesgo de *subdomain takeover* (patrón de CNAME)
+- [x] Sistema de agentes de IA especializados (Prompter, Analista, Detective
+      de takeover, Redactor de informes, Comparador de escaneos)
+- [x] `GeminiProvider` — segundo proveedor de IA intercambiable
+- [x] `GET /scans/{id}/diff/{other_id}` — comparación de escaneos con IA
+- [x] `risk_score` y resumen ejecutivo con IA en el informe PDF
+- [ ] Rediseño visual del dashboard (estética de herramienta comercial de
+      seguridad) — en curso
 
 ## Aviso legal
 

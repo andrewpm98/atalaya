@@ -12,11 +12,11 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
-| Base de datos | PostgreSQL + SQLAlchemy async | ✅ Modelos Scan/Asset/Finding + migraciones Alembic. Persiste subdominios, puertos abiertos y hallazgos de cabeceras/TLS |
-| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL (`POST /findings/ask`) e informe (`GET /scans/{id}/report`) reales |
-| Aplicación web | Dashboard Streamlit | ✅ Escaneos, triaje IA, consulta NL, descarga de informe |
+| Base de datos | PostgreSQL + SQLAlchemy async | ✅ Modelos Scan/Asset/Finding + migraciones Alembic. Persiste subdominios, puertos abiertos y hallazgos de cabeceras/TLS/takeover |
+| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL vía agentes (`POST /findings/ask`), diff entre escaneos (`GET /scans/{id}/diff/{other_id}`) e informe (`GET /scans/{id}/report`) reales. Consume crt.sh, Shodan y (Anthropic o Gemini, configurable) |
+| Aplicación web | Dashboard Streamlit | ✅ Escaneos, triaje IA, consulta NL, descarga de informe — rediseño visual profesional (ver "Dashboard: diseño visual" más abajo) |
 | GitHub con historial | Commits por unidad lógica | ✅ commits por fase |
-| Reporte con portada | Informe generado por la herramienta | ✅ PDF con portada, resumen y hallazgos (`reporting/generator.py`) |
+| Reporte con portada | Informe generado por la herramienta | ✅ PDF con portada, resumen ejecutivo en lenguaje natural (IA), `risk_score` y hallazgos (`reporting/generator.py`) |
 
 **El historial de commits se evalúa.** No agrupar trabajo de varias fases en
 un commit único; el desarrollo progresivo es parte de lo que se califica.
@@ -27,13 +27,36 @@ un commit único; el desarrollo progresivo es parte de lo que se califica.
 
 Recibe un dominio y ejecuta cuatro fases:
 
-1. **Descubrimiento** — subdominios (Certificate Transparency + DNS), puertos,
-   cabeceras de seguridad HTTP, configuración TLS.
+1. **Descubrimiento** — subdominios (Certificate Transparency + Shodan + DNS),
+   puertos, cabeceras de seguridad HTTP, configuración TLS, riesgo de
+   *subdomain takeover* (patrón de CNAME hacia hosting de terceros).
 2. **Persistencia** — activos y hallazgos en base de datos, para comparar
-   escaneos en el tiempo.
+   escaneos en el tiempo (`GET /scans/{id}/diff/{other_id}`).
 3. **Triaje por IA** — un LLM prioriza hallazgos, explica impacto real y
    propone remediación. **Es el componente diferencial del proyecto.**
-4. **Consulta e informe** — preguntas en lenguaje natural e informe ejecutivo.
+4. **Consulta e informe** — preguntas en lenguaje natural (a través de un
+   sistema de agentes especializados, ver más abajo) e informe ejecutivo
+   con resumen en lenguaje natural.
+
+### Sistema de agentes de IA
+
+La capa IA no es un único prompt genérico: cada tarea tiene un agente
+especializado, todos sobre la misma interfaz `LLMProvider`
+(`ai/provider.py`), intercambiable entre Anthropic (Claude) y Gemini vía
+`AI_PROVIDER` en `.env`:
+
+| Agente | Fichero | Responsabilidad |
+|---|---|---|
+| Triaje | `ai/triage.py` | Severidad/impacto/remediación de **un** hallazgo — el original, sin tocar desde el Paso 5 |
+| Prompter | `ai/prompter.py` | Intermediario de `POST /findings/ask`: enruta la pregunta al agente adecuado |
+| Analista | `ai/analyst.py` | Visión global de un escaneo: patrones, combinaciones preocupantes, prioridades |
+| Detective de takeover | `ai/takeover_detective.py` | Prioriza y explica los candidatos a *subdomain takeover* ya detectados |
+| Redactor de informes | `ai/report_writer.py` | Resumen ejecutivo del PDF, en lenguaje no técnico |
+| Comparador de escaneos | `ai/diff_analyst.py` | Valora si el diff entre dos escaneos es preocupante |
+
+No confundir con los **subagentes de Claude Code** (`.claude/agents/`), que
+son herramienta de desarrollo, no parte del producto — ver "Cómo quiero
+trabajar" al final de este documento.
 
 ---
 
@@ -58,14 +81,21 @@ src/atalaya/
 ├── discovery/
 │   ├── models.py                SubdomainRecord, SubdomainScanResult,
 │   │                             DiscoveryFinding, HeaderScanResult, TlsScanResult,
-│   │                             EnrichmentResult
-│   ├── subdomains.py            Enumeración completa (crt.sh + DNS)
+│   │                             TakeoverCandidate, EnrichmentResult
+│   ├── subdomains.py            Enumeración (crt.sh + Shodan, concurrentes,
+│   │                             fusionadas por hostname) + verificación DNS
+│   ├── shodan.py                 fetch_shodan_subdomains() — segunda fuente,
+│   │                             opcional (SHODAN_API_KEY vacía = se omite)
 │   ├── ports.py                  scan_ports() — TCP asíncrono, puertos comunes
 │   ├── headers.py                 analyze_headers() — HSTS/CSP/XFO/XCTO/
 │   │                             Referrer-Policy/Permissions-Policy
 │   ├── tls.py                     inspect_tls() — versión, emisor, caducidad
-│   └── enrichment.py              enrich_scan() — orquesta las tres técnicas
-│                                 anteriores sobre los hosts activos
+│   ├── takeover.py                find_takeover_candidates() — riesgo de
+│   │                             subdomain takeover vía patrón de CNAME
+│   │                             (reconocimiento pasivo, nunca verifica)
+│   └── enrichment.py              enrich_scan() — orquesta las cuatro técnicas;
+│                                 takeover corre sobre TODOS los registros,
+│                                 las otras tres solo sobre los activos
 ├── ai/
 │   ├── provider.py               LLMProvider (ABC) + AnthropicProvider + GeminiProvider
 │   ├── triage.py                 triage_finding/triage_findings — contexto
@@ -93,13 +123,20 @@ src/atalaya/
     └── routes/
         ├── scans.py              POST/GET /scans, GET /scans/{id},
         │                         POST /scans/{id}/triage,
+        │                         GET /scans/{id}/diff/{other_id} — nuevo,
+        │                         compara dos escaneos + valoración IA,
         │                         GET /scans/{id}/report — reales
         ├── assets.py              GET /assets?scan_id= — real
-        └── findings.py            GET /findings, POST /findings/ask — reales
+        └── findings.py            GET /findings, POST /findings/ask
+                                    (vía ai/prompter.py) — reales
 
 migrations/                      Alembic (async); URL desde settings.database_url
 dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
-                                  consulta NL, descarga de informe
+                                  consulta NL, descarga de informe. Rediseño
+                                  visual profesional (ver sección dedicada)
+.claude/agents/                  Subagentes de proyecto de Claude Code (no
+                                  es parte del producto, es tooling de
+                                  desarrollo — ver "Cómo quiero trabajar")
 ```
 
 > **Desviación del stub original:** este documento preveía los modelos
@@ -147,8 +184,69 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 > ambos ya procesan cualquier `Finding`/`Asset.open_ports` de forma
 > genérica, sin mirar `finding_type`.
 
+> **Ampliación (Shodan, post-Paso 7):** `discovery/subdomains.py` consulta
+> crt.sh y `discovery/shodan.py::fetch_shodan_subdomains()` concurrentemente
+> (`asyncio.gather`), fusionando resultados por hostname y conservando de
+> qué fuente(s) procede cada uno (`DiscoverySource.SHODAN` nuevo). Shodan es
+> opcional: sin `SHODAN_API_KEY`, se omite sin generar ninguna incidencia —
+> crt.sh sigue siendo la fuente primaria y obligatoria. Verificado contra la
+> API real: un plan gratuito (`oss`) devuelve `403` en `/dns/domain/{domain}`
+> (requiere plan de pago), y el código no reintenta un fallo de autorización
+> (401/403), solo los transitorios (5xx), igual criterio que crt.sh.
+
+> **Ampliación (subdomain takeover, post-Paso 7):** `discovery/takeover.py`
+> resuelve el CNAME de los hosts que **no** resuelven por A/AAAA
+> (`no_answer`/`nxdomain`/`unroutable` — ahí vive la señal, no en los
+> activos) y lo compara contra una tabla de ~20 patrones conocidos de
+> hosting propenso a takeover (GitHub Pages, Heroku, S3, Azure...).
+> Reconocimiento estrictamente pasivo: ninguna petición HTTP al recurso de
+> terceros — cumple la restricción de seguridad #6. Los candidatos se
+> traducen a `DiscoveryFinding` dentro de
+> `EnrichmentResult.findings_by_hostname()`, así que se persisten con el
+> mismo mecanismo genérico que cabeceras/TLS, sin tocar
+> `core/persistence.py`. Módulo independiente de `subdomains.py` (sin
+> import circular), mismo criterio que `shodan.py`.
+
+> **Ampliación (sistema de agentes de IA, post-Paso 7):** además del triaje
+> original, cinco agentes nuevos sobre la misma interfaz `LLMProvider` (ver
+> tabla en "Sistema de agentes de IA" arriba). `ai/query.py::ask()` (la
+> consulta NL del Paso 5) se **retiró**: `POST /findings/ask` pasa ahora por
+> `ai/prompter.py::route_and_answer()`, que decide si la responde
+> `ai/analyst.py` (visión global) o `ai/takeover_detective.py` (preguntas
+> específicas de takeover), con *fallback* seguro a `analyst` si la
+> clasificación no es segura. Todas las referencias a `ai/query.py` en notas
+> de desviación anteriores de este documento son históricas — el módulo ya
+> no existe.
+
+> **Ampliación (`GeminiProvider`, post-Paso 7):** segunda implementación de
+> `LLMProvider` sobre `google-genai` (cliente async, `client.aio.models.
+> generate_content`), activable con `AI_PROVIDER=gemini`. Fuerza la llamada
+> a herramienta con `FunctionCallingConfig(mode="ANY",
+> allowed_function_names=[...])` — equivalente Gemini del `tool_choice`
+> fijo de Anthropic. Ninguna línea de `triage.py`, ni de los agentes
+> nuevos, cambió para incorporarlo: es la prueba de que la interfaz cumple
+> lo que promete. Verificado contra el modelo real (no solo dobles):
+> `complete()`, `complete_tool()` y `triage_finding()` end-to-end con
+> respuestas coherentes.
+
+> **Ampliación (diff + informe con IA, post-Paso 7):** `GET /scans/{id}/
+> diff/{other_id}` expone `core/repository.py::diff_scans()` (existía sin
+> usar desde el Paso 4) más una valoración de `ai/diff_analyst.py`.
+> `previous`/`current` se deciden por `started_at`, no por el orden en la
+> URL. Propaga `AIProviderError` → 502 (petición puntual). El informe PDF
+> gana `risk_score` (0-100, pesos `critical=25/high=10/medium=4/low=1`,
+> `reporting/generator.py::_RISK_WEIGHTS`) y un resumen ejecutivo de
+> `ai/report_writer.py` — pero, a diferencia del diff, **nunca falla** por
+> ausencia o fallo del proveedor de IA: el informe con portada era un
+> requisito obligatorio antes de que existiera la capa IA, así que no puede
+> depender de ella. Asimetría deliberada, documentada en el propio código.
+
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **170 tests en verde.**
+55 objetivos de escaneo, 19 segundos. **262 tests en verde** (170 al cierre
+del Paso 7; +90 en la ampliación posterior: Shodan, takeover, 5 agentes de
+IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del dashboard —
+severidad fuera de la escala y formato de las marcas de tiempo, ver
+"Dashboard: diseño visual").
 
 ---
 
@@ -180,10 +278,26 @@ añadió al implementar el Paso 5 porque, sin una ruta que lo invoque,
 `ai/triage.py` sería código alcanzable solo desde tests — lo que CLAUDE.md
 pide evitar explícitamente ("los stubs no son código muerto").
 
+8. **Ampliación — Sistema de agentes de IA** ✅ — Shodan (segunda fuente),
+   detección de subdomain takeover, cinco agentes de IA nuevos
+   (Prompter/Analyst/Takeover Detective/Report Writer/Diff Analyst),
+   `GeminiProvider`, endpoint de diff, resumen ejecutivo del informe.
+   No forma parte de la entrega numerada original (Pasos 1-7, todos ya
+   cerrados y evaluables por sí solos); es trabajo posterior, más allá de
+   los requisitos obligatorios, sobre la misma base.
+9. **Ampliación — Dashboard: diseño visual profesional** ✅ — rediseño de
+   `dashboard/app.py` con estética de herramienta comercial de seguridad
+   (Shodan/VirusTotal/Maltego), score de riesgo como métrica principal.
+   Sin cambios funcionales: las tres pestañas, el triaje, el informe PDF y la
+   consulta en lenguaje natural hacen exactamente lo mismo que antes. Ver
+   "Dashboard: diseño visual" para las reglas y las trampas de Streamlit que
+   hubo que sortear.
+
 **Plazo:** entrega a finales de septiembre. Los siete pasos de la hoja de
-ruta y los cinco requisitos obligatorios están cerrados. El margen restante
-es para robustecer lo ya entregado (ver "Deuda técnica conocida") y preparar
-la defensa oral, no para nuevas fases.
+ruta y los cinco requisitos obligatorios están cerrados desde antes de esta
+ampliación — nada de lo de abajo era necesario para aprobar, es trabajo
+que profundiza el componente diferencial (capa IA) y la calidad percibida
+(dashboard) de cara a la defensa oral.
 
 ---
 
@@ -265,21 +379,109 @@ cómo trata esto.
 | PostgreSQL, no SQLite en producción | Concurrencia de escritura durante escaneos |
 | No Neo4j por ahora | El modelo es tabular; un segundo motor añade coste sin valor en plazo |
 | Streamlit, no React | El plazo no permite invertirlo en frontend |
-| Capa IA tras interfaz `LLMProvider` | El modelo es configuración, no dependencia rígida |
+| Capa IA tras interfaz `LLMProvider` | El modelo es configuración, no dependencia rígida — probado sumando `GeminiProvider` sin tocar `triage.py` ni los agentes |
 | Triaje IA **después** de persistir | La IA clasifica y explica sobre evidencia verificada; no descubre |
 | Endpoints en 501, no ausentes | El contrato de la API se fija en diseño y se rellena por fases |
+| Shodan sin verificación HTTP del CNAME (takeover) | Solo patrón DNS — comprobar si el recurso de terceros responde "no existe" cruzaría a verificar explotabilidad (restricción #6) |
+| `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
+
+---
+
+## Dashboard: diseño visual
+
+El criterio es que alguien ajeno al proyecto, al abrirlo sin contexto,
+asuma que es un producto comercial de seguridad y no un trabajo de máster.
+Referentes: Shodan, VirusTotal, Maltego, Burp Suite.
+
+**Reglas de la piel visual** (todas materializadas en `_CSS`, en
+`dashboard/app.py`):
+
+- Fondo oscuro y **un solo acento frío** (`#00c8e8`) para todo lo
+  interactivo. El **rojo es exclusivo de la severidad crítica** y del único
+  estado de fallo real (API caída); nunca decora.
+- **Monoespaciada para el dato técnico** (hostnames, IPs, puertos, marcas de
+  tiempo, identificadores) y sans (Inter) para el texto explicativo y la
+  prosa que escribe el modelo. Esa frontera es la que hace que se lea como
+  una consola y no como una web.
+- **Tablas compactas, no tarjetas infladas.** El score de riesgo es la
+  métrica principal y es lo primero que se ve al abrir un escaneo.
+- Cero decoración sin función: ni iconos genéricos, ni animaciones.
+
+**Dos sitios, no duplicación.** El aspecto vive en `_CSS` (el DOM que genera
+Streamlit) y en `.streamlit/config.toml` (el tema). Se separan porque
+`st.dataframe` se pinta sobre un `<canvas>` (glide-data-grid) al que
+**ninguna regla CSS llega**: sus colores y su tipografía solo salen del
+tema. Por eso `theme.font` es la monoespaciada — la tabla de escaneos es
+dato técnico — y `_CSS` devuelve la sans a lo que es prosa.
+
+**Trampas de Streamlit descubiertas aquí** (documentadas porque no dan
+ningún error, simplemente el resultado sale mal):
+
+| Trampa | Efecto | Solución |
+|---|---|---|
+| `st.html()` sanea con DOMPurify, que **borra entera** cualquier etiqueta cuyo texto parezca HTML | Escribir «`<p>`» en un *comentario* CSS tumbaba la hoja de estilos completa: la aplicación aparecía sin pintar | En los comentarios de `_CSS` no se escribe ninguna etiqueta. Las tipografías se cargan con `@import`, no con `<link>` (también se borraba) |
+| Streamlit resta `1rem` al contenedor de cada bloque markdown para cancelar el margen del último párrafo | Nuestro HTML no acaba en párrafo: cada bloque medía 16px menos que su contenido y **se solapaba con el siguiente** | Envoltorio `.atl-blk` (`flow-root` + `margin-bottom: 1rem`), centralizado en `_html()` |
+| Streamlit 1.63 migró los widgets de BaseWeb a **react-aria** | Los selectores `[data-baseweb="tab"]`, `[data-baseweb="input"]`… dejaron de existir; las reglas no daban error, simplemente no pintaban | Selectores contra el DOM real (`[data-testid="stTab"]`, `*RootElement`, `[role="group"]`), revisados con el navegador abierto |
+| El tipo de aviso (`success`/`warning`/`error`) se pinta en un hijo, no en el contenedor con borde | Los cuatro tipos se veían como la misma caja gris: un error y un éxito eran indistinguibles | `[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"])`, etc. |
+
+Para el color de severidad de cada activo se usa `st.container(key=...)`,
+que añade la clase `st-key-<clave>` al DOM: es **API pública** de Streamlit,
+a diferencia de los `data-testid`, que son internos y pueden cambiar de
+versión. Se prefiere a los colores de markdown (`:red[...]`) porque esos
+salen de la paleta de Streamlit y no de la escala de severidad propia.
+
+**Verificación visual.** El aspecto no se da por bueno sin mirarlo: `_shot.py`
+(raíz del repo, fuera del proyecto) levanta un navegador real contra el
+dashboard en marcha y captura inicio, listado, detalle, activo desplegado,
+escaneo grande, triaje con IA, respuesta en lenguaje natural y el estado con
+la API caída, en `.claude/shots/`. Las capturas en verde no sustituyen a la
+suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
+`AppTest`, nunca el estilo.
 
 ---
 
 ## Deuda técnica conocida
 
-- **Sin consulta de registros CNAME.** En el escaneo de `github.com` unos 50
-  hosts quedaron en `no_answer`: existen pero sin A/AAAA, probablemente con
-  CNAME. Importa porque **un CNAME apuntando a un recurso no reclamado es la
-  señal característica del subdomain takeover**. Incorporar cuando la capa IA
-  lo necesite.
-- **Fuente única de enumeración** (crt.sh). `SHODAN_API_KEY` ya está previsto
-  en la configuración para ampliar cobertura.
+**Resuelta en la ampliación post-Paso 7** (se deja constancia para la
+defensa, por si se pregunta por la evolución): la falta de consulta de
+CNAME y la fuente única de enumeración, ambas documentadas aquí desde el
+Paso 2, se cerraron con `discovery/takeover.py` y `discovery/shodan.py`
+respectivamente.
+
+- **Shodan: cobertura real limitada por el plan de la clave disponible.**
+  `/dns/domain/{domain}` devuelve `403` en el plan gratuito `oss`
+  ("Requires membership or higher to access"), verificado contra la API
+  real. El código está completo y probado (con dobles, y en vivo el camino
+  de fallo), pero no aporta subdominios reales con la clave actual — solo
+  con un plan de pago.
+- **Tabla de patrones de takeover no exhaustiva.** `discovery/takeover.py`
+  cubre ~20 proveedores citados habitualmente (GitHub Pages, Heroku, S3,
+  Azure...), no una lista cerrada — mismo criterio de honestidad que
+  `COMMON_PORTS`.
+- **Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
+  Anthropic.** `ai/analyst.py`, `ai/takeover_detective.py`,
+  `ai/report_writer.py`, `ai/diff_analyst.py` y `ai/prompter.py` están
+  probados con dobles deterministas y, algunos, verificados en vivo contra
+  **Gemini** real (que sí tiene clave activa) — pero no contra Anthropic,
+  el proveedor por defecto del proyecto (`AI_PROVIDER=anthropic` en
+  `.env`), por no disponer de `ANTHROPIC_API_KEY`. Repetir antes de la
+  defensa si se consigue la clave: es la misma interfaz, así que si
+  funciona con Gemini funciona con Anthropic, pero queda como verificación
+  formal pendiente, no dada por hecha.
+- **`POST /findings/ask` con Gemini: fallo 502 observado una vez, sin
+  reproducir.** Durante la verificación del dashboard, `prompter →
+  analyst` devolvió `"el modelo no llamó a la herramienta
+  'record_analysis'"` con `GeminiProvider`. `ai/analyst.py::_TOOL_SCHEMA`
+  es un JSON Schema estándar (tipos básicos, arrays de string, sin
+  features exóticas) — revisado y descartado como causa obvia. Ocurrió
+  cerca de agotarse la cuota diaria gratuita de Gemini (ver punto
+  siguiente), lo que apunta a una respuesta degradada por cuota antes que
+  a una incompatibilidad real de *tool calling*, pero **no se confirmó**:
+  no se pudo reproducir con cuota ya agotada. Repetir con cuota fresca
+  antes de asumir que está resuelto o de intentar un arreglo a ciegas.
+- **Cuota gratuita de Gemini: ~20 peticiones/día**, se agota rápido
+  combinando triaje + prompter + diff + informe en la misma sesión de
+  pruebas. Verlo como límite de verificación manual, no del código.
 - **Sin detección de comodines DNS.** Un dominio que resuelve cualquier
   subdominio inexistente inflaría el recuento de activos.
 - **API sin autenticación.** Asumible en local; bloqueante si se despliega con
@@ -314,7 +516,7 @@ cómo trata esto.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 170)
+pytest -q                            # tests (deben pasar los 260)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
@@ -324,8 +526,18 @@ ruff check src tests                 # linter
 docker compose up --build            # stack completo
 ```
 
+**Cambiar de proveedor de IA:** `AI_PROVIDER=anthropic` o `AI_PROVIDER=gemini`
+en `.env`, con la clave correspondiente (`ANTHROPIC_API_KEY`/`GEMINI_API_KEY`).
+Solo hace falta la clave del proveedor activo.
+
 **Dominio de pruebas:** `scanme.nmap.org`, mantenido por el autor de Nmap
 explícitamente para reconocimiento autorizado.
+
+**Verificación visual del dashboard:** `_shot.py` en la raíz del proyecto
+(no versionado, herramienta de desarrollo — Playwright) levanta el
+dashboard real, lanza un escaneo real y captura pantallas en
+`.claude/shots/`. Requiere la API y el dashboard ya arrancados
+(`uvicorn`/`streamlit run`, arriba) y `playwright install` hecho una vez.
 
 ---
 
@@ -339,3 +551,27 @@ explícitamente para reconocimiento autorizado.
 - Si detectas un defecto en lo ya implementado, señálalo aunque no sea el
   encargo. Ya ocurrió una vez con un falso positivo (`0.0.0.0` contado como
   activo) y corregirlo a tiempo evitó que contaminara la fase siguiente.
+- No des por terminado un agente/subagente sin verificarlo tú mismo: tests
+  en verde, integración real comprobada, y una prueba manual con un caso
+  real — los tres, no solo lo que el propio agente afirme haber hecho. Ya
+  ha pasado que un subagente diera algo por bueno sin serlo (el bug de
+  `st.markdown`/CSS del dashboard, sección "Deuda técnica") y que otro
+  hiciera un commit "WIP" automático sin que nadie lo pidiera al
+  interrumpirse — revisa el `git log`/`git status` al retomar una sesión,
+  no asumas que el estado del repo es el que dejaste la última vez.
+
+### Subagentes de Claude Code (tooling de desarrollo, no parte del producto)
+
+`.claude/agents/` define cuatro subagentes de proyecto para dividir el
+trabajo de ampliar Atalaya, cada uno con responsabilidad exclusiva y sin
+solape: `atalaya-discovery` (descubrimiento/DNS), `atalaya-ai-agents`
+(capa IA), `atalaya-api` (cableado a la API) y `atalaya-dashboard`
+(diseño visual). **Estos ficheros no se recargan dentro de una sesión ya
+iniciada** — solo están disponibles como `subagent_type` con nombre propio
+en sesiones que arrancan *después* de que existan; si no aparecen en la
+lista de agentes disponibles, hay que despacharlos como `general-purpose`
+pegando el contenido completo del `.md` correspondiente como instrucciones
+(mismo resultado práctico, solo cambia el mecanismo de invocación).
+
+Ninguno de los cuatro toca `ai/triage.py` — instrucción explícita, se
+mantiene igual desde el Paso 5.

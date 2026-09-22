@@ -14,39 +14,53 @@ diferencial no es escanear (hay muchas herramientas que lo hacen), sino
 Núcleo de la aplicación. Expone la API REST propia (requisito de la práctica) y
 orquesta el resto de módulos. Endpoints principales:
 
-- `POST /scans` ✅ — lanza un escaneo completo (subdominios + puertos +
-  cabeceras + TLS sobre los hosts activos) y lo persiste.
+- `POST /scans` ✅ — lanza un escaneo completo (subdominios [crt.sh + Shodan]
+  + puertos + cabeceras + TLS + riesgo de takeover) y lo persiste.
 - `GET  /scans`, `GET /scans/{id}` ✅ — consulta de escaneos (404 si no existe).
 - `GET  /assets` ✅ — activos descubiertos, filtrables por `scan_id`.
 - `GET  /findings` ✅ — hallazgos, filtrables por `asset_id`/`scan_id`;
   `severity` es `unknown` hasta triarlos.
 - `POST /scans/{id}/triage` ✅ — triaja con IA los hallazgos `unknown` de un
   escaneo ya persistido. Idempotente: no repite los ya triados.
-- `POST /findings/ask` ✅ — consulta en lenguaje natural sobre el último
-  escaneo completado de un dominio (o uno concreto vía `scan_id`).
+- `POST /findings/ask` ✅ — consulta en lenguaje natural, enrutada por
+  `ai/prompter.py` al agente adecuado (visión global o riesgo de takeover)
+  sobre el último escaneo completado de un dominio (o uno concreto vía
+  `scan_id`).
+- `GET /scans/{id}/diff/{other_id}` ✅ — compara dos escaneos del mismo
+  dominio (`core/repository.py::diff_scans()`) y valora los cambios con
+  `ai/diff_analyst.py`. `previous`/`current` se deciden por `started_at`,
+  no por el orden en la URL.
+- `GET /scans/{id}/report` ✅ — informe PDF con portada, `risk_score` y
+  resumen ejecutivo de `ai/report_writer.py` (opcional: el informe se
+  genera igual sin IA disponible, ver 2.5).
 
 `api/schemas.py` define la frontera Pydantic entre las tablas y la respuesta
 pública; `api/main.py` traduce `InvalidTargetError`/`UnauthorizedTargetError`
 a 400/403 vía `exception_handler`, en vez de que cada ruta gestione sus
 propios códigos de error.
 
-### 2.2 Descubrimiento — `src/atalaya/discovery` (Paso 2 ✅)
+### 2.2 Descubrimiento — `src/atalaya/discovery` (Paso 2 ✅ + ampliación)
 Cada técnica es un módulo independiente con salida normalizada:
 
 | Módulo         | Qué obtiene                                    | Fuente                  |
 |----------------|------------------------------------------------|-------------------------|
-| `subdomains`   | Subdominios                                    | crt.sh (CT logs) + DNS  |
+| `subdomains`   | Subdominios                                    | crt.sh (CT logs) + `shodan` (opcional), concurrentes, fusionados por hostname |
+| `shodan`       | Segunda fuente de subdominios                  | API DNS de Shodan (`SHODAN_API_KEY` opcional — sin ella, se omite sin incidencia) |
 | `ports`        | Puertos TCP abiertos (`COMMON_PORTS` por defecto) | Conexión asíncrona, concurrencia acotada |
 | `headers`      | HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy | Petición HTTP(S) |
 | `tls`          | Versión de protocolo, emisor, caducidad del certificado | `cryptography` sobre el `ssl_object` de la conexión |
-| `enrichment`   | Orquesta `ports`+`headers`+`tls` sobre los hosts activos de un escaneo, concurrentemente | Compone los tres anteriores |
+| `takeover`     | Riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de terceros) | Resolución DNS de CNAME sobre hosts **sin** A/AAAA — reconocimiento pasivo, sin verificar |
+| `enrichment`   | Orquesta `ports`+`headers`+`tls` (hosts activos) y `takeover` (todos los registros), concurrentemente | Compone los cuatro anteriores |
 
-`ports`/`headers`/`tls` nunca lanzan excepción: un host sin ese servicio (p.
-ej. sin HTTPS en el 443) se refleja en el campo `error` del resultado, mismo
-criterio de degradación controlada que `subdomains`. `enrichment.enrich_scan()`
-solo actúa sobre `SubdomainScanResult.active_records` — un host que no
-resuelve, o que solo resuelve a direccionamiento interno, no tiene servicio
-real que inspeccionar. Los tres módulos devuelven `DiscoveryFinding`
+`ports`/`headers`/`tls`/`takeover` nunca lanzan excepción: un host sin ese
+servicio (p. ej. sin HTTPS en el 443) se refleja en el campo `error` del
+resultado, mismo criterio de degradación controlada que `subdomains`.
+`enrichment.enrich_scan()` actúa sobre `SubdomainScanResult.active_records`
+para puertos/cabeceras/TLS — un host que no resuelve, o que solo resuelve a
+direccionamiento interno, no tiene servicio real que inspeccionar — pero
+sobre **todos** los registros (`.records`) para `takeover`: la señal de un
+CNAME abandonado vive precisamente en los hosts que no resuelven por
+A/AAAA. Los módulos devuelven `DiscoveryFinding`/`TakeoverCandidate`
 (`discovery/models.py`), no un `Finding` de SQLAlchemy: la capa de
 descubrimiento no conoce la de persistencia.
 
@@ -72,33 +86,73 @@ los hostnames de dos escaneos del mismo dominio — la razón de ser de
 persistir escaneos en el tiempo). La API (2.1) y el dashboard (2.6) consultan
 por aquí, no construyen `select()` propios.
 
-### 2.4 Capa IA — `src/atalaya/ai` (Paso 5 ✅)
-- `provider` — `LLMProvider` (interfaz, ABC) + `AnthropicProvider`. Dos formas
-  de pedir una respuesta: `complete()` (texto libre) y `complete_tool()`
-  (fuerza una llamada a herramienta con `tool_choice` fijo, para una
-  respuesta con forma garantizada — más fiable que pedir "responde en JSON"
-  sobre texto libre, que basta una frase de cortesía para romper).
+### 2.4 Capa IA — `src/atalaya/ai` (Paso 5 ✅ + sistema de agentes)
+
+- `provider` — `LLMProvider` (interfaz, ABC) + `AnthropicProvider` +
+  `GeminiProvider`. Dos formas de pedir una respuesta: `complete()` (texto
+  libre) y `complete_tool()` (fuerza una llamada a herramienta — `tool_choice`
+  fijo en Anthropic, `FunctionCallingConfig(mode="ANY",
+  allowed_function_names=[...])` en Gemini — para una respuesta con forma
+  garantizada, más fiable que pedir "responde en JSON" sobre texto libre).
+  `AI_PROVIDER` en `.env` elige cuál se instancia; ningún otro módulo de
+  `ai/` conoce el SDK concreto.
 - `triage` — `triage_finding`/`triage_findings`: reciben un `Asset` y un
   `Finding`, devuelven severidad razonada, impacto explicado y remediación
   concreta. Aquí se aplica el principio que el proyecto asume como central:
   **dar a la IA contexto estructurado** (`build_finding_context`, campos
   seleccionados a propósito), **no un dump de la fila de BD**. Degradación
   controlada: un fallo de un hallazgo no aborta el resto (`TriageBatchResult`).
-- `query` — `ask()`: consulta en lenguaje natural sobre un escaneo completo
-  (todos los activos y hallazgos, no uno aislado). Separado de `triage` porque
-  ambos prompts necesitan un contexto de tamaño muy distinto.
+  **Sin tocar desde el Paso 5**, por decisión explícita.
 
-### 2.5 Informes — `src/atalaya/reporting` (Paso 7 ✅)
+Sobre esa misma interfaz, un sistema de **cinco agentes especializados**
+más (no un único prompt genérico), cada uno con contexto y responsabilidad
+propia, y sin solape entre ellos:
+
+| Agente | Fichero | Contexto que recibe | Devuelve |
+|---|---|---|---|
+| Prompter (intermediario) | `prompter.py` | Resumen ligero del escaneo (nº activos, hallazgos por severidad, si hay candidatos de takeover) + la pregunta | `AnalystResult`, tras enrutar a `analyst` o `takeover_detective` |
+| Analista | `analyst.py` | Dominio, distribución de severidades, hallazgos `critical`/`high` (con impacto ya triado si existe) | `AnalystResult`: respuesta, patrones, combinaciones preocupantes, prioridades |
+| Detective de takeover | `takeover_detective.py` | Los `TakeoverCandidate`/`Finding(finding_type="subdomain_takeover_risk")` ya detectados | Lista de `TakeoverAssessment` (prioridad + razonamiento, sin confirmar explotabilidad) |
+| Redactor de informes | `report_writer.py` | `risk_score`, hallazgos `critical`/`high` | 2-3 párrafos en prosa, sin jerga técnica |
+| Comparador de escaneos | `diff_analyst.py` | `ScanDiff` (nuevos/desaparecidos/comunes) + los dos `Scan` completos | Valoración en prosa: expansión de superficie, riesgo de lo desaparecido |
+
+Dos asimetrías deliberadas, consistentes con el criterio ya establecido en
+el Paso 5 (`ask()` propaga, `triage_finding()` degrada):
+
+- **Colección → degrada con gracia**: `takeover_detective` (una lista de
+  candidatos) nunca lanza; un fallo del proveedor no debe tumbar el resto
+  del escaneo.
+- **Petición puntual → propaga `AIProviderError`**: `prompter`, `analyst`,
+  `report_writer` y `diff_analyst` sí propagan (→ 502 vía `exception_handler`)
+  — **excepto** cuando se integran en el informe PDF (2.5), donde el
+  criterio cambia porque el informe no puede depender de la IA.
+
+`ai/query.py::ask()` (Paso 5) se **retiró**: `POST /findings/ask` pasa por
+`prompter.py`, que lo reemplaza con más señal (patrones, combinaciones,
+prioridades) en vez de solo prosa libre.
+
+### 2.5 Informes — `src/atalaya/reporting` (Paso 7 ✅ + resumen con IA)
 Genera un informe ejecutivo en PDF a partir de un escaneo ya persistido:
-portada (dominio, fecha), resumen ejecutivo con contadores por severidad, y
-el detalle de cada activo y hallazgo con impacto y remediación. Cubre el
-requisito de "reporte con portada".
+portada (dominio, fecha), `risk_score` (0-100), resumen ejecutivo en
+lenguaje natural (opcional, con IA), y el detalle de cada activo y hallazgo
+con impacto y remediación. Cubre el requisito de "reporte con portada".
 
 - `generator.py` — `render_html()` (Jinja2, puro y síncrono, fácil de probar
   sin generar un PDF real) y `generate_report()` (convierte a PDF con
   `xhtml2pdf` en un hilo aparte vía `asyncio.to_thread`, para no bloquear el
   loop de eventos con trabajo de CPU). Recibe un `Scan` ya cargado, no un
-  `scan_id` — mismo criterio que `ai/query.py::ask()`.
+  `scan_id` — mismo criterio que `ai/prompter.py`/`ai/analyst.py`.
+- `_compute_risk_score()` — pesos por severidad (`critical=25, high=10,
+  medium=4, low=1`), sumados y acotados a 100. Fuente de verdad única: el
+  dashboard replica exactamente estos pesos para no mostrar un número
+  distinto al del PDF del mismo escaneo.
+- `generate_report(scan, provider=None)` — con `provider`, incluye un
+  resumen ejecutivo de `ai/report_writer.py::write_executive_summary()`.
+  **Si `provider` es `None`, o si falla (`AIProviderError`), el informe se
+  genera igual, sin resumen** — el informe con portada era un requisito
+  obligatorio antes de que existiera la capa IA, así que nunca puede
+  depender de ella. Asimetría deliberada frente al endpoint de diff (2.1),
+  que sí propaga el fallo del proveedor.
 - Se elige **xhtml2pdf** sobre WeasyPrint porque es Python puro: no depende
   de Pango/Cairo/GTK, ausentes en un Windows sin ese runtime instalado.
 - El PDF se escribe de forma determinista en
@@ -108,10 +162,24 @@ requisito de "reporte con portada".
 - Expuesto vía `GET /scans/{id}/report` (API) y un botón en la pestaña
   «Escaneos» del dashboard.
 
-### 2.6 Dashboard (Streamlit) — `dashboard/` (Paso 6 ✅)
+### 2.6 Dashboard (Streamlit) — `dashboard/` (Paso 6 ✅ + rediseño visual)
 Aplicación web que consume la API: lanzar escaneos, explorar activos y
-hallazgos, triar con IA, consultar en lenguaje natural, y descargar el
-informe PDF de un escaneo.
+hallazgos, triar con IA, consultar en lenguaje natural, descargar el
+informe PDF de un escaneo, y ver el `risk_score` como métrica principal del
+detalle de un escaneo (calculado en el propio dashboard a partir de la
+severidad de los hallazgos ya devueltos por `GET /scans/{id}`, con los
+mismos pesos que `reporting/generator.py::_RISK_WEIGHTS`, sin llamar a la
+capa de reporting directamente — el dashboard es siempre un cliente HTTP
+puro de la API).
+
+Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
+`st.markdown(..., unsafe_allow_html=True)` — ver "Decisiones de diseño")
+para parecer una herramienta comercial de seguridad (referentes: Shodan,
+VirusTotal, Maltego), no la demo por defecto de Streamlit: fondo oscuro,
+tipografía monoespaciada para datos técnicos, acento único, rojo reservado
+a severidad crítica. *(Sección a completar/verificar con el detalle final
+de esa fase — ver `memorias/` para el proceso completo, incluido el bug de
+renderizado encontrado y corregido.)*
 
 ## 3. Flujo de datos
 
@@ -119,16 +187,18 @@ informe PDF de un escaneo.
 dominio
    │  POST /scans
    ▼
-[Descubrimiento]  subdominios → puertos → cabeceras → TLS
+[Descubrimiento]  subdominios (crt.sh + Shodan) → puertos → cabeceras → TLS
+   │               → riesgo de takeover (sobre TODOS los registros)
    │  hallazgos crudos
    ▼
 [PostgreSQL]  se persisten activos y hallazgos
    │
    ▼
 [Capa IA]  triaje: severidad + impacto + remediación
+   │       (+ prompter/analyst/takeover_detective/report_writer/diff_analyst)
    │
-   ├──▶ [Dashboard]  visualización y consulta NL
-   └──▶ [Informes]   PDF con portada
+   ├──▶ [Dashboard]  visualización, consulta NL, risk_score, diff
+   └──▶ [Informes]   PDF con portada + risk_score + resumen ejecutivo IA
 ```
 
 ## 4. Decisiones de diseño
@@ -138,18 +208,31 @@ dominio
 - **PostgreSQL** frente a SQLite en producción por concurrencia y por ser un
   motor realista; SQLite queda como fallback de desarrollo.
 - **Capa IA desacoplada** tras una interfaz `LLMProvider`: el modelo es un
-  detalle de configuración, no una dependencia rígida.
+  detalle de configuración, no una dependencia rígida — demostrado sumando
+  `GeminiProvider` sin tocar ni `triage.py` ni los cinco agentes nuevos.
+- **Sistema de agentes especializados, no un prompt único**: cada tarea de
+  IA (triaje, visión global, takeover, informe, diff, enrutado) tiene su
+  propio contexto y su propio criterio de degradación — ver 2.4.
 - **Módulos de descubrimiento independientes**: se pueden añadir o desactivar
-  técnicas sin tocar el resto del sistema.
+  técnicas sin tocar el resto del sistema (Shodan y takeover se sumaron sin
+  modificar `ports`/`headers`/`tls`).
 - **Salvaguarda de autorización** (`SCAN_ALLOWLIST`): limita los objetivos
   escaneables, alineado con un uso responsable de la herramienta.
+- **Reconocimiento nunca verifica explotabilidad** (restricción de seguridad
+  #6): aplicado literalmente en `discovery/takeover.py` — patrón de CNAME,
+  nunca una petición HTTP al recurso de terceros para confirmar si está
+  libre.
+- **`st.html()`, no `st.markdown(unsafe_allow_html=True)`**, para CSS
+  grande en el dashboard: el parser de Markdown de Streamlit no trata de
+  forma fiable un bloque `<style>` grande con líneas en blanco dentro — bug
+  real, reproducido y corregido (ver `memorias/` y CLAUDE.md).
 
 ## 5. Mapa de requisitos → implementación
 
 | Requisito de la práctica | Dónde se resuelve                          |
 |--------------------------|--------------------------------------------|
 | Base de datos            | `core/models.py` + `core/persistence.py` (Paso 3 ✅) |
-| API / webhook            | `api/` (propia, Paso 4 ✅) + `discovery/`/`ai/` (consumo de crt.sh y Anthropic) |
+| API / webhook            | `api/` (propia, Paso 4 ✅) + `discovery/`/`ai/` (consumo de crt.sh, Shodan, Anthropic/Gemini) |
 | Aplicación web           | `dashboard/app.py`                         |
 | GitHub con historial     | Commits por fase                           |
 | Reporte con portada      | `reporting/generator.py`, `GET /scans/{id}/report` |
@@ -165,6 +248,18 @@ dominio
 6. **Paso 6 — Dashboard completo** ✅
 7. **Paso 7 — Generador de informes** ✅ (PDF con portada, API + dashboard)
 
+Los siete pasos numerados son la entrega evaluable; están cerrados desde
+antes de lo que sigue. Ampliación posterior, más allá de los requisitos
+obligatorios:
+
+8. **Shodan + subdomain takeover** ✅ — segunda fuente de enumeración,
+   detección de riesgo de takeover vía CNAME.
+9. **Sistema de agentes de IA** ✅ — 5 agentes nuevos sobre `LLMProvider`
+   (prompter, analyst, takeover_detective, report_writer, diff_analyst),
+   `GeminiProvider`, endpoint de diff, resumen ejecutivo del informe.
+10. **Dashboard: diseño visual profesional** 🔨 — estética de herramienta
+    comercial de seguridad, `risk_score` como métrica principal. *(Detalle
+    completo del proceso en `memorias/`.)*
 
 ---
 
@@ -276,3 +371,100 @@ interna. Se marca mediante `leaks_internal_addressing`, genera un `Finding`
   `apply_discovery_findings()`.
 - **Paso 4 (API)** ✅ — `POST /scans` devuelve el `Scan` persistido a través de
   `api/schemas.py` (no se exponen los modelos ORM directamente).
+
+---
+
+## 8. Detalle: riesgo de subdomain takeover (ampliación)
+
+### 8.1 Por qué mirar exactamente los hosts que NO resuelven
+
+Un *subdomain takeover* ocurre cuando un CNAME sigue apuntando a un
+servicio de hosting de terceros (GitHub Pages, Heroku, S3, Azure...) cuyo
+recurso ya no está reclamado: cualquiera puede darlo de alta en ese
+proveedor y servir contenido bajo el dominio de la víctima.
+
+Un host `active` (resuelve por A/AAAA a una IP real) tiene un servicio
+propio detrás — no depende de un CNAME de terceros sin reclamar. La señal
+vive en los hosts `no_answer`/`nxdomain`/`unroutable`: existen en DNS
+(crt.sh los certificó alguna vez, o Shodan los indexó) pero no tienen IP
+propia asociada — exactamente el patrón de un CNAME que apuntaba a un
+recurso que se liberó. Es la deuda técnica que el propio CLAUDE.md ya
+documentaba tras el escaneo de `github.com` en el Paso 2 (~50 hosts en
+`no_answer`).
+
+### 8.2 Flujo interno
+
+```
+SubdomainScanResult.records  (TODOS, no solo active_records)
+   │
+   ▼
+[filtrar por status]  no_answer / nxdomain / unroutable
+   │  candidatos a inspeccionar
+   ▼
+[_resolve_cname]  consulta CNAME, concurrente, acotada por semáforo
+   │  nunca lanza excepción (degradación controlada)
+   ▼
+[match_takeover_pattern]  compara contra TAKEOVER_PATTERNS (~20 proveedores)
+   │                      comparación por sufijo + punto separador (mismo
+   │                      criterio anti-engaño que normalize_hostname)
+   ▼
+list[TakeoverCandidate]  (hostname, cname, provider, pattern_matched)
+```
+
+Integrado en `discovery/enrichment.py::enrich_scan()` como cuarta rama del
+`asyncio.gather`, junto a puertos/cabeceras/TLS — pero sobre
+`result.records` completo, no `result.active_records`. Cada
+`TakeoverCandidate` se traduce a `DiscoveryFinding`
+(`finding_type="subdomain_takeover_risk"`) dentro de
+`EnrichmentResult.findings_by_hostname()`, así que se persiste con el mismo
+mecanismo genérico que cabeceras/TLS, sin que `core/persistence.py`
+necesite conocer este tipo de hallazgo.
+
+### 8.3 Por qué nunca verifica el recurso de terceros
+
+Coincidir con un patrón de la tabla **no** confirma que el recurso esté
+sin reclamar — eso exigiría una petición HTTP al proveedor de terceros
+para comprobar si responde "no existe", y eso cruzaría de reconocimiento a
+verificación de explotabilidad, prohibido explícitamente por la
+restricción de seguridad #6 de CLAUDE.md. Se prefiere un falso positivo
+señalado por patrón a confirmar un takeover real. La capa IA
+(`ai/takeover_detective.py`) razona sobre el candidato y explica el motivo
+del riesgo, pero con la misma restricción aplicada a su *system prompt*:
+nunca afirma que el recurso esté confirmado como secuestrable.
+
+## 9. Detalle: enrutado de preguntas en lenguaje natural (ampliación)
+
+```
+pregunta del usuario
+   │  POST /findings/ask {domain|scan_id, question}
+   ▼
+[resolver Scan]  repository.get_scan()/get_latest_scan() — igual que antes
+   │  404 si no hay escaneo completado
+   ▼
+[ai/prompter.py::route_and_answer]
+   │
+   ├─ build_routing_context(scan)  resumen ligero: nº activos, hallazgos
+   │                                por severidad, si hay candidatos de takeover
+   │
+   ├─ complete_tool("route_query")  el modelo decide: "analyst" o "takeover",
+   │                                y reformula la pregunta con contexto ya
+   │                                incorporado (refined_question)
+   │
+   │  clasificación insegura (agent no reconocido, o refined_question
+   │  vacía) → fallback silencioso a "analyst", nunca se queda sin responder
+   │
+   ├─▶ "analyst"   → ai/analyst.py::analyze_scan(provider, scan, question=...)
+   └─▶ "takeover"  → hallazgos finding_type="subdomain_takeover_risk" ya
+                     persistidos (no vuelve a invocar discovery/takeover.py)
+                     → ai/takeover_detective.py, envuelto en AnalystResult
+   │
+   ▼
+AnalystResult  (answer, patterns, concerning_combinations, priorities)
+   │  siempre la misma forma, venga de cualquiera de los dos agentes
+   ▼
+AskResponse  (API) — expone los cuatro campos, no solo `answer`
+```
+
+El paso de enrutado es una petición puntual: si el proveedor falla ahí,
+`AIProviderError` se propaga (→ 502), igual que hacía `ai/query.py::ask()`
+en el Paso 5 — no hay nada parcial que conservar en una única pregunta.
