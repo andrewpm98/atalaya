@@ -92,7 +92,10 @@ src/atalaya/
 │   ├── tls.py                     inspect_tls() — versión, emisor, caducidad
 │   ├── takeover.py                find_takeover_candidates() — riesgo de
 │   │                             subdomain takeover vía patrón de CNAME
-│   │                             (reconocimiento pasivo, nunca verifica)
+│   │                             (reconocimiento pasivo puro, nunca HTTP)
+│   ├── takeover_verify.py         verify_candidates() — verificación HTTP
+│   │                             opt-in (TAKEOVER_VERIFY): huella de "no
+│   │                             reclamado" → "alta sospecha", nunca confirma
 │   └── enrichment.py              enrich_scan() — orquesta las cuatro técnicas;
 │                                 takeover corre sobre TODOS los registros,
 │                                 las otras tres solo sobre los activos
@@ -206,6 +209,22 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 > mismo mecanismo genérico que cabeceras/TLS, sin tocar
 > `core/persistence.py`. Módulo independiente de `subdomains.py` (sin
 > import circular), mismo criterio que `shodan.py`.
+
+> **Ampliación (verificación HTTP de takeover, opt-in):** `discovery/
+> takeover_verify.py` añade el segundo nivel — comprobar si el destino del
+> CNAME sirve la huella de "recurso no reclamado" del proveedor (`GET` a la
+> página de error pública, tabla `TAKEOVER_FINGERPRINTS` alineada por sufijo
+> con `TAKEOVER_PATTERNS`). **Off por defecto** (`TAKEOVER_VERIFY=false`): el
+> flujo estándar no cambia. Cuando se activa, `enrich_scan()` llama a
+> `verify_candidates()` tras `find_takeover_candidates()`; el candidato con
+> huella pasa a `TakeoverCandidate.unclaimed_indicator`, y
+> `findings_by_hostname()` redacta la evidencia como **"alta sospecha — no
+> confirmado"** (patrón + indicio), nunca "confirmado" — coherente con la
+> restricción #6 reabierta arriba. Salvaguardas obligatorias en el propio
+> módulo: opt-in, `is_authorized()` por hostname antes de sondear, y traza de
+> auditoría (`logger.info`) de cada petición a un tercero. `takeover.py` no se
+> toca: sigue siendo pasivo puro y su test estático de "no importa httpx"
+> sigue en verde — la petición HTTP vive solo en el módulo nuevo.
 
 > **Ampliación (sistema de agentes de IA, post-Paso 7):** además del triaje
 > original, cinco agentes nuevos sobre la misma interfaz `LLMProvider` (ver
@@ -369,9 +388,29 @@ cómo trata esto.
    comunes por defecto (`COMMON_PORTS`), no un barrido de los 65535. Un
    escaneo agresivo puede degradar el servicio del objetivo y es
    indistinguible de un ataque.
-6. **Nunca verificar explotabilidad.** La herramienta señala patrones de riesgo
-   (p. ej. un nombre apuntando a hosting no reclamado); no comprueba si son
-   explotables. Eso excede el reconocimiento y requiere autorización expresa.
+6. **Nunca confirmar explotabilidad ni intentar el secuestro.** La herramienta
+   señala patrones de riesgo (p. ej. un nombre apuntando a hosting no
+   reclamado); jamás reclama el recurso de terceros, ni prueba que el ataque
+   funcione, ni marca un hallazgo como "takeover confirmado". Ese paso excede
+   el reconocimiento y requiere autorización expresa.
+
+   **Excepción acotada — verificación HTTP opcional (`TAKEOVER_VERIFY`, off por
+   defecto).** La versión original de esta restricción prohibía *toda* petición
+   HTTP al recurso de terceros. Se reabre de forma deliberada y estrecha, no en
+   silencio: cuando `TAKEOVER_VERIFY=true`, `discovery/takeover_verify.py` hace
+   un `GET` a la **página de error pública** del proveedor apuntado por el CNAME
+   y busca su huella de "recurso no reclamado" (p. ej. el 404 «There isn't a
+   GitHub Pages site here»). Esto sigue del lado del reconocimiento —lee una
+   respuesta pública, no reclama nada ni prueba el ataque— y por eso el hallazgo
+   se eleva a **"alta sospecha — no confirmado"**, nunca a "confirmado". Las tres
+   salvaguardas *son* la "autorización expresa" que esta restricción exige, y son
+   obligatorias: (a) opt-in explícito (`TAKEOVER_VERIFY=false` por defecto — el
+   comportamiento por defecto de la herramienta no cambia); (b) el hostname
+   candidato debe pasar `is_authorized()` (estar en `SCAN_ALLOWLIST`) antes de
+   sondear su destino; (c) cada petición a un tercero deja traza de auditoría en
+   el log. El módulo de detección `discovery/takeover.py` permanece
+   estrictamente pasivo (solo DNS, sin `httpx`) y su test estático lo garantiza:
+   la petición HTTP vive solo en el módulo de verificación, separado.
 
 ---
 
@@ -386,7 +425,7 @@ cómo trata esto.
 | Capa IA tras interfaz `LLMProvider` | El modelo es configuración, no dependencia rígida — probado sumando `GeminiProvider` sin tocar `triage.py` ni los agentes |
 | Triaje IA **después** de persistir | La IA clasifica y explica sobre evidencia verificada; no descubre |
 | Endpoints en 501, no ausentes | El contrato de la API se fija en diseño y se rellena por fases |
-| Shodan sin verificación HTTP del CNAME (takeover) | Solo patrón DNS — comprobar si el recurso de terceros responde "no existe" cruzaría a verificar explotabilidad (restricción #6) |
+| Detección de takeover: solo patrón DNS por defecto | La detección (`discovery/takeover.py`) es pasiva pura: patrón de CNAME, sin HTTP. La verificación HTTP existe pero es **opt-in** (`TAKEOVER_VERIFY`, off por defecto) y vive en un módulo aparte (`discovery/takeover_verify.py`) — ver restricción #6, "Excepción acotada". Eleva a "alta sospecha", nunca a "confirmado" |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
 
 ---
@@ -461,7 +500,22 @@ respectivamente.
 - **Tabla de patrones de takeover no exhaustiva.** `discovery/takeover.py`
   cubre ~20 proveedores citados habitualmente (GitHub Pages, Heroku, S3,
   Azure...), no una lista cerrada — mismo criterio de honestidad que
-  `COMMON_PORTS`.
+  `COMMON_PORTS`. La tabla de huellas de verificación
+  (`TAKEOVER_FINGERPRINTS` en `discovery/takeover_verify.py`) es un
+  subconjunto aún menor: solo los proveedores con una huella de "recurso no
+  reclamado" pública, estable y bien documentada. Un candidato cuyo
+  proveedor tiene patrón pero no huella se queda en detección por patrón, sin
+  verificar — igual de honesto que no inventar una huella frágil.
+- **Verificación de takeover: acotada por el propio alcance de detección.**
+  `find_takeover_candidates()` solo mira hosts que **no** resuelven por
+  A/AAAA (`no_answer`/`nxdomain`/`unroutable`). Para esos, el destino del
+  CNAME suele seguir resolviendo en la infraestructura compartida del
+  proveedor (`*.github.io`, `*.s3.amazonaws.com`...) y devolver su 404 de
+  "no reclamado" — que es justo lo que la verificación busca. Pero si el
+  propio destino del CNAME tampoco resuelve, el `GET` no conecta y el
+  candidato se queda en patrón puro (degradación controlada, no error). No se
+  amplió el alcance de detección a hosts `active` con CNAME sospechoso: es
+  una decisión separada, no la que se pidió aquí.
 - ~~**Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
   Anthropic.**~~ **Resuelto.** Con `ANTHROPIC_API_KEY` ya disponible, se
   verificaron en vivo los seis agentes (incluido `ai/triage.py`, que

@@ -50,7 +50,8 @@ Cada técnica es un módulo independiente con salida normalizada:
 | `headers`      | HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy | Petición HTTP(S) |
 | `tls`          | Versión de protocolo, emisor, caducidad del certificado | `cryptography` sobre el `ssl_object` de la conexión |
 | `takeover`     | Riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de terceros) | Resolución DNS de CNAME sobre hosts **sin** A/AAAA — reconocimiento pasivo, sin verificar |
-| `enrichment`   | Orquesta `ports`+`headers`+`tls` (hosts activos) y `takeover` (todos los registros), concurrentemente | Compone los cuatro anteriores |
+| `takeover_verify` | Verificación HTTP **opt-in** (`TAKEOVER_VERIFY`) de un candidato: huella de "recurso no reclamado" en la página de error del proveedor | `GET` al destino del CNAME — off por defecto, gated por `SCAN_ALLOWLIST`, con auditoría (ver §8.3) |
+| `enrichment`   | Orquesta `ports`+`headers`+`tls` (hosts activos) y `takeover` (todos los registros), concurrentemente; encadena `takeover_verify` si está activado | Compone los cinco anteriores |
 
 `ports`/`headers`/`tls`/`takeover` nunca lanzan excepción: un host sin ese
 servicio (p. ej. sin HTTPS en el 443) se refleja en el campo `error` del
@@ -222,10 +223,13 @@ dominio
   modificar `ports`/`headers`/`tls`).
 - **Salvaguarda de autorización** (`SCAN_ALLOWLIST`): limita los objetivos
   escaneables, alineado con un uso responsable de la herramienta.
-- **Reconocimiento nunca verifica explotabilidad** (restricción de seguridad
-  #6): aplicado literalmente en `discovery/takeover.py` — patrón de CNAME,
-  nunca una petición HTTP al recurso de terceros para confirmar si está
-  libre.
+- **Reconocimiento no confirma explotabilidad ni intenta el secuestro**
+  (restricción de seguridad #6): la detección (`discovery/takeover.py`) es
+  patrón de CNAME puro, sin HTTP. La verificación HTTP (`discovery/
+  takeover_verify.py`) existe pero es **opt-in** y acotada: lee la página de
+  error pública del proveedor, eleva a "alta sospecha — no confirmado" (nunca
+  "confirmado"), exige `TAKEOVER_VERIFY=true` + hostname en `SCAN_ALLOWLIST` +
+  auditoría de cada petición. Detalle y justificación en §8.3.
 - **`st.html()`, no `st.markdown(unsafe_allow_html=True)`**, para CSS
   grande en el dashboard: el parser de Markdown de Streamlit no trata de
   forma fiable un bloque `<style>` grande con líneas en blanco dentro — bug
@@ -425,17 +429,53 @@ Integrado en `discovery/enrichment.py::enrich_scan()` como cuarta rama del
 mecanismo genérico que cabeceras/TLS, sin que `core/persistence.py`
 necesite conocer este tipo de hallazgo.
 
-### 8.3 Por qué nunca verifica el recurso de terceros
+### 8.3 Verificación HTTP opt-in, y por qué sigue sin "confirmar"
 
-Coincidir con un patrón de la tabla **no** confirma que el recurso esté
-sin reclamar — eso exigiría una petición HTTP al proveedor de terceros
-para comprobar si responde "no existe", y eso cruzaría de reconocimiento a
-verificación de explotabilidad, prohibido explícitamente por la
-restricción de seguridad #6 de CLAUDE.md. Se prefiere un falso positivo
-señalado por patrón a confirmar un takeover real. La capa IA
-(`ai/takeover_detective.py`) razona sobre el candidato y explica el motivo
-del riesgo, pero con la misma restricción aplicada a su *system prompt*:
-nunca afirma que el recurso esté confirmado como secuestrable.
+Coincidir con un patrón de la tabla **no** confirma que el recurso esté sin
+reclamar. La detección por patrón (`discovery/takeover.py`) se queda
+deliberadamente ahí: es reconocimiento DNS puro, sin una sola petición HTTP.
+
+El **segundo nivel** —comprobar si el destino del CNAME sirve la huella de
+"recurso no reclamado" del proveedor (el 404 «There isn't a GitHub Pages
+site here», el `NoSuchBucket` de S3...)— vive en un módulo aparte,
+`discovery/takeover_verify.py`, y es **opt-in** (`TAKEOVER_VERIFY`, off por
+defecto). La versión original de la restricción #6 prohibía *toda* petición
+HTTP al recurso de terceros; se reabre de forma estrecha y razonada (no en
+silencio — ver la propia restricción #6 en CLAUDE.md, reescrita en paralelo
+a este cambio).
+
+**Por qué esto sigue del lado del reconocimiento.** La verificación hace un
+`GET` a una página de error **pública** del proveedor y busca su huella
+textual. No reclama el recurso, no da de alta nada en el proveedor, no
+prueba que el ataque funcione. Por eso el resultado nunca es "takeover
+confirmado": el hallazgo se eleva a **"alta sospecha — no confirmado"**, con
+la huella como *indicio adicional* sobre el patrón, no como prueba de
+explotabilidad. La frontera que #6 protege —no confirmar, no secuestrar—
+se mantiene intacta.
+
+**Las tres salvaguardas son la "autorización expresa" que #6 exige**, y son
+obligatorias, aplicadas en el propio `takeover_verify.py`:
+
+1. **Opt-in explícito.** Sin `TAKEOVER_VERIFY=true`, `verify_candidates()`
+   devuelve los candidatos sin tocar y no se hace ninguna petición: el
+   comportamiento por defecto de la herramienta no cambia.
+2. **Limitado a `SCAN_ALLOWLIST`.** Antes de sondear el destino de un
+   candidato, su hostname debe pasar `is_authorized()`. El sondeo contacta
+   necesariamente al proveedor de terceros (es la naturaleza de la
+   comprobación), pero solo para candidatos surgidos de un escaneo
+   autorizado.
+3. **Auditoría.** Cada petición a un tercero deja traza en el log
+   (`logger.info` con hostname, destino y resultado), para que quede
+   registro de qué infraestructura ajena se ha contactado y por qué.
+
+Degradación controlada, igual que el resto del descubrimiento: si el destino
+no resuelve, la conexión falla o no hay huella, el candidato se queda en
+detección por patrón (sin `unclaimed_indicator`), nunca en error.
+
+La capa IA (`ai/takeover_detective.py`) razona sobre el candidato —con o sin
+indicio— y explica el motivo del riesgo, pero con la misma restricción en su
+*system prompt*: nunca afirma que el recurso esté confirmado como
+secuestrable.
 
 ## 9. Detalle: enrutado de preguntas en lenguaje natural (ampliación)
 
