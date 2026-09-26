@@ -41,6 +41,9 @@ class ResolutionStatus(str, Enum):
     NO_ANSWER = "no_answer"      # existe pero sin registros A/AAAA
     TIMEOUT = "timeout"          # el resolver no respondió a tiempo
     ERROR = "error"              # fallo inesperado
+    WILDCARD = "wildcard"        # resuelve solo a la IP que responde por CUALQUIER
+                                  # subdominio del dominio (DNS wildcard); no es un
+                                  # host real y distinto, no cuenta como activo
 
 
 class SubdomainRecord(BaseModel):
@@ -107,6 +110,16 @@ class SubdomainScanResult(BaseModel):
         default_factory=list,
         description="Incidencias no fatales (p. ej. una fuente no disponible)",
     )
+    wildcard_ips: list[str] = Field(
+        default_factory=list,
+        description=(
+            "IPs a las que resuelve un subdominio aleatorio inexistente bajo "
+            "este dominio. No vacío implica DNS wildcard: cualquier nombre "
+            "'existe', así que un registro que resuelve exclusivamente a estas "
+            "IPs no es un host real y distinto (ver SubdomainRecord.status "
+            "WILDCARD)."
+        ),
+    )
 
     @property
     def total_discovered(self) -> int:
@@ -127,6 +140,21 @@ class SubdomainScanResult(BaseModel):
     def leaking_records(self) -> list[SubdomainRecord]:
         """Subdominios que exponen direccionamiento interno."""
         return [r for r in self.records if r.leaks_internal_addressing]
+
+    @property
+    def has_wildcard_dns(self) -> bool:
+        """True si se detectó DNS wildcard en el dominio analizado."""
+        return bool(self.wildcard_ips)
+
+    @property
+    def wildcard_records(self) -> list[SubdomainRecord]:
+        """Subdominios descartados por coincidir solo con la IP del wildcard.
+
+        Existen en `records` (con su nombre e IP reales, para trazabilidad),
+        pero no cuentan como activos: cualquier nombre aleatorio bajo este
+        dominio habría resuelto igual.
+        """
+        return [r for r in self.records if r.status is ResolutionStatus.WILDCARD]
 
     @property
     def total_active(self) -> int:
@@ -161,6 +189,8 @@ class SubdomainScanResult(BaseModel):
             "active": self.total_active,
             "unroutable": len(self.unroutable_records),
             "leaking_internal": len(self.leaking_records),
+            "wildcard_dns": self.has_wildcard_dns,
+            "wildcard_filtered": len(self.wildcard_records),
             "scan_targets": len(self.scan_targets()),
             "duration_seconds": self.duration_seconds,
             "errors": len(self.errors),

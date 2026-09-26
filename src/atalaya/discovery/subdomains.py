@@ -19,7 +19,12 @@ Estrategia en tres fases:
 3. **Verificación** — un certificado emitido, o un registro DNS indexado, no
    implica un host activo *hoy*. Se resuelve cada candidato por DNS, de
    forma concurrente y acotada, para distinguir la superficie *histórica* de
-   la *real*.
+   la *real*. Antes de esa resolución masiva, `detect_wildcard_dns()`
+   comprueba si el dominio tiene DNS wildcard (un subdominio aleatorio que
+   no puede existir, ¿resuelve igualmente?): si lo tiene, cualquier
+   candidato "resolvería" sin ser un host real y distinto, e inflaría el
+   recuento de activos sin generar ninguna incidencia — de ahí que sea un
+   defecto de corrección, no solo una limitación documentada.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import dns.asyncresolver
 import dns.exception
@@ -190,6 +196,39 @@ def build_resolver() -> dns.asyncresolver.Resolver:
     return resolver
 
 
+async def detect_wildcard_dns(domain: str, resolver: dns.asyncresolver.Resolver) -> list[str]:
+    """Comprueba si *domain* tiene DNS wildcard (`*.dominio` con una IP fija).
+
+    Consulta un subdominio con un UUID: no puede existir de verdad, así que
+    si resuelve, es porque el dominio responde a **cualquier** nombre bajo
+    él, no porque ese nombre concreto esté dado de alta. Sin este filtro, un
+    dominio con wildcard inflaría el recuento de activos con cualquier
+    candidato de crt.sh/Shodan que nunca se dio de alta como servicio real.
+
+    Nunca lanza excepción: un fallo de la consulta (timeout, servidor caído)
+    se trata igual que "no hay wildcard" — mismo criterio de degradación
+    controlada que `resolve_hostname`, y preferible a abortar el escaneo por
+    una comprobación que es una mejora de precisión, no el objetivo del
+    escaneo.
+
+    Returns:
+        Las IPs a las que resuelve el nombre aleatorio, o ``[]`` si no
+        resuelve (sin wildcard, o la consulta falló).
+    """
+    probe = f"{uuid4().hex}.{domain}"
+    ips: list[str] = []
+    for record_type in _DNS_RECORD_TYPES:
+        try:
+            answer = await resolver.resolve(probe, record_type)
+            ips.extend(str(rdata) for rdata in answer)
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            continue
+        except Exception as exc:  # noqa: BLE001 - degradación controlada
+            logger.info("Comprobación de wildcard DNS para %s: %s", domain, exc)
+            continue
+    return sorted(set(ips))
+
+
 async def resolve_hostname(
     hostname: str,
     resolver: dns.asyncresolver.Resolver,
@@ -311,8 +350,19 @@ async def enumerate_subdomains(
         result.finished_at = datetime.now(UTC)
         return result
 
-    # Fase 3 - verificación DNS concurrente y acotada
+    # Fase 3 - verificación DNS concurrente y acotada. La comprobación de
+    # wildcard va antes: es la que decide si algún registro de la resolución
+    # masiva de abajo hay que descartarlo como activo, no al revés.
     resolver = build_resolver()
+    wildcard_ips = await detect_wildcard_dns(target, resolver)
+    result.wildcard_ips = wildcard_ips
+    if wildcard_ips:
+        logger.warning(
+            "DNS wildcard detectado en %s: cualquier subdominio resuelve a %s",
+            target,
+            wildcard_ips,
+        )
+
     semaphore = asyncio.Semaphore(settings.dns_concurrency)
     tasks = [
         resolve_hostname(
@@ -325,6 +375,18 @@ async def enumerate_subdomains(
     ]
     records = await asyncio.gather(*tasks)
 
+    # Un registro cuyas IPs son un subconjunto de las del wildcard no es un
+    # host distinto: el mismo nombre aleatorio de detect_wildcard_dns habría
+    # resuelto igual. Se reclasifica antes de "confirmado por DNS" de abajo,
+    # para que is_active (y por tanto esa confirmación) ya lo excluya.
+    if wildcard_ips:
+        wildcard_set = set(wildcard_ips)
+        for record in records:
+            if record.status is ResolutionStatus.ACTIVE and set(record.ip_addresses) <= (
+                wildcard_set
+            ):
+                record.status = ResolutionStatus.WILDCARD
+
     # Un host que resuelve queda confirmado también por DNS.
     for record in records:
         if record.is_active and DiscoverySource.DNS not in record.sources:
@@ -335,11 +397,12 @@ async def enumerate_subdomains(
 
     logger.info(
         "Enumeración completada para %s: %d descubiertos, %d activos, "
-        "%d no enrutables, %d con direccionamiento interno",
+        "%d no enrutables, %d con direccionamiento interno, %d descartados por wildcard",
         target,
         result.total_discovered,
         result.total_active,
         len(result.unroutable_records),
         len(result.leaking_records),
+        len(result.wildcard_records),
     )
     return result

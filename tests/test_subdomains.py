@@ -22,6 +22,7 @@ from atalaya.discovery.models import (
     SubdomainScanResult,
 )
 from atalaya.discovery.subdomains import (
+    detect_wildcard_dns,
     enumerate_subdomains,
     fetch_crtsh,
     normalize_hostname,
@@ -211,8 +212,14 @@ async def test_enumerate_marca_activos(monkeypatch: pytest.MonkeyPatch) -> None:
             sources=list(sources),
         )
 
+    async def fake_no_wildcard(domain, resolver):
+        return []
+
     monkeypatch.setattr(
         "atalaya.discovery.subdomains.resolve_hostname", fake_resolve
+    )
+    monkeypatch.setattr(
+        "atalaya.discovery.subdomains.detect_wildcard_dns", fake_no_wildcard
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -274,6 +281,138 @@ async def test_enumerate_propaga_incidencias_de_shodan(monkeypatch: pytest.Monke
 async def test_enumerate_rechaza_dominio_invalido() -> None:
     with pytest.raises(InvalidTargetError):
         await enumerate_subdomains("no-es-un-dominio")
+
+
+# ─── Detección de DNS wildcard ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detect_wildcard_dns_sin_wildcard() -> None:
+    """Un dominio normal no responde por un subdominio aleatorio inexistente."""
+    import dns.resolver
+
+    class FakeResolver:
+        async def resolve(self, hostname: str, record_type: str):
+            raise dns.resolver.NXDOMAIN()
+
+    ips = await detect_wildcard_dns(DOMAIN, FakeResolver())
+    assert ips == []
+
+
+@pytest.mark.asyncio
+async def test_detect_wildcard_dns_detecta_wildcard() -> None:
+    """Si el nombre aleatorio resuelve, el dominio tiene DNS wildcard."""
+    import dns.resolver
+
+    class FakeResolver:
+        async def resolve(self, hostname: str, record_type: str):
+            if record_type == "A":
+                return ["45.33.32.156"]
+            raise dns.resolver.NoAnswer()
+
+    ips = await detect_wildcard_dns(DOMAIN, FakeResolver())
+    assert ips == ["45.33.32.156"]
+
+
+@pytest.mark.asyncio
+async def test_detect_wildcard_dns_degrada_ante_error_inesperado() -> None:
+    """Un fallo del resolver en la comprobación no debe abortar el escaneo."""
+
+    class FakeResolver:
+        async def resolve(self, hostname: str, record_type: str):
+            raise RuntimeError("resolver caído")
+
+    ips = await detect_wildcard_dns(DOMAIN, FakeResolver())
+    assert ips == []
+
+
+@pytest.mark.asyncio
+async def test_enumerate_filtra_registros_que_coinciden_con_wildcard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un host cuyas IPs son las del wildcard no cuenta como activo real."""
+
+    async def fake_wildcard(domain, resolver):
+        return ["45.33.32.156"]
+
+    async def fake_resolve(hostname, resolver, sources, semaphore):
+        if hostname == "real.ejemplo.com":
+            return SubdomainRecord(
+                hostname=hostname,
+                status=ResolutionStatus.ACTIVE,
+                ip_addresses=["93.184.216.34"],
+                sources=list(sources),
+            )
+        if hostname == "random123.ejemplo.com":
+            return SubdomainRecord(
+                hostname=hostname,
+                status=ResolutionStatus.ACTIVE,
+                ip_addresses=["45.33.32.156"],
+                sources=list(sources),
+            )
+        return SubdomainRecord(
+            hostname=hostname, status=ResolutionStatus.NXDOMAIN, sources=list(sources)
+        )
+
+    monkeypatch.setattr("atalaya.discovery.subdomains.detect_wildcard_dns", fake_wildcard)
+    monkeypatch.setattr("atalaya.discovery.subdomains.resolve_hostname", fake_resolve)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=json.dumps(
+                [{"name_value": "real.ejemplo.com\nrandom123.ejemplo.com"}]
+            ),
+        )
+
+    async with _client_con_respuesta(handler) as client:
+        resultado = await enumerate_subdomains(DOMAIN, client=client)
+
+    assert resultado.has_wildcard_dns
+    assert resultado.wildcard_ips == ["45.33.32.156"]
+
+    por_host = {r.hostname: r for r in resultado.records}
+    assert por_host["real.ejemplo.com"].status is ResolutionStatus.ACTIVE
+    assert por_host["random123.ejemplo.com"].status is ResolutionStatus.WILDCARD
+
+    # Descartado como activo, pero conservado en records con su IP real, no
+    # perdido silenciosamente.
+    assert resultado.total_active == 1
+    assert [r.hostname for r in resultado.wildcard_records] == ["random123.ejemplo.com"]
+    assert resultado.total_discovered == 3  # incluye el dominio raíz
+
+    # No es una confirmación real del host: no se le añade la fuente DNS.
+    assert DiscoverySource.DNS not in por_host["random123.ejemplo.com"].sources
+    assert DiscoverySource.DNS in por_host["real.ejemplo.com"].sources
+
+
+@pytest.mark.asyncio
+async def test_enumerate_sin_wildcard_no_filtra_nada(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sin DNS wildcard, ningún registro activo se reclasifica."""
+
+    async def fake_no_wildcard(domain, resolver):
+        return []
+
+    async def fake_resolve(hostname, resolver, sources, semaphore):
+        return SubdomainRecord(
+            hostname=hostname,
+            status=ResolutionStatus.ACTIVE,
+            ip_addresses=["45.33.32.156"],
+            sources=list(sources),
+        )
+
+    monkeypatch.setattr("atalaya.discovery.subdomains.detect_wildcard_dns", fake_no_wildcard)
+    monkeypatch.setattr("atalaya.discovery.subdomains.resolve_hostname", fake_resolve)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=json.dumps([{"name_value": "www.ejemplo.com"}]))
+
+    async with _client_con_respuesta(handler) as client:
+        resultado = await enumerate_subdomains(DOMAIN, client=client)
+
+    assert not resultado.has_wildcard_dns
+    assert resultado.wildcard_records == []
+    assert resultado.total_active == resultado.total_discovered
 
 
 # ─── Salvaguarda de autorización ─────────────────────────────────────────
@@ -340,6 +479,37 @@ def test_record_activo_requiere_ip() -> None:
     """Estado ACTIVE sin IPs no debe contar como activo."""
     record = SubdomainRecord(hostname="x.ejemplo.com", status=ResolutionStatus.ACTIVE)
     assert not record.is_active
+
+
+def test_modelo_expone_wildcard_detectado() -> None:
+    resultado = SubdomainScanResult(
+        domain=DOMAIN,
+        wildcard_ips=["45.33.32.156"],
+        records=[
+            SubdomainRecord(
+                hostname="a.ejemplo.com",
+                status=ResolutionStatus.ACTIVE,
+                ip_addresses=["93.184.216.34"],
+            ),
+            SubdomainRecord(
+                hostname="random.ejemplo.com",
+                status=ResolutionStatus.WILDCARD,
+                ip_addresses=["45.33.32.156"],
+            ),
+        ],
+    )
+    assert resultado.has_wildcard_dns
+    assert [r.hostname for r in resultado.wildcard_records] == ["random.ejemplo.com"]
+    assert resultado.total_active == 1
+    assert resultado.summary()["wildcard_dns"] is True
+    assert resultado.summary()["wildcard_filtered"] == 1
+
+
+def test_modelo_sin_wildcard_por_defecto() -> None:
+    resultado = SubdomainScanResult(domain=DOMAIN)
+    assert not resultado.has_wildcard_dns
+    assert resultado.wildcard_records == []
+    assert resultado.summary()["wildcard_dns"] is False
 
 
 def test_resultado_serializa_a_json() -> None:

@@ -49,6 +49,8 @@ async def _run_subdomains(args: argparse.Namespace) -> int:
     print(f"Activos (alcanzab.) : {summary['active']}")
     print(f"No enrutables       : {summary['unroutable']}")
     print(f"Objetivos de escaneo: {summary['scan_targets']} IPs")
+    if summary["wildcard_dns"]:
+        print(f"DNS wildcard        : sí ({summary['wildcard_filtered']} descartados)")
     if summary["duration_seconds"] is not None:
         print(f"Duración            : {summary['duration_seconds']:.2f} s")
 
