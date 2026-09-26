@@ -15,6 +15,7 @@ import asyncio
 import logging
 import ssl
 from datetime import UTC, datetime
+from typing import TypedDict
 
 from cryptography import x509
 
@@ -33,13 +34,19 @@ _EXPIRY_WARNING_DAYS = 30
 _OBSOLETE_VERSIONS = {"SSLv2", "SSLv3", "TLSv1", "TLSv1.1"}
 
 
-def parse_certificate(der_bytes: bytes) -> dict[str, object]:
-    """Extrae emisor y validez de un certificado en formato DER.
+class CertificateInfo(TypedDict):
+    """Campos deliberadamente mínimos — lo que necesita un informe de ASM,
+    no un volcado completo del certificado (que incluiría SANs, huella,
+    clave pública... ruido para este propósito)."""
 
-    Campos deliberadamente mínimos — lo que necesita un informe de ASM, no
-    un volcado completo del certificado (que incluiría SANs, huella, clave
-    pública... ruido para este propósito).
-    """
+    issuer: str
+    not_valid_before: datetime
+    not_valid_after: datetime
+    days_remaining: int
+
+
+def parse_certificate(der_bytes: bytes) -> CertificateInfo:
+    """Extrae emisor y validez de un certificado en formato DER."""
     cert = x509.load_der_x509_certificate(der_bytes)
     not_valid_after = cert.not_valid_after_utc
     not_valid_before = cert.not_valid_before_utc
