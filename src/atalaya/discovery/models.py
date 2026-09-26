@@ -270,7 +270,11 @@ class EnrichmentResult(BaseModel):
         `core/persistence.py` necesite conocer este tipo de hallazgo.
         """
         grouped: dict[str, list[DiscoveryFinding]] = {}
-        for item in (*self.header_results, *self.tls_results):
+        items: list[HeaderScanResult | TlsScanResult] = [
+            *self.header_results,
+            *self.tls_results,
+        ]
+        for item in items:
             if item.findings:
                 grouped.setdefault(item.hostname, []).extend(item.findings)
         for candidate in self.takeover_candidates:

@@ -64,3 +64,9 @@ extend-immutable-calls = ["fastapi.Depends"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[[tool.mypy.overrides]]
+# Sin stubs de tipos ni marcador py.typed — no es algo que se pueda
+# arreglar en el código propio.
+module = "xhtml2pdf.*"
+ignore_missing_imports = true

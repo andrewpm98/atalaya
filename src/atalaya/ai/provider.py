@@ -287,7 +287,7 @@ class GeminiProvider(LLMProvider):
             tools=[genai_types.Tool(function_declarations=[function])],
             tool_config=genai_types.ToolConfig(
                 function_calling_config=genai_types.FunctionCallingConfig(
-                    mode=mode,
+                    mode=genai_types.FunctionCallingConfigMode(mode),
                     allowed_function_names=[tool_name] if mode == "ANY" else None,
                 )
             ),
