@@ -264,12 +264,14 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 > depender de ella. Asimetría deliberada, documentada en el propio código.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **266 tests en verde** (170 al cierre
-del Paso 7; +90 en la ampliación posterior: Shodan, takeover, 5 agentes de
-IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del dashboard —
-severidad fuera de la escala y formato de las marcas de tiempo, ver
-"Dashboard: diseño visual"; +4 al corregir el *tool calling* de Gemini, ver
-"Deuda técnica conocida").
+55 objetivos de escaneo, 19 segundos. **288 tests en verde** (170 al cierre
+del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
+agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
+dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
+ver "Dashboard: diseño visual"; +4 al corregir el *tool calling* de Gemini,
+ver "Deuda técnica conocida"; +7 en la detección de wildcards DNS y +15 en la
+verificación HTTP opt-in de takeover, ver `memorias/
+Memoria_Ampliacion_Robustez_Atalaya.md`).
 
 ---
 
@@ -605,7 +607,7 @@ respectivamente.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 266)
+pytest -q                            # tests (deben pasar los 288)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
