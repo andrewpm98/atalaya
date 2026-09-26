@@ -39,6 +39,7 @@ from atalaya.discovery.models import (
 )
 from atalaya.discovery.ports import scan_ports
 from atalaya.discovery.takeover import find_takeover_candidates
+from atalaya.discovery.takeover_verify import verify_candidates
 from atalaya.discovery.tls import inspect_tls
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,12 @@ async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
     técnicas no tienen nada que hacer, pero la búsqueda de takeover sigue
     siendo relevante -- por eso ya no hay una salida temprana cuando
     `result.active_records` está vacío.
+
+    Tras el `gather`, si `TAKEOVER_VERIFY` está activo, `verify_candidates`
+    (`discovery/takeover_verify.py`) hace un `GET` a la página de error del
+    proveedor de cada candidato para buscar la huella de "recurso no
+    reclamado". Es opt-in (off por defecto): sin el flag, devuelve los
+    candidatos sin tocar y no hace ninguna petición HTTP.
     """
     active = result.active_records
     hostnames = [record.hostname for record in active]
@@ -87,6 +94,12 @@ async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
         asyncio.gather(*(_tls(hostname) for hostname in hostnames)),
         find_takeover_candidates(result.records),
     )
+
+    # Verificación HTTP opt-in (TAKEOVER_VERIFY, off por defecto). Va DESPUÉS
+    # del gather, no dentro: depende de que los candidatos ya existan, y solo
+    # sobre ellos. Con el flag desactivado, `verify_candidates` los devuelve
+    # sin tocar y sin ninguna petición HTTP -- el flujo por defecto no cambia.
+    takeover_candidates = await verify_candidates(list(takeover_candidates))
 
     logger.info(
         "Enriquecimiento de %s completado: %d IPs escaneadas, %d hosts analizados "

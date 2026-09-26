@@ -252,13 +252,16 @@ class TakeoverCandidate(BaseModel):
     """Candidato a *subdomain takeover*: un CNAME que apunta a un servicio de
     terceros con un patrón asociado a este riesgo (GitHub Pages, S3, Azure...).
 
-    **Es un candidato por patrón DNS, no una confirmación.** Que el CNAME
-    coincida con un proveedor de la tabla no significa que el recurso
-    apuntado esté realmente sin reclamar — eso exigiría comprobar si el
-    servicio de terceros responde "no existe", y eso cruzaría a verificar
-    explotabilidad, prohibido explícitamente por la restricción de seguridad
-    #6 de CLAUDE.md. La herramienta señala el patrón de riesgo; decidir si es
-    explotable requiere autorización expresa y queda fuera de este proyecto.
+    **Es un candidato, nunca una confirmación.** Que el CNAME coincida con un
+    proveedor de la tabla no prueba que el recurso esté sin reclamar. La
+    verificación HTTP opcional (`discovery/takeover_verify.py`,
+    `TAKEOVER_VERIFY`) puede añadir un `unclaimed_indicator` —la huella de
+    "recurso no reclamado" servida por la página de error pública del
+    proveedor— que eleva el candidato a *alta sospecha*. Ni siquiera con ese
+    indicio se marca "confirmado": eso exigiría reclamar el recurso o probar
+    el ataque, prohibido por la restricción de seguridad #6 de CLAUDE.md (ver
+    su "Excepción acotada"). El indicio es señal adicional sobre el patrón, no
+    prueba de explotabilidad.
     """
 
     hostname: str = Field(description="Host cuyo CNAME coincide con un patrón conocido")
@@ -267,6 +270,45 @@ class TakeoverCandidate(BaseModel):
     pattern_matched: str = Field(
         description="Sufijo de la tabla de patrones que hizo match, p. ej. 'github.io'"
     )
+    verification_attempted: bool = Field(
+        default=False,
+        description=(
+            "True si se intentó la verificación HTTP opt-in sobre este "
+            "candidato (TAKEOVER_VERIFY). False = solo detección por patrón."
+        ),
+    )
+    unclaimed_indicator: str | None = Field(
+        default=None,
+        description=(
+            "Huella de 'recurso no reclamado' hallada en la página de error "
+            "del proveedor, si la verificación la encontró. No es una "
+            "confirmación de explotabilidad, es un indicio adicional."
+        ),
+    )
+
+
+def _takeover_evidence(candidate: TakeoverCandidate) -> str:
+    """Redacta la evidencia de un candidato a takeover para su `Finding`.
+
+    Dos redacciones según haya o no indicio de verificación, pero **ninguna**
+    afirma "confirmado" — coherente con la restricción #6: con indicio es
+    "alta sospecha" (patrón + huella de recurso no reclamado), sin indicio es
+    solo el patrón de CNAME detectado.
+    """
+    base = (
+        f"{candidate.hostname} tiene un CNAME hacia {candidate.cname}, que "
+        f"coincide con el patrón de {candidate.provider} "
+        f"('{candidate.pattern_matched}')."
+    )
+    if candidate.unclaimed_indicator:
+        return (
+            f"{base} ALTA SOSPECHA — NO CONFIRMADO: la verificación HTTP "
+            f"encontró un indicio de recurso no reclamado en el proveedor "
+            f"({candidate.unclaimed_indicator}). Es un indicio adicional sobre "
+            "el patrón, no una confirmación de explotabilidad; requiere "
+            "revisión manual."
+        )
+    return f"{base} Riesgo de takeover si el recurso de terceros no está reclamado; no verificado."
 
 
 class EnrichmentResult(BaseModel):
@@ -311,12 +353,7 @@ class EnrichmentResult(BaseModel):
             grouped.setdefault(candidate.hostname, []).append(
                 DiscoveryFinding(
                     finding_type="subdomain_takeover_risk",
-                    evidence=(
-                        f"{candidate.hostname} tiene un CNAME hacia {candidate.cname}, "
-                        f"que coincide con el patrón de {candidate.provider} "
-                        f"('{candidate.pattern_matched}'). Riesgo de takeover si el "
-                        "recurso de terceros no está reclamado; no verificado."
-                    ),
+                    evidence=_takeover_evidence(candidate),
                 )
             )
         return grouped

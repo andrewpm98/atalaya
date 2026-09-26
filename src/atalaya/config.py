@@ -88,6 +88,19 @@ class Settings(BaseSettings):
     #: Timeout (segundos) por conexión TLS de inspección de certificado.
     tls_scan_timeout: float = 5.0
 
+    # ─── Descubrimiento: verificación de takeover (opt-in) ──────────────
+    #: Verificación HTTP del riesgo de subdomain takeover (`discovery/
+    #: takeover_verify.py`). **Off por defecto**, deliberadamente: activa una
+    #: petición GET a la página de error del proveedor de terceros para buscar
+    #: su huella de "recurso no reclamado". Es una excepción acotada a la
+    #: restricción de seguridad #6 (ver CLAUDE.md): eleva un candidato a "alta
+    #: sospecha", nunca a "confirmado", y solo sobre hostnames en
+    #: `SCAN_ALLOWLIST`, con auditoría de cada petición. Sin este flag, la
+    #: detección se queda en patrón de CNAME puro (reconocimiento pasivo).
+    takeover_verify: bool = False
+    #: Timeout (segundos) por petición HTTP de verificación de takeover.
+    takeover_verify_timeout: float = 10.0
+
     # ─── Enriquecimiento (puertos + cabeceras + TLS) ────────────────────
     #: Hosts procesados en paralelo por cada técnica al enriquecer un
     #: escaneo ya resuelto. Igual motivo que `dns_concurrency`: sin este
