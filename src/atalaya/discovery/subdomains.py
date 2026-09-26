@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import dns.asyncresolver
 import dns.exception
@@ -308,7 +308,7 @@ async def enumerate_subdomains(
             )
             for h in sorted(sources_by_hostname)
         ]
-        result.finished_at = datetime.now(timezone.utc)
+        result.finished_at = datetime.now(UTC)
         return result
 
     # Fase 3 - verificación DNS concurrente y acotada
@@ -331,7 +331,7 @@ async def enumerate_subdomains(
             record.sources.append(DiscoverySource.DNS)
 
     result.records = sorted(records, key=lambda r: r.hostname)
-    result.finished_at = datetime.now(timezone.utc)
+    result.finished_at = datetime.now(UTC)
 
     logger.info(
         "Enumeración completada para %s: %d descubiertos, %d activos, "

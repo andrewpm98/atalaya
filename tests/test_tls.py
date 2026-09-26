@@ -11,7 +11,7 @@ doble — mismo criterio que `fetch_crtsh`/`enumerate_subdomains` en
 from __future__ import annotations
 
 import ssl
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -20,7 +20,7 @@ from cryptography.x509.oid import NameOID
 
 from atalaya.discovery.tls import build_tls_findings, inspect_tls, parse_certificate
 
-_NOW = datetime.now(timezone.utc)
+_NOW = datetime.now(UTC)
 
 
 def _make_cert_der(*, not_valid_before: datetime, not_valid_after: datetime, cn: str = "Atalaya Test CA") -> bytes:

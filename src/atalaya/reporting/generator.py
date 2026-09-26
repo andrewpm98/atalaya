@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -129,7 +129,7 @@ def build_report_context(
         "status": scan.status.value,
         "started_at": scan.started_at,
         "finished_at": scan.finished_at,
-        "generated_at": datetime.now(timezone.utc),
+        "generated_at": datetime.now(UTC),
         "errors": scan.errors,
         "assets": scan.assets,
         "assets_count": len(scan.assets),

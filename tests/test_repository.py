@@ -7,7 +7,7 @@ Los datos se crean con `save_subdomain_scan` (ya probado en
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,7 @@ def _result(domain: str = "ejemplo.com", hostnames: list[str] | None = None) -> 
         )
         for host in hostnames
     ]
-    result.finished_at = datetime.now(timezone.utc)
+    result.finished_at = datetime.now(UTC)
     return result
 
 

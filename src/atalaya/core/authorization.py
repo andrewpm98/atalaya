@@ -29,8 +29,7 @@ def normalize_domain(domain: str) -> str:
         InvalidTargetError: si el resultado no es un nombre de dominio válido.
     """
     candidate = (domain or "").strip().lower().rstrip(".")
-    if candidate.startswith("*."):
-        candidate = candidate[2:]
+    candidate = candidate.removeprefix("*.")
     if not candidate or not _DOMAIN_RE.match(candidate):
         raise InvalidTargetError(f"Dominio no válido: {domain!r}")
     return candidate

@@ -8,7 +8,7 @@ esta suite prueba la traducción a BD, no la enumeración (ya cubierta en
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,7 +44,7 @@ def _result() -> SubdomainScanResult:
             sources=[DiscoverySource.CRTSH],
         ),
     ]
-    result.finished_at = datetime.now(timezone.utc)
+    result.finished_at = datetime.now(UTC)
     return result
 
 

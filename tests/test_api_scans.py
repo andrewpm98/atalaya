@@ -15,7 +15,7 @@ memoria — igual que `db_session`, pero por request HTTP en vez de directa.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -69,7 +69,7 @@ def _fake_result(domain: str) -> SubdomainScanResult:
             sources=[DiscoverySource.CRTSH],
         ),
     ]
-    result.finished_at = datetime.now(timezone.utc)
+    result.finished_at = datetime.now(UTC)
     return result
 
 
@@ -206,7 +206,7 @@ def _fake_result_con_hosts(domain: str, *hostnames: str) -> SubdomainScanResult:
         )
         for hostname in hostnames
     ]
-    result.finished_at = datetime.now(timezone.utc)
+    result.finished_at = datetime.now(UTC)
     return result
 
 

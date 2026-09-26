@@ -9,7 +9,7 @@ una vez, contra un directorio temporal.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -51,8 +51,8 @@ def _scan(
         id=scan_id,
         domain=domain,
         status=ScanStatus.COMPLETED,
-        started_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
-        finished_at=datetime(2026, 1, 1, 10, 5, tzinfo=timezone.utc),
+        started_at=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 1, 1, 10, 5, tzinfo=UTC),
         errors=errors or [],
     )
     scan.assets = []

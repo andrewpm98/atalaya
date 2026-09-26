@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import ssl
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cryptography import x509
 
@@ -43,7 +43,7 @@ def parse_certificate(der_bytes: bytes) -> dict[str, object]:
     cert = x509.load_der_x509_certificate(der_bytes)
     not_valid_after = cert.not_valid_after_utc
     not_valid_before = cert.not_valid_before_utc
-    days_remaining = (not_valid_after - datetime.now(timezone.utc)).days
+    days_remaining = (not_valid_after - datetime.now(UTC)).days
     return {
         "issuer": cert.issuer.rfc4514_string(),
         "not_valid_before": not_valid_before,

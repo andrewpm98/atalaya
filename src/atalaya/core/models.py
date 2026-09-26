@@ -14,7 +14,7 @@ vive en el enum de origen.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 from sqlalchemy import JSON, ForeignKey, Text
@@ -62,7 +62,7 @@ class Scan(Base):
         SqlEnum(ScanStatus, values_callable=_values), default=ScanStatus.RUNNING
     )
     started_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(timezone.utc)
+        default=lambda: datetime.now(UTC)
     )
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     #: Incidencias no fatales del escaneo (p. ej. una fuente externa caída).
@@ -117,7 +117,7 @@ class Finding(Base):
     impact: Mapped[str | None] = mapped_column(Text, default=None)
     remediation: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(timezone.utc)
+        default=lambda: datetime.now(UTC)
     )
 
     asset: Mapped[Asset] = relationship(back_populates="findings")
