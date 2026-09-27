@@ -10,10 +10,12 @@ nunca una caída de un proveedor de terceros real.
 from __future__ import annotations
 
 import logging
+import logging.config
 
 import httpx
 import pytest
 
+from atalaya.core.audit import AUDIT_LOGGER_NAME, get_audit_logger
 from atalaya.discovery.models import EnrichmentResult, TakeoverCandidate
 from atalaya.discovery.takeover_verify import (
     TAKEOVER_FINGERPRINTS,
@@ -191,22 +193,59 @@ async def test_gate_allowlist_omite_hostname_no_autorizado(monkeypatch) -> None:
 # ─── verify_candidates: auditoría ──────────────────────────────────────────
 
 
+class _Collector(logging.Handler):
+    """Recoge los registros que llegan a un handler, sin tocar niveles."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
 @pytest.mark.asyncio
-async def test_audita_cada_peticion_a_terceros(monkeypatch, caplog) -> None:
+@pytest.mark.parametrize("entorno", ["uvicorn", "cli_sin_verbose"])
+async def test_audita_cada_peticion_a_terceros_sin_forzar_niveles(monkeypatch, entorno) -> None:
+    """Regresión: la auditoría se descartaba en silencio al ejecutar bajo
+    uvicorn (solo configura sus propios loggers) y en la CLI sin `-v` (raíz en
+    WARNING). La versión anterior de esta prueba forzaba INFO con
+    `caplog.at_level` y por eso no lo veía: aquí no se toca ningún nivel."""
     monkeypatch.setattr("atalaya.config.settings.takeover_verify", True)
     monkeypatch.setattr("atalaya.config.settings.scan_allowlist", "ejemplo.com")
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "level", root.level)  # se restaura al acabar
+    if entorno == "uvicorn":
+        from uvicorn.config import LOGGING_CONFIG
+
+        logging.config.dictConfig(LOGGING_CONFIG)
+    root.setLevel(logging.WARNING)
+
+    audit = logging.getLogger(AUDIT_LOGGER_NAME)
+    collector = _Collector()
+    audit.addHandler(collector)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, text=_GITHUB_404)
 
-    with caplog.at_level(logging.INFO, logger="atalaya.discovery.takeover_verify"):
+    try:
         async with _client(handler) as client:
             await verify_candidates([_candidate()], client=client)
+    finally:
+        audit.removeHandler(collector)
 
-    auditoria = [r.message for r in caplog.records if "auditoría" in r.message]
+    auditoria = [r.getMessage() for r in collector.records if "auditoría" in r.getMessage()]
     assert len(auditoria) == 1
     assert "old.ejemplo.com" in auditoria[0]
     assert "old.ejemplo.com.github.io" in auditoria[0]
+
+
+def test_logger_de_auditoria_es_independiente_de_la_configuracion() -> None:
+    audit = get_audit_logger()
+
+    assert audit.level == logging.INFO
+    assert audit.propagate is False  # sin duplicados cuando la CLI configura el raíz
+    assert any(isinstance(h, logging.StreamHandler) for h in audit.handlers)
 
 
 # ─── Evidencia del hallazgo: nunca "confirmado" ────────────────────────────

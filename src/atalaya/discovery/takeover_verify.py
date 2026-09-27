@@ -19,8 +19,10 @@ restricción de seguridad #6 de CLAUDE.md, con sus tres salvaguardas:
    petición.
 2. **Limitado a `SCAN_ALLOWLIST`**: cada candidato pasa `is_authorized()`
    antes de que se sondee su destino.
-3. **Auditoría**: cada petición a un tercero se registra en el log
-   (`logger.info`), con hostname, destino y resultado.
+3. **Auditoría**: cada petición a un tercero se registra, con hostname,
+   destino y resultado, en el logger de auditoría (`core/audit.py`), que se
+   emite siempre: no depende de `LOG_LEVEL`, de `-v` ni de cómo configure
+   uvicorn el logging.
 
 Degradación controlada, como el resto del descubrimiento: si el destino no
 resuelve, la conexión falla o no hay huella, el candidato se queda en
@@ -35,11 +37,15 @@ import logging
 import httpx
 
 from atalaya.config import settings
+from atalaya.core.audit import get_audit_logger
 from atalaya.core.authorization import is_authorized
 from atalaya.core.exceptions import InvalidTargetError
 from atalaya.discovery.models import TakeoverCandidate
 
 logger = logging.getLogger(__name__)
+#: Trazas de la salvaguarda (c): siempre visibles, sea cual sea el nivel de
+#: logging de quien ejecuta (ver `core/audit.py`).
+audit = get_audit_logger()
 
 #: Sufijo de proveedor -> huellas textuales de "recurso no reclamado" en su
 #: página de error pública. Subconjunto **deliberadamente menor** que
@@ -123,7 +129,7 @@ async def _verify_one(
     except InvalidTargetError:
         authorized = False
     if not authorized:
-        logger.warning(
+        audit.warning(
             "Verificación de takeover OMITIDA para %s: no está en SCAN_ALLOWLIST",
             candidate.hostname,
         )
@@ -133,7 +139,7 @@ async def _verify_one(
     indicator = match_fingerprint(candidate.pattern_matched, body) if body else None
 
     # Auditoría: toda petición a un tercero deja traza, con o sin huella.
-    logger.info(
+    audit.info(
         "Verificación de takeover [auditoría]: %s -> GET %s (HTTP %s) -> %s",
         candidate.hostname,
         url,
@@ -184,7 +190,7 @@ async def verify_candidates(
             return await _verify_one(candidate, client)
 
     try:
-        logger.info(
+        audit.info(
             "Verificación de takeover activada (TAKEOVER_VERIFY): %d candidatos",
             len(candidates),
         )
