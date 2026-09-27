@@ -29,6 +29,75 @@ consultar la superficie de exposición **en lenguaje natural**.
    resumen en lenguaje natural, en PDF, descargable desde la API y desde
    el dashboard.
 
+## Puesta en marcha
+
+Requisitos: Docker Desktop con su motor Linux en marcha (en Windows, sobre
+WSL 2) para la vía recomendada, o Python 3.11+ para la local. En Windows,
+clona en una ruta corta (p. ej. `C:\proyectos\atalaya`): alguna dependencia
+tiene rutas internas muy largas y, sin *long paths* activado, `pip` falla si
+la ruta base ya es profunda.
+
+### Con Docker (recomendado)
+
+```bash
+cp .env.example .env         # rellena ANTHROPIC_API_KEY o GEMINI_API_KEY (según AI_PROVIDER)
+docker compose up --build -d # levanta db + api + dashboard (equivale a `make up`)
+```
+
+- Dashboard: http://localhost:8501
+- API:       http://localhost:8000/docs — interfaz interactiva: cada endpoint
+  se puede probar desde el navegador («Try it out»), en cualquier sistema.
+
+La API aplica las migraciones sola al arrancar. Sin `.env` el stack arranca
+igual: todo funciona salvo los endpoints de IA, que responden con un error
+explicando que falta la clave (el informe PDF se genera sin resumen
+ejecutivo). Los puertos solo se publican en `127.0.0.1`: la base de datos usa
+credenciales fijas de desarrollo y la API no tiene autenticación.
+
+> **Si editas `.env` con el stack levantado**, aplícalo con
+> `docker compose up -d`, **no** con `docker compose restart`: `restart`
+> reutiliza el contenedor con las variables antiguas y la clave nueva no llega
+> a la API.
+
+La CLI también está disponible dentro del contenedor:
+`docker compose exec api atalaya subdomains scanme.nmap.org --save`.
+
+### En local (API y dashboard fuera de Docker)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"            # make install
+docker compose up -d db            # solo PostgreSQL (o usa SQLite: ver .env.example)
+cp .env.example .env               # Windows (cmd): copy .env.example .env
+alembic upgrade head               # make migrate — crea las tablas (una vez)
+uvicorn atalaya.api.main:app       # make api — en una terminal
+streamlit run dashboard/app.py     # make dashboard — en otra
+pytest -q                          # make test — suite completa (deterministas, sin red)
+```
+
+`make` es opcional (Windows no lo trae): cada objetivo del `Makefile` es un
+alias del comando que aparece a su izquierda.
+
+### Ejemplos de uso con `curl`
+
+Los ejemplos de las secciones siguientes son de bash (Linux, macOS o WSL).
+En Windows hay dos trampas, ambas comprobadas: en PowerShell, `curl` es un
+alias de `Invoke-WebRequest` y no acepta estas opciones (usa `curl.exe`); y
+el `curl` de Git Bash envía el texto de `-d` en la codificación de Windows
+(cp1252), no en UTF-8, así que una pregunta con tildes o «¿» llega corrupta y
+la API la rechaza. En Windows, lo más cómodo es la interfaz de
+http://localhost:8000/docs. Lanza primero un escaneo:
+
+```bash
+curl -X POST http://localhost:8000/scans \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "scanme.nmap.org"}'
+```
+
+`scanme.nmap.org` lo mantiene el autor de Nmap precisamente para pruebas de
+reconocimiento autorizadas; úsalo para probar la herramienta.
+
 ## Uso rápido: enumeración de subdominios
 
 Ya operativo (Paso 2). Desde la línea de comandos:
@@ -104,8 +173,8 @@ Opcional: sin clave, se omite sin ninguna incidencia.
 Ya operativo. Requiere `ANTHROPIC_API_KEY` **o** `GEMINI_API_KEY` en `.env`
 (según `AI_PROVIDER=anthropic|gemini` — ambos proveedores son
 intercambiables, la lógica de negocio no depende de cuál esté activo). Con
-la API levantada (`make api`) y un escaneo ya persistido (`atalaya
-subdomains ejemplo.com --save`, o `POST /scans`):
+la API levantada y un escaneo ya persistido (`POST /scans`, ver "Puesta en
+marcha", o `atalaya subdomains scanme.nmap.org --save`):
 
 ```bash
 # Triaja los hallazgos sin triar del escaneo #1 (idempotente)
@@ -115,9 +184,10 @@ curl -X POST http://localhost:8000/scans/1/triage
 # si la responde el analista de visión global o el detective de takeover
 curl -X POST http://localhost:8000/findings/ask \
   -H "Content-Type: application/json" \
-  -d '{"domain": "ejemplo.com", "question": "¿qué activos son más peligrosos?"}'
+  -d '{"domain": "scanme.nmap.org", "question": "¿qué activos son más peligrosos?"}'
 
 # Compara dos escaneos del mismo dominio, con valoración de IA
+# (requiere haber lanzado dos escaneos)
 curl http://localhost:8000/scans/1/diff/2
 ```
 
@@ -186,39 +256,6 @@ Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 | Aplicación web         | Dashboard Streamlit (local o desplegado)               |
 | GitHub con historial   | Commits por fase, historial real                       |
 | Reporte con portada    | PDF generado por la propia herramienta (`GET /scans/{id}/report`) |
-
-## Puesta en marcha
-
-### Con Docker (recomendado)
-
-```bash
-cp .env.example .env         # rellena ANTHROPIC_API_KEY o GEMINI_API_KEY (según AI_PROVIDER)
-docker compose up --build -d # levanta db + api + dashboard (equivale a `make up`)
-```
-
-- API:       http://localhost:8000/docs
-- Dashboard: http://localhost:8501
-
-La API aplica las migraciones sola al arrancar. Sin `.env` el stack arranca
-igual: todo funciona salvo los endpoints de IA, que responden con un error
-explicando que falta la clave (el informe PDF se genera sin resumen
-ejecutivo). Los puertos solo se publican en `127.0.0.1`: la base de datos usa
-credenciales fijas de desarrollo y la API no tiene autenticación.
-
-Requiere Docker Desktop con su motor Linux en marcha (en Windows, sobre WSL 2).
-
-### En local (API y dashboard fuera de Docker)
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-make install
-docker compose up -d db    # solo PostgreSQL (o usa SQLite: ver .env.example)
-cp .env.example .env
-make migrate      # crea las tablas (una vez)
-make api          # en una terminal
-make dashboard    # en otra
-make test         # suite completa (deterministas, sin red)
-```
 
 ## Estado del proyecto
 
