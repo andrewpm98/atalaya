@@ -17,9 +17,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import Enum
 
-from sqlalchemy import JSON, ForeignKey, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Text
 from sqlalchemy import Enum as SqlEnum
+from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 
 from atalaya.core.database import Base
 
@@ -51,6 +53,32 @@ def _values(enum_cls: type[Enum]) -> list[str]:
     return [member.value for member in enum_cls]
 
 
+class UtcDateTime(TypeDecorator[datetime]):
+    """Marca de tiempo guardada como UTC *naive* en `TIMESTAMP WITHOUT TIME ZONE`.
+
+    El resto del código trabaja con `datetime` *aware* en UTC (lo correcto
+    fuera de la BD), pero las columnas de la migración inicial no tienen zona
+    horaria. SQLite acepta un valor *aware* ahí sin quejarse; asyncpg lo
+    rechaza (``can't subtract offset-naive and offset-aware datetimes``), así
+    que contra PostgreSQL ningún escaneo llegaba a guardarse — bug real, que
+    la suite no veía porque corre sobre SQLite.
+
+    Por qué convertir aquí y no pasar las columnas a `TIMESTAMP WITH TIME
+    ZONE`: no exige migración, y la lectura sigue devolviendo lo mismo que
+    hasta ahora en los dos motores (*naive*, en UTC), así que la API no cambia
+    de formato según el motor. Se *convierte* a UTC antes de quitar la zona,
+    no solo se descarta: un valor *aware* en otra zona se guarda correcto.
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        if value is not None and value.tzinfo is not None:
+            return value.astimezone(UTC).replace(tzinfo=None)
+        return value
+
+
 class Scan(Base):
     """Un escaneo concreto sobre un dominio objetivo."""
 
@@ -62,9 +90,9 @@ class Scan(Base):
         SqlEnum(ScanStatus, values_callable=_values), default=ScanStatus.RUNNING
     )
     started_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC)
+        UtcDateTime(), default=lambda: datetime.now(UTC)
     )
-    finished_at: Mapped[datetime | None] = mapped_column(default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
     #: Incidencias no fatales del escaneo (p. ej. una fuente externa caída).
     errors: Mapped[list[str]] = mapped_column(JSON, default=list)
 
@@ -117,7 +145,7 @@ class Finding(Base):
     impact: Mapped[str | None] = mapped_column(Text, default=None)
     remediation: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC)
+        UtcDateTime(), default=lambda: datetime.now(UTC)
     )
 
     asset: Mapped[Asset] = relationship(back_populates="findings")
