@@ -1,0 +1,13 @@
+# Contexto de build mínimo: sin entornos locales, secretos ni artefactos.
+.env
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.git/
+.claude/
+reports/
+memorias/
+*.sqlite3

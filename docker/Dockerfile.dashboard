@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
@@ -7,6 +10,12 @@ COPY src ./src
 RUN pip install --no-cache-dir -e .
 
 COPY dashboard ./dashboard
+# Tema del dashboard: st.dataframe se pinta en un canvas al que el CSS no
+# llega, sus colores y su tipografía salen solo de aquí (ver CLAUDE.md).
+# Streamlit lo lee de `.streamlit/` en el directorio de trabajo (/app).
+COPY .streamlit ./.streamlit
 
 EXPOSE 8501
-CMD ["streamlit", "run", "dashboard/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+# headless: sin él, Streamlit puede quedarse esperando el aviso de bienvenida
+# por consola en su primer arranque.
+CMD ["streamlit", "run", "dashboard/app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]

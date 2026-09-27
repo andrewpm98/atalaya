@@ -1,3 +1,12 @@
+# Stack completo: PostgreSQL + API + dashboard.
+#
+#   cp .env.example .env    # opcional: sin .env arranca igual, sin capa de IA
+#   docker compose up --build -d
+#
+# Todos los puertos se publican solo en 127.0.0.1: la BD usa credenciales
+# fijas de desarrollo y la API no tiene autenticación, así que ninguno de los
+# dos debe quedar accesible desde la red local.
+
 services:
   db:
     image: postgres:16-alpine
@@ -7,42 +16,61 @@ services:
       POSTGRES_PASSWORD: atalaya
       POSTGRES_DB: atalaya
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U atalaya"]
+      test: ["CMD-SHELL", "pg_isready -U atalaya -d atalaya"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
 
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
     container_name: atalaya-api
-    env_file: .env
+    # Claves de IA/Shodan, SCAN_ALLOWLIST... Opcional: sin .env la API arranca
+    # y solo los endpoints de IA responden 502 por falta de clave.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Siempre el Postgres de este compose, diga lo que diga DATABASE_URL en
+      # .env (que puede apuntar a SQLite o a localhost para desarrollo local):
+      # `environment` tiene prioridad sobre `env_file`. Sin esto, un .env de
+      # desarrollo hacía que la API usara SQLite dentro del contenedor.
+      DATABASE_URL: postgresql+asyncpg://atalaya:atalaya@db:5432/atalaya
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./src:/app/src
       - ./reports:/app/reports
+    healthcheck:
+      # python-slim no trae curl: se comprueba con la librería estándar.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   dashboard:
     build:
       context: .
       dockerfile: docker/Dockerfile.dashboard
     container_name: atalaya-dashboard
-    env_file: .env
+    # Sin env_file a propósito: el dashboard es un cliente HTTP puro de la API
+    # y no necesita ninguna clave. Mínimo privilegio.
     environment:
       ATALAYA_API_URL: http://api:8000
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     volumes:
       - ./dashboard:/app/dashboard
 

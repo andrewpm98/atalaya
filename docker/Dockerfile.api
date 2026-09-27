@@ -1,15 +1,25 @@
 FROM python:3.11-slim
 
+# Logs de uvicorn/alembic visibles al momento en `docker logs`, sin .pyc.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 WORKDIR /app
 
-# Dependencias del sistema mínimas para cryptography / asyncpg
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
+# Sin compiladores: todas las dependencias (asyncpg, cryptography, pydantic-core,
+# reportlab...) publican wheels para Python 3.11 en Linux. build-essential y
+# libpq-dev solo añadían ~450 MB a la imagen.
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir -e .
 
+# Sin esto, la base de datos del contenedor arranca vacía y POST /scans falla
+# por falta de tablas: las migraciones se aplican en cada arranque (Alembic es
+# idempotente: si ya están aplicadas, no hace nada).
+COPY alembic.ini ./
+COPY migrations ./migrations
+
 EXPOSE 8000
-CMD ["uvicorn", "atalaya.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# `exec` deja a uvicorn como PID 1: recibe el SIGTERM de `docker stop` y se
+# cierra limpio, en vez de esperar 10 s a que Docker lo mate.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn atalaya.api.main:app --host 0.0.0.0 --port 8000"]
