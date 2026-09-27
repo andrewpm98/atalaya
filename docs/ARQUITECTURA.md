@@ -36,20 +36,21 @@ orquesta el resto de módulos. Endpoints principales:
 
 `api/schemas.py` define la frontera Pydantic entre las tablas y la respuesta
 pública; `api/main.py` traduce `InvalidTargetError`/`UnauthorizedTargetError`
-a 400/403 vía `exception_handler`, en vez de que cada ruta gestione sus
-propios códigos de error.
+a 400/403 y `AIProviderError` a 502 vía `exception_handler`, en vez de que
+cada ruta gestione sus propios códigos de error. El triaje y el informe no
+llegan a ese 502 porque degradan antes (ver 2.4 y 2.5).
 
 ### 2.2 Descubrimiento — `src/atalaya/discovery` (Paso 2 ✅ + ampliación)
 Cada técnica es un módulo independiente con salida normalizada:
 
 | Módulo         | Qué obtiene                                    | Fuente                  |
 |----------------|------------------------------------------------|-------------------------|
-| `subdomains`   | Subdominios                                    | crt.sh (CT logs) + `shodan` (opcional), concurrentes, fusionados por hostname |
+| `subdomains`   | Subdominios, verificados por DNS y filtrados de wildcards DNS (§7.6) | crt.sh (CT logs) + `shodan` (opcional), concurrentes, fusionados por hostname |
 | `shodan`       | Segunda fuente de subdominios                  | API DNS de Shodan (`SHODAN_API_KEY` opcional — sin ella, se omite sin incidencia) |
 | `ports`        | Puertos TCP abiertos (`COMMON_PORTS` por defecto) | Conexión asíncrona, concurrencia acotada |
 | `headers`      | HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy | Petición HTTP(S) |
 | `tls`          | Versión de protocolo, emisor, caducidad del certificado | `cryptography` sobre el `ssl_object` de la conexión |
-| `takeover`     | Riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de terceros) | Resolución DNS de CNAME sobre hosts **sin** A/AAAA — reconocimiento pasivo, sin verificar |
+| `takeover`     | Riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de terceros) | Resolución DNS de CNAME sobre hosts **sin** A/AAAA — reconocimiento pasivo puro (la verificación, opcional, vive en `takeover_verify`) |
 | `takeover_verify` | Verificación HTTP **opt-in** (`TAKEOVER_VERIFY`) de un candidato: huella de "recurso no reclamado" en la página de error del proveedor | `GET` al destino del CNAME — off por defecto, gated por `SCAN_ALLOWLIST`, con auditoría (ver §8.3) |
 | `enrichment`   | Orquesta `ports`+`headers`+`tls` (hosts activos) y `takeover` (todos los registros), concurrentemente; encadena `takeover_verify` si está activado | Compone los cinco anteriores |
 
@@ -69,7 +70,9 @@ descubrimiento no conoce la de persistencia.
 Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
 
 - **Scan** — un escaneo (dominio objetivo, fecha, estado, incidencias).
-- **Asset** — activo descubierto (host, IPs, alcance, puertos abiertos).
+- **Asset** — activo descubierto (host, IPs, alcance, estado de resolución
+  como texto libre —sin enum de BD, así que un estado nuevo como `wildcard`
+  no requiere migración—, puertos abiertos).
 - **Finding** — hallazgo (tipo, evidencia, severidad, remediación, `asset_id`).
 
 Relaciones: `Scan 1─N Asset`, `Asset 1─N Finding`. Las migraciones viven en
@@ -78,8 +81,8 @@ resultados de descubrimiento a estas filas: `save_subdomain_scan()` (un
 `SubdomainScanResult` → `Scan`+`Asset`; un host con
 `leaks_internal_addressing` genera además un `Finding`), `apply_port_scan()`
 (`EnrichmentResult.ports_by_ip` → `Asset.open_ports`) y
-`apply_discovery_findings()` (hallazgos de cabeceras/TLS → `Finding`, con
-severidad `unknown` hasta el triaje).
+`apply_discovery_findings()` (hallazgos de cabeceras/TLS/takeover →
+`Finding`, con severidad `unknown` hasta el triaje).
 
 `core/repository.py` es la contraparte de lectura: `get_scan`, `list_scans`,
 `get_latest_scan`, `list_assets`, `list_findings` y `diff_scans()` (compara
@@ -96,7 +99,10 @@ por aquí, no construyen `select()` propios.
   allowed_function_names=[...])` en Gemini — para una respuesta con forma
   garantizada, más fiable que pedir "responde en JSON" sobre texto libre).
   `AI_PROVIDER` en `.env` elige cuál se instancia; ningún otro módulo de
-  `ai/` conoce el SDK concreto.
+  `ai/` conoce el SDK concreto. `GeminiProvider` suma un presupuesto de
+  razonamiento acotado a `max_output_tokens` y reintenta en `mode="AUTO"`
+  ante `MALFORMED_FUNCTION_CALL` — dos bugs reales, detallados en CLAUDE.md
+  ("Deuda técnica conocida → Resuelta").
 - `triage` — `triage_finding`/`triage_findings`: reciben un `Asset` y un
   `Finding`, devuelven severidad razonada, impacto explicado y remediación
   concreta. Aquí se aplica el principio que el proyecto asume como central:
@@ -192,8 +198,10 @@ encontrados y corregidos, en `memorias/Memoria_Ampliacion_Agentes_Atalaya.md`.
 dominio
    │  POST /scans
    ▼
-[Descubrimiento]  subdominios (crt.sh + Shodan) → puertos → cabeceras → TLS
+[Descubrimiento]  subdominios (crt.sh + Shodan) → DNS → filtro de wildcards
+   │               → puertos → cabeceras → TLS (solo activos)
    │               → riesgo de takeover (sobre TODOS los registros)
+   │               → verificación HTTP de takeover (opt-in)
    │  hallazgos crudos
    ▼
 [PostgreSQL]  se persisten activos y hallazgos
@@ -221,6 +229,9 @@ dominio
 - **Módulos de descubrimiento independientes**: se pueden añadir o desactivar
   técnicas sin tocar el resto del sistema (Shodan y takeover se sumaron sin
   modificar `ports`/`headers`/`tls`).
+- **Wildcards DNS: reclasificar, no borrar.** Un host que solo resuelve a la
+  IP del comodín pasa a `wildcard`: sale del inventario activo pero se
+  conserva en el resultado, para que el filtro sea auditable (§7.6).
 - **Salvaguarda de autorización** (`SCAN_ALLOWLIST`): limita los objetivos
   escaneables, alineado con un uso responsable de la herramienta.
 - **Reconocimiento no confirma explotabilidad ni intenta el secuestro**
@@ -269,6 +280,14 @@ obligatorios:
     comercial de seguridad, `risk_score` como métrica principal, verificado
     con capturas de pantalla reales. *(Detalle completo del proceso en
     `memorias/`.)*
+11. **Robustez** ✅ — instalación limpia verificada (`greenlet` declarado),
+    `ruff`/`mypy` a cero, detección de wildcards DNS (§7.6) y verificación
+    HTTP opt-in de subdomain takeover (§8.3).
+    *(`memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.)*
+
+La numeración de esta sección agrupa las ampliaciones de forma distinta a
+CLAUDE.md (que cuenta Shodan, takeover y agentes como una sola ampliación);
+el contenido es el mismo.
 
 ---
 
@@ -304,10 +323,16 @@ dominio
    │                  descarta correos y nombres fuera de alcance
    │  conjunto de candidatos únicos
    ▼
+[detect_wildcard_dns]  resuelve <uuid>.dominio: si responde, hay comodín
+   │                    y esas son sus IPs (nunca lanza)
+   ▼
 [resolve_hostname]  A + AAAA, concurrente, acotado por semáforo
    │
    ▼
-SubdomainScanResult  (registros + resumen + incidencias)
+[reclasificar]  active cuyas IPs ⊆ IPs del comodín → wildcard
+   │
+   ▼
+SubdomainScanResult  (registros + resumen + incidencias + wildcard_ips)
 ```
 
 ### 7.3 Decisiones relevantes
@@ -330,6 +355,7 @@ SubdomainScanResult  (registros + resumen + incidencias)
 | `unroutable` | Resuelve, pero solo a direcciones no alcanzables |
 | `nxdomain` | El nombre no existe; superficie histórica |
 | `no_answer` | Existe pero sin registros A/AAAA (p. ej. solo MX) |
+| `wildcard` | Resuelve, pero solo a las IPs del comodín DNS del dominio: no es un servicio real (§7.6) |
 | `timeout` | El resolver no respondió a tiempo |
 | `error` | Fallo inesperado, detallado en el campo `error` |
 
@@ -348,6 +374,7 @@ Resolver correctamente no equivale a ser alcanzable. El módulo
 | `link_local` | `169.254.0.0/16`, `fe80::/10` | No enrutable |
 | `multicast` | `224.0.0.0/4`, `ff00::/8` | No es un host individual |
 | `documentation` | RFC 5737, RFC 3849 | Rangos de ejemplo |
+| `reserved` | Otros rangos reservados | No enrutable |
 | `invalid` | — | Entrada malformada |
 
 Dos matices de implementación que justifican el orden explícito de
@@ -367,7 +394,28 @@ interna. Se marca mediante `leaks_internal_addressing`, genera un `Finding`
 (`core/persistence.py`) y la capa IA lo tría como hallazgo propio
 (`POST /scans/{id}/triage`).
 
-### 7.6 Integración
+### 7.6 Wildcards DNS
+
+Un dominio con **DNS wildcard** (`*.dominio` → una IP fija) hace que
+cualquier nombre resuelva, exista o no como servicio. Sin filtro, cada
+candidato de crt.sh/Shodan que nunca se dio de alta contaría como activo: el
+mismo tipo de falso positivo que `0.0.0.0` (§7.5), por eso se trata como un
+defecto de corrección y no como una limitación.
+
+- `detect_wildcard_dns()` resuelve un subdominio con un **UUID** (no puede
+  existir de verdad) antes de la resolución masiva. Si responde, sus IPs son
+  las del comodín. Un fallo del resolver se trata como "no hay wildcard"
+  (degradación controlada).
+- Tras resolver, todo registro `active` cuyas IPs sean **subconjunto** de las
+  del comodín pasa a `wildcard`. Un host con alguna IP propia sigue `active`:
+  puede ser un servicio real que además comparta la IP del comodín.
+- `wildcard` no es `active`, así que el host sale de `scan_targets()`,
+  `active_records` y del recuento sin tocar esas propiedades; tampoco es
+  `no_answer`/`nxdomain`/`unroutable`, así que no entra en la detección de
+  takeover (tiene IP: no hay CNAME colgante). El registro se conserva en
+  `records`, y `summary()` expone `wildcard_dns`/`wildcard_filtered`.
+
+### 7.7 Integración
 
 - **Paso 2 (puertos, cabeceras, TLS)** ✅ — `SubdomainScanResult.scan_targets()`
   alimenta el escaneo de puertos (`discovery/ports.py`), ya filtrado de
