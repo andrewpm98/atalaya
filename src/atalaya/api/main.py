@@ -7,12 +7,36 @@ esqueletos; cada fase posterior los va rellenando.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from atalaya import __version__
 from atalaya.api.routes import assets, findings, scans
+from atalaya.config import settings
 from atalaya.core.exceptions import AIProviderError, InvalidTargetError, UnauthorizedTargetError
+
+
+def _configure_logging() -> None:
+    """Aplica `LOG_LEVEL` a los loggers de la aplicación (`atalaya.*`).
+
+    uvicorn solo configura sus propios loggers (`uvicorn.*`): sin esto, todo
+    `logger.info` de la aplicación se descartaba en silencio bajo la API y
+    `LOG_LEVEL` no tenía ningún efecto. Un valor no reconocido cae a INFO en
+    vez de impedir el arranque. La auditoría (`core/audit.py`) va aparte y no
+    depende de este nivel.
+    """
+    level = logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO)
+    logger = logging.getLogger("atalaya")
+    logger.setLevel(level)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logger.addHandler(handler)
+
+
+_configure_logging()
 
 app = FastAPI(
     title="Atalaya API",
