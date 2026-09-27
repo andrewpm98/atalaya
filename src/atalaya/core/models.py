@@ -81,7 +81,7 @@ class Asset(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"))
     hostname: Mapped[str] = mapped_column(index=True)
-    #: `ResolutionStatus.value`: active/unroutable/nxdomain/no_answer/timeout/error.
+    #: `ResolutionStatus.value`: active/wildcard/unroutable/nxdomain/no_answer/timeout/error.
     status: Mapped[str] = mapped_column()
     ip_addresses: Mapped[list[str]] = mapped_column(JSON, default=list)
     #: `DiscoverySource.value` de cada fuente que reportó el host.
