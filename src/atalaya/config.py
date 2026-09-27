@@ -109,9 +109,10 @@ class Settings(BaseSettings):
     enrichment_host_concurrency: int = 10
 
     # ─── Aplicación ───────────────────────────────────────────────────
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    environment: str = "development"
+    #: Nivel de los logs de la aplicación bajo la API (`api/main.py`). La
+    #: auditoría de `core/audit.py` se emite siempre, con independencia de él.
+    #: El host y el puerto no se configuran aquí: los fija quien lanza
+    #: uvicorn (Dockerfile, Makefile), que es donde se leen de verdad.
     log_level: str = "INFO"
 
     # ─── Salvaguarda de autorización ──────────────────────────────────
