@@ -178,6 +178,14 @@ cabeceras y TLS) habría dejado fuera exactamente los casos que importan.
   seguridad #6 de `CLAUDE.md`. Se prefiere un falso positivo señalado por
   patrón a confirmar un takeover real.
 
+> **Estado posterior:** `discovery/takeover.py` sigue sin ninguna petición
+> HTTP (lo garantiza un test estático), pero la restricción #6 se reabrió
+> después de forma acotada: existe una verificación HTTP **opcional** en un
+> módulo aparte (`discovery/takeover_verify.py`, `TAKEOVER_VERIFY`,
+> desactivada por defecto) que eleva el hallazgo a "alta sospecha — no
+> confirmado", nunca a "confirmado" (`Memoria_Ampliacion_Robustez`,
+> sección 6).
+
 ### 4.3 Integración sin tocar la capa de persistencia
 
 `discovery/enrichment.py::enrich_scan()` incorpora la búsqueda de takeover
@@ -722,6 +730,12 @@ ya cubierto en memorias anteriores:
   petición HTTP al recurso de terceros) y en el *system prompt* de
   `ai/takeover_detective.py` (nunca afirma que el recurso esté confirmado
   como secuestrable).
+
+> **Estado posterior:** la restricción #6 dice hoy "nunca **confirmar**
+> explotabilidad ni intentar el secuestro" (no "nunca verificar"), con una
+> excepción acotada para la verificación HTTP opcional descrita arriba. El
+> *system prompt* de `takeover_detective` no cambió: sigue sin afirmar nunca
+> que un recurso esté confirmado como secuestrable.
 - Dos claves de API nuevas en `.env` (`SHODAN_API_KEY`, `GEMINI_API_KEY`),
   ambas gitignoradas, nunca versionadas — mismo tratamiento que
   `ANTHROPIC_API_KEY` desde el Paso 5.
@@ -783,11 +797,20 @@ tiempo total del escaneo sin ningún coste de correctitud.
 ### Sobre el takeover
 
 **¿Por qué no comprobar si el recurso realmente está libre?**
-Porque cruzaría de reconocimiento a verificación de explotabilidad,
-prohibido explícitamente por la restricción de seguridad #6. Una petición
-HTTP al proveedor de terceros para ver si responde "no existe" sería
-exactamente ese tipo de comprobación. Se prefiere señalar el patrón, con
-el riesgo de algún falso positivo, a confirmar un takeover real.
+*(Respuesta actualizada tras la ampliación de robustez.)* Hoy se puede, de
+forma opcional y acotada. La detección (`discovery/takeover.py`) sigue siendo
+patrón de CNAME puro, sin HTTP. Con `TAKEOVER_VERIFY=true`,
+`discovery/takeover_verify.py` hace un `GET` a la página de error **pública**
+del proveedor y busca su huella de "recurso no reclamado" (p. ej. «There
+isn't a GitHub Pages site here»). Eso sigue siendo reconocimiento: lee una
+respuesta pública, no reclama nada ni prueba el ataque. Por eso el hallazgo
+sube a **"alta sospecha — no confirmado"**, nunca a "confirmado". Tres
+salvaguardas obligatorias: desactivada por defecto, solo para hostnames en
+`SCAN_ALLOWLIST`, y auditoría en el log de cada petición a un tercero.
+
+En esta ampliación la respuesta era "no, lo prohíbe la restricción #6". Se
+cambió de forma explícita —primero la restricción, en un commit `docs:`
+propio (`3516a88`), después el código (`327ac74`)—, no en silencio.
 
 **¿Por qué mirar los hosts que NO resuelven, y no los activos?**
 Porque un host `active` ya tiene una IP real detrás — no depende de un
@@ -832,10 +855,19 @@ ni de los cinco agentes nuevos — antes de esto, esa afirmación no tenía
 una segunda implementación real que la respaldara.
 
 **¿Qué bug real se encontró y cómo?**
-Un `AttributeError` sin controlar cuando un `candidate` de la respuesta de
-Gemini trae `content=None` (observado en vivo bajo presión de cuota del
-free tier). Se corrigió con un guard explícito y se cubrió con un test
-específico que reproduce el caso.
+*(Respuesta actualizada: el primer diagnóstico era incorrecto.)* Primero,
+un `AttributeError` cuando un `candidate` de Gemini trae `content=None`; se
+atribuyó a la presión de cuota y se corrigió con un guard (sección 6.3).
+Investigado después con cuota disponible, la causa real eran **dos bugs de
+`GeminiProvider.complete_tool()`** (sección 6.5): los tokens de
+razonamiento de los modelos 2.5 se descuentan de `max_output_tokens`, así
+que la respuesta se cortaba (`MAX_TOKENS`) antes de emitir la llamada a
+herramienta —arreglado sumando un presupuesto de razonamiento acotado—, y
+`mode="ANY"` devolvía `MALFORMED_FUNCTION_CALL` con prompts grandes
+—arreglado con un reintento único en `mode="AUTO"`—. La pista definitiva:
+agotar la cuota de verdad da un error distinto (`429 RESOURCE_EXHAUSTED`).
+Ahora el `finish_reason` va en el mensaje de error, y hay 4 tests de
+regresión.
 
 ### Sobre la metodología
 
@@ -845,6 +877,11 @@ verificables una a una, en vez de un único cambio monolítico difícil de
 revisar. Cada pieza se aceptó solo tras comprobar tests, integración real
 y un caso manual — no solo el resumen del propio subagente. Es tooling de
 desarrollo, no parte del producto Atalaya.
+
+> **Estado posterior:** cumplido el encargo, los cuatro subagentes de
+> `.claude/agents/` se reescribieron como responsables de mantenimiento de
+> su área (reglas y trampas aprendidas, sin commits propios), para que
+> invocarlos en una sesión futura no intente rehacer trabajo ya hecho.
 
 ---
 

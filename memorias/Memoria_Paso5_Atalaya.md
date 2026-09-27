@@ -405,6 +405,12 @@ concreto del escaneo persistido.
   apareció en escaneos anteriores del mismo dominio (lo que sí permitiría
   `core/repository.py::diff_scans`, Paso 4, si se incorporara al contexto).
 
+> **Estado posterior:** segundo proveedor → `GeminiProvider`; verificación
+> en vivo contra Anthropic → hecha para los seis agentes
+> (`Memoria_Ampliacion_Agentes`, sección 6.6). **Siguen vigentes** la falta
+> de un límite global de llamadas al proveedor, la imposibilidad de forzar un
+> re-triaje sin tocar la BD y que el triaje no vea el histórico del dominio.
+
 ---
 
 ## 9. Bloque de defensa: preguntas previsibles
@@ -417,6 +423,10 @@ Dos cosas concretas: permite sustituir el proveedor sin tocar `triage.py` ni
 y permite probar toda la lógica de negocio con un doble que no hace red ni
 necesita credenciales — que es, en la práctica, lo que ha permitido escribir
 26 pruebas deterministas sin gastar una sola llamada real al modelo.
+
+> **Estado posterior:** la primera afirmación quedó demostrada con
+> `GeminiProvider`, añadido sin tocar `triage.py`. `query.py` ya no existe
+> (ver la pregunta sobre `ask()` más abajo).
 
 **¿Por qué `complete_tool()` y no simplemente pedir JSON en el prompt?**
 Porque pedir "responde en JSON" sobre texto libre es frágil: basta con que
@@ -469,6 +479,12 @@ preguntas agregadas. Meterlos en el mismo fichero habría significado dos
 prompts con necesidades muy distintas compitiendo por la misma función de
 construcción de contexto.
 
+> **Estado posterior:** `ai/query.py::ask()` se retiró en la ampliación de
+> agentes. `POST /findings/ask` pasa por `ai/prompter.py`, que enruta la
+> pregunta a `ai/analyst.py` o `ai/takeover_detective.py`: el mismo
+> razonamiento (contexto distinto por tarea) llevado un paso más allá, con un
+> agente especializado por tipo de pregunta.
+
 **¿Cómo se evita que el modelo responda con información que no está en el
 escaneo?**
 El `system prompt` se lo prohíbe explícitamente: debe responder solo con
@@ -484,6 +500,12 @@ de los hallazgos que sí se triaron. `ask()` es una pregunta puntual: no hay
 nada parcial que conservar si falla, así que propagar el error da una señal
 inmediata a quien preguntó, en vez de una respuesta vacía difícil de
 diagnosticar.
+
+> **Estado posterior:** la asimetría se conserva en los agentes que
+> sustituyen a `ask()`: `prompter`, `analyst`, `report_writer` y
+> `diff_analyst` propagan (petición puntual); `takeover_detective` degrada
+> (colección). La única excepción es el informe PDF, que captura el fallo
+> del resumen ejecutivo para no depender de la IA.
 
 ### Sobre la validación
 
@@ -506,6 +528,15 @@ respuesta bien formada o cualquier fallo del proveedor; falta la
 confirmación de que las respuestas *reales* de Claude son razonables para
 este dominio, que es una pregunta de calidad del prompt, no de corrección
 del código.
+
+> **Estado posterior — respuesta vigente a "¿se ha probado contra el modelo
+> real?":** sí. Con `ANTHROPIC_API_KEY` disponible se verificaron en vivo
+> `triage_finding` (un hallazgo real de `mediamarkt.es`, severidad `LOW`
+> razonada correctamente) y los otros cinco agentes, incluido el escaneo
+> grande de `github.com` (117 activos / 204 hallazgos), con respuestas
+> coherentes (`Memoria_Ampliacion_Agentes`, sección 6.6). También contra
+> Gemini, donde la verificación en vivo destapó dos bugs reales de
+> `GeminiProvider` (sección 6.5 de esa memoria).
 
 ### Preguntas de comprensión
 

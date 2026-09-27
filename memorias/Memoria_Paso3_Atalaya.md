@@ -352,6 +352,14 @@ a acumular un historial de escaneos**, lo cual tiene dos implicaciones:
   se ha ejecutado aún contra un Postgres real — pendiente de validar la
   primera vez que se levante el stack completo con Docker.
 
+> **Estado posterior:** la persistencia de puertos/cabeceras/TLS y
+> `open_ports` se completaron con el resto del Paso 2; la comparación entre
+> escaneos existe desde el Paso 4 (`diff_scans()`) y se expone con
+> valoración IA en `GET /scans/{id}/diff/{other_id}` (ampliación de
+> agentes). **Siguen vigentes** la falta de autenticación y la validación de
+> las migraciones contra un PostgreSQL real: la instalación limpia de la
+> ampliación de robustez las volvió a aplicar, pero de nuevo sobre SQLite.
+
 ---
 
 ## 9. Bloque de defensa: preguntas previsibles
@@ -416,12 +424,22 @@ producir hallazgos, cada uno tendrá su propio vocabulario de estados; atar
 la tabla `assets` al enum de subdominios habría exigido rehacer la columna
 más adelante.
 
+> **Estado posterior:** el motivo previsto (vocabularios de estado de otros
+> módulos) no llegó a materializarse, pero la decisión se amortizó por otro
+> lado: el estado `wildcard` de la ampliación de robustez se añadió sin
+> ninguna migración, porque la columna es texto libre.
+
 **¿Se verificó esto contra una base de datos real, o solo con mocks?**
 Ambas cosas. Las 76 pruebas automatizadas usan sqlite en memoria para ser
 deterministas y rápidas, pero además se ejecutó manualmente
 `atalaya subdomains scanme.nmap.org --save` contra un sqlite de desarrollo
 real y se inspeccionaron las filas resultantes con `sqlite3` directamente
 (sección 6.3), incluyendo un caso con una fuente externa caída de verdad.
+
+> **Estado posterior:** esa verificación contra BD real sigue siendo solo
+> sobre SQLite. Las migraciones no se han ejecutado todavía contra
+> PostgreSQL, el motor declarado de producción — deuda recogida en
+> `CLAUDE.md`.
 
 ### Preguntas de comprensión
 

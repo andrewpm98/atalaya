@@ -316,6 +316,11 @@ Declaradas de forma explícita, porque conviene anticiparlas antes de que se pre
 
 Todas estas limitaciones corresponden a fases posteriores ya planificadas.
 
+> **Estado posterior:** las cuatro primeras se cerraron en los Pasos 2-7
+> (escaneo, modelos de BD, capa IA y dashboard completos). La falta de
+> autenticación en la API sigue vigente: ver "Deuda técnica conocida" en
+> `CLAUDE.md`.
+
 ---
 
 ## 11. Bloque de defensa: preguntas previsibles
@@ -342,6 +347,10 @@ Es una opción razonable si el objetivo prioritario fuera el análisis relaciona
 **¿Por qué hay endpoints que devuelven 501?**
 Porque el contrato de la API se fija en el diseño y se implementa por fases. Un 501 indica que el endpoint existe y está declarado pero su lógica está pendiente; sería un problema si devolviera 500, que señalaría un fallo no controlado. Fijar el contrato desde el principio permite que el dashboard y las pruebas se desarrollen contra una interfaz estable.
 
+> **Estado posterior:** el criterio se cumplió tal como se describe — cada
+> 501 se sustituyó por la implementación real en su fase, y hoy ningún
+> endpoint devuelve 501.
+
 ### Sobre la capa de IA
 
 **¿Qué aporta la IA que no pueda hacerse con reglas?**
@@ -352,6 +361,11 @@ El modelo no descubre nada: recibe exclusivamente hallazgos ya verificados, norm
 
 **¿Qué ocurre si el proveedor de IA falla o cambia?**
 La capa está aislada tras la interfaz `LLMProvider`. El proveedor y el modelo son parámetros de configuración en el fichero `.env`, no dependencias incrustadas en la lógica de negocio.
+
+> **Estado posterior:** demostrado, no solo afirmado. En la ampliación de
+> agentes se añadió `GeminiProvider` como segunda implementación
+> (`AI_PROVIDER=gemini`) sin cambiar una línea de `ai/triage.py` ni de los
+> agentes (`Memoria_Ampliacion_Agentes`).
 
 ### Sobre seguridad y legalidad
 

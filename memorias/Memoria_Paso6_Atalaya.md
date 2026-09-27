@@ -225,6 +225,12 @@ web.
 - **El triaje se lanza sobre todo el escaneo, no por hallazgo individual.**
   No hay forma de triar selectivamente un único hallazgo desde la interfaz.
 
+> **Estado posterior:** las cuatro **siguen vigentes** (recogidas en
+> "Deuda técnica conocida" de `CLAUDE.md`), y se suma una: el diff entre
+> escaneos existe en la API (`GET /scans/{id}/diff/{other_id}`) pero no en
+> el dashboard. El aspecto visual se rediseñó por completo después, sin
+> cambios funcionales (`Memoria_Ampliacion_Agentes`).
+
 ---
 
 ## 8. Bloque de defensa: preguntas previsibles

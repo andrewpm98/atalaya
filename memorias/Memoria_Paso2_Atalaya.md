@@ -354,6 +354,13 @@ Declaradas de forma explícita:
 - **Sin exposición por API.** El módulo se ejecuta por línea de comandos. Se integra en el Paso 4.
 - **Enumeración limitada a lo certificado.** Un subdominio que nunca tuvo certificado no aparece. Es la contrapartida inherente al enfoque pasivo.
 
+> **Estado posterior:** fuente única → Shodan como segunda fuente (su
+> cobertura real depende de un plan de pago); CNAME → `discovery/takeover.py`
+> (ambas en `Memoria_Ampliacion_Agentes`); persistencia → Paso 3; exposición
+> por API → Paso 4; **comodines DNS → `detect_wildcard_dns()`, commit
+> `2d90b0a`** (`Memoria_Ampliacion_Robustez`). Sigue vigente la
+> enumeración limitada a lo certificado o indexado.
+
 ---
 
 ## 10. Bloque de defensa: preguntas previsibles
@@ -419,8 +426,20 @@ Un estándar que obliga a las autoridades de certificación a publicar en regist
 **¿Qué diferencia hay entre `nxdomain`, `no_answer` y `unroutable`?**
 `nxdomain` significa que el nombre no existe en DNS. `no_answer` que existe pero no tiene registros A o AAAA, por ejemplo si solo tiene registros de correo. `unroutable` que sí resuelve a direcciones, pero ninguna es alcanzable desde Internet.
 
+> **Estado posterior:** desde la ampliación de robustez existe un cuarto
+> caso, `wildcard`: resuelve a IPs enrutables, pero solo a las del comodín
+> DNS del dominio (las mismas que devuelve un nombre inventado), así que no
+> es un servicio real y no cuenta como activo.
+
 **¿Qué es un comodín en un certificado y por qué se expande?**
 Un certificado comodín como `*.ejemplo.com` cubre cualquier subdominio de primer nivel. El nombre `*.ejemplo.com` no identifica ningún host concreto, por lo que conservarlo introduciría un activo inexistente en el inventario. Se expande al dominio base, que sí es un host real.
+
+> **Estado posterior — no confundir con el comodín DNS.** El comodín *de
+> certificado* (`*.ejemplo.com` en el SAN) se resuelve aquí, al normalizar
+> nombres. El comodín *DNS* (un registro `*.ejemplo.com` que hace que
+> cualquier subdominio resuelva) es otro problema: infla el inventario con
+> hosts inexistentes, y se resolvió después con `detect_wildcard_dns()`
+> (`Memoria_Ampliacion_Robustez`, sección 4).
 
 ---
 

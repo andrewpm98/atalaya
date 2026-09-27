@@ -326,6 +326,10 @@ asumible mientras el despliegue sea local.
   identificado un caso de uso que lo requiera todavía.
 - **Sin autenticación**, limitación ya declarada y sin cambios en esta fase.
 
+> **Estado posterior:** `POST /findings/ask` es real desde el Paso 5 (y pasa
+> por `ai/prompter.py` desde la ampliación de agentes). Paginación con
+> `offset`, `PUT`/`DELETE` y autenticación **siguen pendientes**.
+
 ---
 
 ## 9. Bloque de defensa: preguntas previsibles

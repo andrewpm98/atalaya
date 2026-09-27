@@ -273,6 +273,11 @@ escaneo que ya pasó por esa comprobación al crearse.
   incluye una leyenda "confidencial" textual, pero no ningún mecanismo
   técnico (cifrado del PDF, contraseña) que la haga cumplir.
 
+> **Estado posterior:** las cuatro **siguen vigentes**. El informe ganó
+> después `risk_score` y un resumen ejecutivo con IA, opcional: si el
+> proveedor falla o no hay clave, el PDF se genera igual, sin resumen
+> (`Memoria_Ampliacion_Agentes`).
+
 ---
 
 ## 8. Bloque de defensa: preguntas previsibles
