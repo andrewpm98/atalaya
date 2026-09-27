@@ -197,6 +197,18 @@ Verificado con capturas de pantalla reales, no solo con la suite de tests
 Detalle completo del proceso, incluidos los bugs de renderizado
 encontrados y corregidos, en `memorias/Memoria_Ampliacion_Agentes_Atalaya.md`.
 
+### 2.7 Despliegue — `docker-compose.yml`, `docker/`
+
+Tres servicios: `db` (PostgreSQL 16), `api` y `dashboard`. La API aplica
+`alembic upgrade head` en cada arranque antes de levantar uvicorn (idempotente)
+y siempre usa el Postgres del compose: `DATABASE_URL` se fija en
+`environment`, que prevalece sobre el `.env`. El `.env` es opcional (sin él
+solo la IA queda sin clave) y el dashboard no lo recibe: es un cliente HTTP
+puro y no necesita secretos. Todos los puertos se publican solo en
+`127.0.0.1`, porque la BD usa credenciales fijas de desarrollo y la API no
+tiene autenticación. El dashboard espera al healthcheck de la API.
+`tests/test_deploy_config.py` fija estas propiedades sin levantar Docker.
+
 ## 3. Flujo de datos
 
 ```

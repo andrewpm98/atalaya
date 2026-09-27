@@ -285,7 +285,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **291 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **299 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -293,7 +293,9 @@ ver "Dashboard: diseño visual"; +4 al corregir el *tool calling* de Gemini,
 ver "Deuda técnica conocida"; +7 en la detección de wildcards DNS y +15 en la
 verificación HTTP opt-in de takeover, ver `memorias/
 Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
-PostgreSQL, ver "Deuda técnica conocida → Resuelta").
+PostgreSQL y +8 al arreglar el stack de Docker, ver "Deuda técnica conocida
+→ Resuelta"). La suite pasa también sobre Python 3.11, el mínimo declarado y
+la versión de las imágenes.
 
 ---
 
@@ -395,7 +397,7 @@ está terminado hasta que los que le afectan lo reflejan:
 | `CLAUDE.md` | Estado vivo del proyecto y reglas de trabajo | Cambia cualquier cosa de lo que describe (árbol, deuda, conteo de tests, restricciones) |
 | `docs/ARQUITECTURA.md` | Arquitectura por componentes y flujos internos | Cambia un flujo, un estado, un endpoint o un criterio de degradación |
 | `README.md` | Presentación y uso para quien llega de fuera | Cambia lo que la herramienta hace o cómo se usa |
-| `.env.example` | Contrato de configuración | Se añade/quita un campo de `config.py` (deben coincidir 1:1) |
+| `.env.example` | Contrato de configuración | Se añade/quita un campo de `config.py` (deben coincidir 1:1; lo comprueba `tests/test_deploy_config.py`) |
 | `memorias/` | Una memoria técnica **por fase**, entregable de la práctica | Se cierra una fase nueva (memoria nueva) |
 
 Las memorias son **fotos fechadas**: no se reescribe el cuerpo de una memoria
@@ -596,14 +598,6 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
   (solo cae a HTTP si HTTPS no responde, lo que genera `sin_https`), ni
   evalúa `Access-Control-Allow-Origin` ni cookies (`Set-Cookie` con
   `Secure`/`HttpOnly`/`SameSite`).
-- **Stack Docker sin levantar nunca.** `docker compose up` no se ha
-  ejecutado en esta máquina: Docker Desktop está instalado pero su motor Linux
-  necesita WSL, que no lo está. La lectura de los ficheros muestra cuatro
-  defectos (la API no aplicaba las migraciones ni copiaba `migrations/`; el
-  `DATABASE_URL` de `.env` podía desviar la API del Postgres del compose; el
-  dashboard no copiaba `.streamlit/`; no había `.dockerignore`), con arreglo
-  preparado pero **pendiente de verificar en ejecución**. PostgreSQL en sí sí
-  está validado (ver "Resuelta").
 - **Enumeración limitada a lo certificado o indexado.** Un subdominio que
   nunca tuvo certificado (crt.sh) ni aparece en Shodan no se descubre:
   contrapartida inherente al enfoque pasivo (sin fuerza bruta de nombres).
@@ -639,6 +633,19 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
   sobre PostgreSQL (29 fallaban antes) y flujo real completo sobre
   `scanme.nmap.org`. La suite normal sigue en SQLite: la guarda
   `test_toda_columna_de_fecha_usa_utc_datetime` cubre la regresión sin Postgres.
+- ~~**Stack Docker nunca levantado**~~ → al levantarlo (Docker Desktop sobre
+  WSL 2), `POST /scans` devolvía 500 (`no such table: scans`) y la API usaba
+  SQLite dentro del contenedor en vez del Postgres del compose. Cuatro
+  defectos: la imagen de la API no copiaba ni aplicaba las migraciones; el
+  `DATABASE_URL` de `.env` llegaba al contenedor; el dashboard no copiaba
+  `.streamlit/`; no había `.dockerignore`. Arreglados en `97d97d9`, con
+  endurecimiento: puertos solo en `127.0.0.1`, `.env` opcional, dashboard sin
+  secretos, healthcheck de la API, `exec uvicorn` (parada limpia en 1,7 s) e
+  imagen de la API de 1,51 a 1,04 GB. `tests/test_deploy_config.py` los fija
+  sin Docker (cada prueba falla contra la versión original). Verificado desde
+  cero, sin `.env`, con `.env.example`, tras reinicio y con la suite completa
+  sobre Python 3.11. `.env.example` apunta ahora a `localhost:5432`
+  (`de13de0`): con `@db` el arranque local del README fallaba.
 - ~~**Dependencias transitivas no declaradas**~~ → `greenlet` explícito
   (`f547a44`), instalación limpia verificada de extremo a extremo.
 - ~~**Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
@@ -700,7 +707,7 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 291)
+pytest -q                            # tests (deben pasar los 299)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
@@ -708,7 +715,8 @@ atalaya subdomains ejemplo.com       # CLI de enumeración
 atalaya subdomains ejemplo.com --save # enumera y persiste el resultado en BD
 ruff check src tests                 # linter (0 avisos)
 mypy src                             # tipos (0 errores); ambos: make lint
-docker compose up --build            # stack completo
+docker compose up --build -d         # stack completo (migra solo; .env opcional)
+docker compose up -d db              # solo PostgreSQL, para la API en local
 ```
 
 **Cambiar de proveedor de IA:** `AI_PROVIDER=anthropic` o `AI_PROVIDER=gemini`
