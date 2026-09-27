@@ -78,6 +78,8 @@ src/atalaya/
 │   │                             list_assets, list_findings, diff_scans()
 │   ├── exceptions.py            AtalayaError, UnauthorizedTargetError, ...
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
+│   ├── audit.py                 get_audit_logger() — traza de auditoría
+│   │                             siempre visible (restricción #6, salvaguarda c)
 │   └── netutils.py              classify_ip() — 10 alcances de red
 ├── discovery/
 │   ├── models.py                SubdomainRecord, SubdomainScanResult,
@@ -231,7 +233,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > confirmado"** (patrón + indicio), nunca "confirmado" — coherente con la
 > restricción #6 reabierta arriba. Salvaguardas obligatorias en el propio
 > módulo: opt-in, `is_authorized()` por hostname antes de sondear, y traza de
-> auditoría (`logger.info`) de cada petición a un tercero. `takeover.py` no se
+> auditoría de cada petición a un tercero (`core/audit.py`, siempre visible). `takeover.py` no se
 > toca: sigue siendo pasivo puro y su test estático de "no importa httpx"
 > sigue en verde — la petición HTTP vive solo en el módulo nuevo.
 
@@ -285,7 +287,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **299 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **305 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -293,8 +295,8 @@ ver "Dashboard: diseño visual"; +4 al corregir el *tool calling* de Gemini,
 ver "Deuda técnica conocida"; +7 en la detección de wildcards DNS y +15 en la
 verificación HTTP opt-in de takeover, ver `memorias/
 Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
-PostgreSQL y +8 al arreglar el stack de Docker, ver "Deuda técnica conocida
-→ Resuelta"). La suite pasa también sobre Python 3.11, el mínimo declarado y
+PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
+`LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"). La suite pasa también sobre Python 3.11, el mínimo declarado y
 la versión de las imágenes.
 
 ---
@@ -460,8 +462,9 @@ cómo trata esto.
    obligatorias: (a) opt-in explícito (`TAKEOVER_VERIFY=false` por defecto — el
    comportamiento por defecto de la herramienta no cambia); (b) el hostname
    candidato debe pasar `is_authorized()` (estar en `SCAN_ALLOWLIST`) antes de
-   sondear su destino; (c) cada petición a un tercero deja traza de auditoría en
-   el log. El módulo de detección `discovery/takeover.py` permanece
+   sondear su destino; (c) cada petición a un tercero deja traza en el logger
+   de auditoría (`core/audit.py`), que se emite **siempre**, sin depender de
+   `LOG_LEVEL`, de `-v` ni de uvicorn. El módulo de detección `discovery/takeover.py` permanece
    estrictamente pasivo (solo DNS, sin `httpx`) y su test estático lo garantiza:
    la petición HTTP vive solo en el módulo de verificación, separado.
 
@@ -646,6 +649,22 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
   cero, sin `.env`, con `.env.example`, tras reinicio y con la suite completa
   sobre Python 3.11. `.env.example` apunta ahora a `localhost:5432`
   (`de13de0`): con `@db` el arranque local del README fallaba.
+- ~~**Auditoría de takeover invisible y `LOG_LEVEL` sin efecto**~~ →
+  encontrado en el ensayo desde un clon limpio. La traza obligatoria de la
+  restricción #6 se emitía con `logger.info`, pero nadie configuraba los
+  loggers de `atalaya.*`: bajo uvicorn (solo configura `uvicorn.*`) y en la
+  CLI sin `-v` el nivel efectivo era WARNING y se descartaba en silencio. El
+  test existente no lo veía porque forzaba INFO con `caplog.at_level`.
+  Arreglado con un logger de auditoría independiente (`core/audit.py`,
+  `f719fbe`) y aplicando `LOG_LEVEL` en `api/main.py` (`da3cc83`); tests que
+  reproducen la configuración real de uvicorn y de la CLI sin tocar niveles.
+- ~~**Configuración muerta y README no apto para Windows**~~ → del mismo
+  ensayo: `API_HOST`/`API_PORT`/`ENVIRONMENT` no los leía nadie (eliminados,
+  `521019e`); `make api` escuchaba en `0.0.0.0` (`557f1e8`); el README
+  dependía de `make` y de `source .venv/bin/activate`, no avisaba de que
+  `docker compose restart` no recarga `.env`, no tenía ejemplo de
+  `POST /scans` y sus `curl` fallan en PowerShell y, con tildes, en Git Bash
+  (envía cp1252) (`7c4eefc`). Re-ensayado con el código commiteado.
 - ~~**Dependencias transitivas no declaradas**~~ → `greenlet` explícito
   (`f547a44`), instalación limpia verificada de extremo a extremo.
 - ~~**Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
@@ -707,7 +726,7 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 299)
+pytest -q                            # tests (deben pasar los 305)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

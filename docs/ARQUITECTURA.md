@@ -529,9 +529,12 @@ obligatorias, aplicadas en el propio `takeover_verify.py`:
    necesariamente al proveedor de terceros (es la naturaleza de la
    comprobación), pero solo para candidatos surgidos de un escaneo
    autorizado.
-3. **Auditoría.** Cada petición a un tercero deja traza en el log
-   (`logger.info` con hostname, destino y resultado), para que quede
-   registro de qué infraestructura ajena se ha contactado y por qué.
+3. **Auditoría.** Cada petición a un tercero deja traza (hostname, destino
+   y resultado) en el logger de auditoría de `core/audit.py`, para que quede
+   registro de qué infraestructura ajena se ha contactado y por qué. Ese
+   logger tiene nivel y handler propios: se emite siempre, sin depender de
+   `LOG_LEVEL`, de `-v` ni de cómo configure uvicorn el logging (con un
+   `logger.info` corriente la traza se descartaba en silencio bajo la API).
 
 Degradación controlada, igual que el resto del descubrimiento: si el destino
 no resuelve, la conexión falla o no hay huella, el candidato se queda en

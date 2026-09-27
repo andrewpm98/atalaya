@@ -230,6 +230,12 @@ nunca a "confirmado". La frontera que #6 protege se mantiene intacta.
   `is_authorized()` por hostname antes de sondear el destino de terceros
   (limitado a `SCAN_ALLOWLIST`); (c) auditoría (`logger.info`) de cada petición
   a un tercero, con hostname, destino, status y resultado.
+
+  > **Estado posterior:** esa traza no se veía nunca en la práctica: nadie
+  > configuraba los loggers de `atalaya.*`, y bajo uvicorn o en la CLI sin
+  > `-v` un `logger.info` se descartaba en silencio (el test lo tapaba al
+  > forzar INFO con `caplog`). Arreglado con un logger de auditoría
+  > independiente, `core/audit.py` (commit `f719fbe`), que se emite siempre.
 - **Degradación controlada**: destino que no resuelve, conexión que falla o
   ausencia de huella → el candidato se queda en detección por patrón, nunca en
   error. `enrichment.py` encadena `verify_candidates()` tras

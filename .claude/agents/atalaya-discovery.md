@@ -36,7 +36,8 @@ de seguridad" y "Deuda técnica conocida") y las secciones 2.2, 7 y 8 de
   intrusividad acotada; y **nunca confirmar explotabilidad ni reclamar un
   recurso**. La única excepción a "sin HTTP a terceros" es
   `takeover_verify.py`, con sus tres salvaguardas (opt-in, `is_authorized()`
-  por hostname, auditoría con `logger.info`). No añadas otra petición a
+  por hostname, auditoría con el logger de `core/audit.py` — nunca un
+  `logger.info` corriente, que bajo uvicorn se descarta). No añadas otra petición a
   terceros sin plantear antes el conflicto al usuario.
 - **Degradación controlada.** Una fuente caída no aborta el escaneo; una
   función que procesa un elemento de una colección nunca lanza: refleja el
