@@ -56,6 +56,12 @@ Cada dirección resuelta se clasifica por alcance: un nombre que apunta a
 cuenta como activo alcanzable. Los que resuelven a IPs privadas se destacan
 aparte, porque filtrar direccionamiento interno es un hallazgo en sí mismo.
 
+Si el dominio tiene **DNS wildcard** (cualquier subdominio resuelve), Atalaya
+lo detecta antes de resolver y descarta como `wildcard` los hosts que solo
+responden con la IP del comodín: sin ese filtro, cada nombre inventado
+contaría como un activo real. Se conservan en el resultado, y la CLI indica
+cuántos se descartaron.
+
 > ⚠️ Respeta `SCAN_ALLOWLIST`. Analiza solo dominios propios o autorizados.
 
 ## Uso rápido: puertos, cabeceras y TLS
@@ -77,9 +83,17 @@ resultantes entran al mismo flujo que el resto — triaje por IA
 (`POST /scans/{id}/triage`) e informe (`GET /scans/{id}/report`) los
 procesan sin distinguir su origen. Lo mismo aplica al riesgo de
 *subdomain takeover*: se detecta automáticamente sobre los hosts que no
-resuelven por A/AAAA (donde vive la señal de un CNAME abandonado), sin
-ninguna petición HTTP al recurso de terceros — reconocimiento pasivo, sin
-verificar explotabilidad.
+resuelven por A/AAAA (donde vive la señal de un CNAME abandonado), por
+patrón de CNAME y sin ninguna petición HTTP al recurso de terceros —
+reconocimiento pasivo.
+
+**Verificación de takeover (opcional, desactivada por defecto):** con
+`TAKEOVER_VERIFY=true`, además se consulta la página de error pública del
+proveedor apuntado (p. ej. el 404 «There isn't a GitHub Pages site here») y,
+si muestra la huella de "recurso no reclamado", el hallazgo sube a **alta
+sospecha — no confirmado**. Nunca se marca como confirmado ni se intenta
+reclamar el recurso; solo actúa sobre hostnames incluidos en `SCAN_ALLOWLIST`
+y cada petición a un tercero queda registrada en el log.
 
 **Segunda fuente de enumeración:** con `SHODAN_API_KEY` en `.env`, se
 consulta también la API DNS de Shodan, concurrentemente con crt.sh.
@@ -190,8 +204,10 @@ make up                   # levanta db + api + dashboard
 ```bash
 python -m venv .venv && source .venv/bin/activate
 make install
+make migrate      # crea las tablas (una vez)
 make api          # en una terminal
 make dashboard    # en otra
+make test         # suite completa (deterministas, sin red)
 ```
 
 ## Estado del proyecto
@@ -228,6 +244,13 @@ Ampliación posterior, más allá de los requisitos obligatorios:
 - [x] `risk_score` y resumen ejecutivo con IA en el informe PDF
 - [x] Rediseño visual del dashboard (estética de herramienta comercial de
       seguridad), verificado con capturas de pantalla reales
+- [x] Detección y filtrado de wildcards DNS
+- [x] Verificación HTTP opcional de *subdomain takeover* ("alta sospecha",
+      nunca "confirmado")
+- [x] Instalación limpia verificada de extremo a extremo; `ruff` y `mypy`
+      sin avisos (`make lint`)
+
+La memoria técnica de cada fase está en [`memorias/`](memorias/).
 
 ## Aviso legal
 
