@@ -75,6 +75,11 @@ Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
   no requiere migración—, puertos abiertos).
 - **Finding** — hallazgo (tipo, evidencia, severidad, remediación, `asset_id`).
 
+Las fechas se guardan como UTC *naive* (`TIMESTAMP WITHOUT TIME ZONE`) a
+través de `UtcDateTime`, que convierte al escribir: asyncpg rechaza un
+`datetime` con zona en esas columnas (SQLite no), y sin esa conversión ningún
+escaneo llegaba a guardarse en PostgreSQL.
+
 Relaciones: `Scan 1─N Asset`, `Asset 1─N Finding`. Las migraciones viven en
 `migrations/` (Alembic, motor async). `core/persistence.py` traduce los
 resultados de descubrimiento a estas filas: `save_subdomain_scan()` (un

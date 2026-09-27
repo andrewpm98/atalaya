@@ -285,14 +285,15 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **288 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **291 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
 ver "Dashboard: diseño visual"; +4 al corregir el *tool calling* de Gemini,
 ver "Deuda técnica conocida"; +7 en la detección de wildcards DNS y +15 en la
 verificación HTTP opt-in de takeover, ver `memorias/
-Memoria_Ampliacion_Robustez_Atalaya.md`).
+Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
+PostgreSQL, ver "Deuda técnica conocida → Resuelta").
 
 ---
 
@@ -475,6 +476,7 @@ cómo trata esto.
 | Capa IA tras interfaz `LLMProvider` | El modelo es configuración, no dependencia rígida — probado sumando `GeminiProvider` sin tocar `triage.py` ni los agentes |
 | Triaje IA **después** de persistir | La IA clasifica y explica sobre evidencia verificada; no descubre |
 | Endpoints en 501, no ausentes | El contrato de la API se fijó en diseño y se rellenó por fases. **Cumplido**: hoy ningún endpoint devuelve 501; si se añade uno nuevo por fases, se aplica el mismo criterio |
+| Fechas: UTC *naive* en BD vía `UtcDateTime`, no `TIMESTAMPTZ` | Arreglo del bug de PostgreSQL sin migración y con la misma salida de lectura en SQLite y PostgreSQL; toda columna de fecha nueva debe usar `UtcDateTime` (hay un test que lo exige) |
 | Wildcards DNS: reclasificar, no borrar | Un host que solo resuelve a la IP del comodín pasa a `wildcard` y sale del inventario activo, pero se conserva en `records`: descartar en silencio impediría auditar el filtro |
 | Detección de takeover: solo patrón DNS por defecto | La detección (`discovery/takeover.py`) es pasiva pura: patrón de CNAME, sin HTTP. La verificación HTTP existe pero es **opt-in** (`TAKEOVER_VERIFY`, off por defecto) y vive en un módulo aparte (`discovery/takeover_verify.py`) — ver restricción #6, "Excepción acotada". Eleva a "alta sospecha", nunca a "confirmado" |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
@@ -594,12 +596,14 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
   (solo cae a HTTP si HTTPS no responde, lo que genera `sin_https`), ni
   evalúa `Access-Control-Allow-Origin` ni cookies (`Set-Cookie` con
   `Secure`/`HttpOnly`/`SameSite`).
-- **Migraciones nunca ejecutadas contra PostgreSQL real.** Se validaron
-  contra SQLite (Paso 3 y la instalación limpia de la ampliación de
-  robustez); usan tipos estándar compatibles con ambos motores, pero el
-  stack Docker (`docker compose up`) no se ha levantado nunca en esta
-  máquina (sin Docker instalado). Es el motor declarado de producción:
-  conviene validarlo antes de la defensa.
+- **Stack Docker sin levantar nunca.** `docker compose up` no se ha
+  ejecutado en esta máquina: Docker Desktop está instalado pero su motor Linux
+  necesita WSL, que no lo está. La lectura de los ficheros muestra cuatro
+  defectos (la API no aplicaba las migraciones ni copiaba `migrations/`; el
+  `DATABASE_URL` de `.env` podía desviar la API del Postgres del compose; el
+  dashboard no copiaba `.streamlit/`; no había `.dockerignore`), con arreglo
+  preparado pero **pendiente de verificar en ejecución**. PostgreSQL en sí sí
+  está validado (ver "Resuelta").
 - **Enumeración limitada a lo certificado o indexado.** Un subdominio que
   nunca tuvo certificado (crt.sh) ni aparece en Shodan no se descubre:
   contrapartida inherente al enfoque pasivo (sin fuerza bruta de nombres).
@@ -624,6 +628,17 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
   `discovery/takeover.py` y `discovery/shodan.py` (ampliación de agentes).
 - ~~**Sin detección de comodines DNS**~~ (Paso 2) → `detect_wildcard_dns()` +
   estado `wildcard`, commit `2d90b0a` (ampliación de robustez).
+- ~~**Migraciones y escritura nunca probadas contra PostgreSQL**~~ → al
+  probarlas contra PostgreSQL 16.12 real (binarios portables, sin Docker)
+  apareció un bug grave: las fechas *aware* en columnas `TIMESTAMP WITHOUT TIME
+  ZONE` hacían que asyncpg rechazara **toda** escritura de un `Scan`, así que
+  `POST /scans` fallaba siempre en el motor de producción; SQLite lo tragaba en
+  silencio. Arreglado con `core/models.py::UtcDateTime` (convierte a UTC
+  *naive* al escribir; sin migración, `alembic check` limpio), commit
+  `3b9e1a6`. Verificado: `alembic upgrade head`, 47/47 pruebas de BD y API
+  sobre PostgreSQL (29 fallaban antes) y flujo real completo sobre
+  `scanme.nmap.org`. La suite normal sigue en SQLite: la guarda
+  `test_toda_columna_de_fecha_usa_utc_datetime` cubre la regresión sin Postgres.
 - ~~**Dependencias transitivas no declaradas**~~ → `greenlet` explícito
   (`f547a44`), instalación limpia verificada de extremo a extremo.
 - ~~**Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
@@ -685,7 +700,7 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 288)
+pytest -q                            # tests (deben pasar los 291)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
