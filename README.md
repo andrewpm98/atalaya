@@ -192,18 +192,28 @@ Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 ### Con Docker (recomendado)
 
 ```bash
-cp .env.example .env      # rellena ANTHROPIC_API_KEY o GEMINI_API_KEY (según AI_PROVIDER)
-make up                   # levanta db + api + dashboard
+cp .env.example .env         # rellena ANTHROPIC_API_KEY o GEMINI_API_KEY (según AI_PROVIDER)
+docker compose up --build -d # levanta db + api + dashboard (equivale a `make up`)
 ```
 
 - API:       http://localhost:8000/docs
 - Dashboard: http://localhost:8501
 
-### En local (sin Docker)
+La API aplica las migraciones sola al arrancar. Sin `.env` el stack arranca
+igual: todo funciona salvo los endpoints de IA, que responden con un error
+explicando que falta la clave (el informe PDF se genera sin resumen
+ejecutivo). Los puertos solo se publican en `127.0.0.1`: la base de datos usa
+credenciales fijas de desarrollo y la API no tiene autenticación.
+
+Requiere Docker Desktop con su motor Linux en marcha (en Windows, sobre WSL 2).
+
+### En local (API y dashboard fuera de Docker)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 make install
+docker compose up -d db    # solo PostgreSQL (o usa SQLite: ver .env.example)
+cp .env.example .env
 make migrate      # crea las tablas (una vez)
 make api          # en una terminal
 make dashboard    # en otra
