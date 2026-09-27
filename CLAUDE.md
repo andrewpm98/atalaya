@@ -27,9 +27,10 @@ un commit único; el desarrollo progresivo es parte de lo que se califica.
 
 Recibe un dominio y ejecuta cuatro fases:
 
-1. **Descubrimiento** — subdominios (Certificate Transparency + Shodan + DNS),
-   puertos, cabeceras de seguridad HTTP, configuración TLS, riesgo de
-   *subdomain takeover* (patrón de CNAME hacia hosting de terceros).
+1. **Descubrimiento** — subdominios (Certificate Transparency + Shodan + DNS,
+   con filtrado de wildcards DNS), puertos, cabeceras de seguridad HTTP,
+   configuración TLS, riesgo de *subdomain takeover* (patrón de CNAME hacia
+   hosting de terceros, con verificación HTTP opcional).
 2. **Persistencia** — activos y hallazgos en base de datos, para comparar
    escaneos en el tiempo (`GET /scans/{id}/diff/{other_id}`).
 3. **Triaje por IA** — un LLM prioriza hallazgos, explica impacto real y
@@ -84,6 +85,9 @@ src/atalaya/
 │   │                             TakeoverCandidate, EnrichmentResult
 │   ├── subdomains.py            Enumeración (crt.sh + Shodan, concurrentes,
 │   │                             fusionadas por hostname) + verificación DNS
+│   │                             + detect_wildcard_dns() — descarta como
+│   │                             `wildcard` los hosts que solo resuelven a la
+│   │                             IP del comodín DNS
 │   ├── shodan.py                 fetch_shodan_subdomains() — segunda fuente,
 │   │                             opcional (SHODAN_API_KEY vacía = se omite)
 │   ├── ports.py                  scan_ports() — TCP asíncrono, puertos comunes
@@ -126,8 +130,8 @@ src/atalaya/
     └── routes/
         ├── scans.py              POST/GET /scans, GET /scans/{id},
         │                         POST /scans/{id}/triage,
-        │                         GET /scans/{id}/diff/{other_id} — nuevo,
-        │                         compara dos escaneos + valoración IA,
+        │                         GET /scans/{id}/diff/{other_id} — compara
+        │                         dos escaneos + valoración IA,
         │                         GET /scans/{id}/report — reales
         ├── assets.py              GET /assets?scan_id= — real
         └── findings.py            GET /findings, POST /findings/ask
@@ -140,6 +144,11 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 .claude/agents/                  Subagentes de proyecto de Claude Code (no
                                   es parte del producto, es tooling de
                                   desarrollo — ver "Cómo quiero trabajar")
+_shot.py                         Capturas del dashboard con Playwright
+                                  (tooling de desarrollo, versionado; no es
+                                  parte del paquete `atalaya`)
+docs/ARQUITECTURA.md             Arquitectura por componentes y flujos
+memorias/                        Memorias técnicas por fase (ver "Documentación")
 ```
 
 > **Desviación del stub original:** este documento preveía los modelos
@@ -263,6 +272,18 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 > requisito obligatorio antes de que existiera la capa IA, así que no puede
 > depender de ella. Asimetría deliberada, documentada en el propio código.
 
+> **Ampliación (robustez, post-agentes):** instalación limpia verificada de
+> extremo a extremo en un venv nuevo (`greenlet` faltaba en `pyproject.toml`),
+> `ruff` y `mypy` a cero avisos, y **detección de wildcards DNS**:
+> `discovery/subdomains.py::detect_wildcard_dns()` resuelve un subdominio con
+> un UUID antes de la resolución masiva; si responde, cualquier registro
+> `active` cuyas IPs sean subconjunto de las del comodín pasa a
+> `ResolutionStatus.WILDCARD` — deja de contar como activo y de recibir
+> escaneo de puertos/cabeceras/TLS, pero se conserva en `records` (descartado,
+> no perdido). `Asset.status` es texto libre en BD, así que el estado nuevo no
+> requirió migración. Detalle en
+> `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
+
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
 55 objetivos de escaneo, 19 segundos. **288 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
@@ -277,7 +298,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`).
 
 ## Hoja de ruta
 
-1. ~~Paso 1 — Arquitectura y esqueleto~~ ✅
+1. **Paso 1 — Arquitectura y esqueleto** ✅
 2. **Paso 2 — Motor de descubrimiento** ✅ — subdominios, puertos, cabeceras,
    TLS, orquestados por `enrich_scan()` sobre los hosts activos de cada escaneo
 3. **Paso 3 — Modelos de BD y persistencia** — Scan/Asset/Finding + migraciones ✅ ·
@@ -291,7 +312,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`).
    desde `GET /scans/{id}/report` y desde el dashboard
 
 Se adelantó el Paso 3 antes de completar el resto del descubrimiento, tal
-como se venía valorando: los módulos de puertos/cabeceras/TLS nacerán ya
+como se venía valorando: los módulos de puertos/cabeceras/TLS nacieron ya
 con destino de persistencia en vez de requerir adaptación posterior.
 
 Por el mismo motivo se adelantó el Paso 4 para `scans`/`assets`/`findings`
@@ -317,12 +338,17 @@ pide evitar explícitamente ("los stubs no son código muerto").
    consulta en lenguaje natural hacen exactamente lo mismo que antes. Ver
    "Dashboard: diseño visual" para las reglas y las trampas de Streamlit que
    hubo que sortear.
+10. **Ampliación — Robustez** ✅ — `greenlet` declarado, instalación limpia
+    verificada, `ruff`/`mypy` a cero, detección de wildcards DNS y
+    verificación HTTP opt-in de subdomain takeover (con la restricción #6
+    reabierta de forma acotada). Memoria:
+    `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre. Los siete pasos de la hoja de
-ruta y los cinco requisitos obligatorios están cerrados desde antes de esta
-ampliación — nada de lo de abajo era necesario para aprobar, es trabajo
-que profundiza el componente diferencial (capa IA) y la calidad percibida
-(dashboard) de cara a la defensa oral.
+ruta y los cinco requisitos obligatorios están cerrados desde antes de las
+ampliaciones 8-10 — ninguna era necesaria para aprobar: profundizan el
+componente diferencial (capa IA), la calidad percibida (dashboard) y la
+fiabilidad de la entrega (robustez) de cara a la defensa oral.
 
 ---
 
@@ -354,7 +380,29 @@ Principio establecido y aplicado en `subdomains.py`: **degradación controlada**
 - Un fallo en la suite debe indicar siempre un problema del código, nunca una
   caída de servicio.
 - Cubrir casos límite y los de seguridad, no solo el camino feliz.
-- Ejecutar `pytest -q` antes de dar por terminado cualquier cambio.
+- Ejecutar `pytest -q` antes de dar por terminado cualquier cambio, y
+  `make lint` (`ruff check src tests` + `mypy src`): ambos están a cero avisos
+  desde la ampliación de robustez y no deben volver a acumularse.
+
+### Documentación
+
+Cinco sitios, cada uno con un papel distinto. Un cambio de comportamiento no
+está terminado hasta que los que le afectan lo reflejan:
+
+| Documento | Papel | Se actualiza cuando... |
+|---|---|---|
+| `CLAUDE.md` | Estado vivo del proyecto y reglas de trabajo | Cambia cualquier cosa de lo que describe (árbol, deuda, conteo de tests, restricciones) |
+| `docs/ARQUITECTURA.md` | Arquitectura por componentes y flujos internos | Cambia un flujo, un estado, un endpoint o un criterio de degradación |
+| `README.md` | Presentación y uso para quien llega de fuera | Cambia lo que la herramienta hace o cómo se usa |
+| `.env.example` | Contrato de configuración | Se añade/quita un campo de `config.py` (deben coincidir 1:1) |
+| `memorias/` | Una memoria técnica **por fase**, entregable de la práctica | Se cierra una fase nueva (memoria nueva) |
+
+Las memorias son **fotos fechadas**: no se reescribe el cuerpo de una memoria
+cerrada para que parezca que siempre dijo lo que hoy es cierto. Si una
+afirmación queda superada, se añade una nota «Estado posterior» junto a ella,
+con el commit o la memoria que la supera. Excepción: los bloques de
+preguntas de defensa, que se usan para preparar la defensa oral y no pueden
+contradecir el código actual.
 
 ### Commits
 
@@ -426,7 +474,8 @@ cómo trata esto.
 | Streamlit, no React | El plazo no permite invertirlo en frontend |
 | Capa IA tras interfaz `LLMProvider` | El modelo es configuración, no dependencia rígida — probado sumando `GeminiProvider` sin tocar `triage.py` ni los agentes |
 | Triaje IA **después** de persistir | La IA clasifica y explica sobre evidencia verificada; no descubre |
-| Endpoints en 501, no ausentes | El contrato de la API se fija en diseño y se rellena por fases |
+| Endpoints en 501, no ausentes | El contrato de la API se fijó en diseño y se rellenó por fases. **Cumplido**: hoy ningún endpoint devuelve 501; si se añade uno nuevo por fases, se aplica el mismo criterio |
+| Wildcards DNS: reclasificar, no borrar | Un host que solo resuelve a la IP del comodín pasa a `wildcard` y sale del inventario activo, pero se conserva en `records`: descartar en silencio impediría auditar el filtro |
 | Detección de takeover: solo patrón DNS por defecto | La detección (`discovery/takeover.py`) es pasiva pura: patrón de CNAME, sin HTTP. La verificación HTTP existe pero es **opt-in** (`TAKEOVER_VERIFY`, off por defecto) y vive en un módulo aparte (`discovery/takeover_verify.py`) — ver restricción #6, "Excepción acotada". Eleva a "alta sospecha", nunca a "confirmado" |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
 
@@ -476,7 +525,7 @@ versión. Se prefiere a los colores de markdown (`:red[...]`) porque esos
 salen de la paleta de Streamlit y no de la escala de severidad propia.
 
 **Verificación visual.** El aspecto no se da por bueno sin mirarlo: `_shot.py`
-(raíz del repo, fuera del proyecto) levanta un navegador real contra el
+(raíz del repo, fuera del paquete) levanta un navegador real contra el
 dashboard en marcha y captura inicio, listado, detalle, activo desplegado,
 escaneo grande, triaje con IA, respuesta en lenguaje natural y el estado con
 la API caída, en `.claude/shots/`. Las capturas en verde no sustituyen a la
@@ -487,11 +536,7 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
 
 ## Deuda técnica conocida
 
-**Resuelta en la ampliación post-Paso 7** (se deja constancia para la
-defensa, por si se pregunta por la evolución): la falta de consulta de
-CNAME y la fuente única de enumeración, ambas documentadas aquí desde el
-Paso 2, se cerraron con `discovery/takeover.py` y `discovery/shodan.py`
-respectivamente.
+### Pendiente
 
 - **Shodan: cobertura real limitada por el plan de la clave disponible.**
   `/dns/domain/{domain}` devuelve `403` en el plan gratuito `oss`
@@ -518,6 +563,69 @@ respectivamente.
   candidato se queda en patrón puro (degradación controlada, no error). No se
   amplió el alcance de detección a hosts `active` con CNAME sospechoso: es
   una decisión separada, no la que se pidió aquí.
+- **Cuota gratuita de Gemini: ~20 peticiones/día**, se agota rápido
+  combinando triaje + prompter + diff + informe en la misma sesión de
+  pruebas. Verlo como límite de verificación manual, no del código.
+- **API sin autenticación.** Asumible en local; bloqueante si se despliega con
+  IP pública.
+- **Variabilidad del DNS.** Dos escaneos del mismo dominio no dan resultados
+  idénticos (timeouts, balanceo, caché). Es normal, y refuerza la necesidad de
+  persistir escaneos para distinguir un cambio real de una fluctuación.
+- **Informe solo en PDF, sin histórico.** `reporting/generator.py` sobrescribe
+  un único PDF por escaneo (`reports/atalaya_informe_{dominio}_{id}.pdf`) en
+  cada descarga; no guarda versiones anteriores ni ofrece DOCX (el parámetro
+  `fmt` del stub original se conserva como punto de extensión, pero solo
+  "pdf" está implementado).
+- **Puertos: solo `COMMON_PORTS`, sin banner grabbing.** `discovery/ports.py`
+  confirma si un puerto está abierto, no qué servicio ni versión corre
+  detrás (eso exigiría enviar payloads específicos por protocolo, más
+  intrusivo). Un barrido completo de los 65535 puertos tampoco está
+  contemplado, por la misma razón de intrusividad acotada.
+- **TLS: sin validar cadena de confianza ni hostname del certificado.**
+  `discovery/tls.py` inspecciona el certificado que presenta el servidor
+  (versión, emisor, caducidad) con `verify_mode=CERT_NONE` a propósito —
+  necesita poder reportar un certificado autofirmado o caducado, no
+  rechazarlo antes de verlo — pero no comprueba si la cadena es válida ni si
+  el certificado corresponde al hostname consultado (mismatch de SAN/CN).
+- **Cabeceras: solo la respuesta final, sin CORS ni cookies.**
+  `discovery/headers.py` sigue redirecciones (`follow_redirects=True`) y
+  evalúa las seis cabeceras que pide el enunciado sobre la respuesta
+  **final**; no comprueba por separado que el HTTP plano redirija a HTTPS
+  (solo cae a HTTP si HTTPS no responde, lo que genera `sin_https`), ni
+  evalúa `Access-Control-Allow-Origin` ni cookies (`Set-Cookie` con
+  `Secure`/`HttpOnly`/`SameSite`).
+- **Migraciones nunca ejecutadas contra PostgreSQL real.** Se validaron
+  contra SQLite (Paso 3 y la instalación limpia de la ampliación de
+  robustez); usan tipos estándar compatibles con ambos motores, pero el
+  stack Docker (`docker compose up`) no se ha levantado nunca en esta
+  máquina (sin Docker instalado). Es el motor declarado de producción:
+  conviene validarlo antes de la defensa.
+- **Enumeración limitada a lo certificado o indexado.** Un subdominio que
+  nunca tuvo certificado (crt.sh) ni aparece en Shodan no se descubre:
+  contrapartida inherente al enfoque pasivo (sin fuerza bruta de nombres).
+- **Sin límite global de coste ni de concurrencia de IA.** Cada llamada acota
+  su propia concurrencia (`AI_CONCURRENCY` en el triaje), pero no hay un
+  tope agregado entre peticiones simultáneas ni entre los seis agentes, ni
+  caché de respuestas.
+- **No se puede forzar un re-triaje.** `POST /scans/{id}/triage` solo procesa
+  hallazgos `unknown` (idempotente a propósito); volver a triar tras cambiar
+  de modelo exige devolver `severity` a `unknown` directamente en BD. El
+  triaje tampoco ve el histórico del dominio (hallazgos de escaneos previos).
+- **API: sin paginación ni borrado.** `list_scans` acepta `limit` (50 por
+  defecto) pero no `offset`; no existen rutas `PUT`/`DELETE`.
+- **Dashboard sin diff ni triaje selectivo.** `GET /scans/{id}/diff/{other_id}`
+  solo es accesible por API; el triaje se lanza sobre el escaneo completo,
+  nunca sobre un hallazgo concreto; la consulta NL no recuerda preguntas
+  anteriores.
+
+### Resuelta (se deja constancia para la defensa)
+
+- ~~**Sin consulta de CNAME / fuente única de enumeración**~~ (Paso 2) →
+  `discovery/takeover.py` y `discovery/shodan.py` (ampliación de agentes).
+- ~~**Sin detección de comodines DNS**~~ (Paso 2) → `detect_wildcard_dns()` +
+  estado `wildcard`, commit `2d90b0a` (ampliación de robustez).
+- ~~**Dependencias transitivas no declaradas**~~ → `greenlet` explícito
+  (`f547a44`), instalación limpia verificada de extremo a extremo.
 - ~~**Verificación en vivo de los 5 agentes de IA nuevos, pendiente con
   Anthropic.**~~ **Resuelto.** Con `ANTHROPIC_API_KEY` ya disponible, se
   verificaron en vivo los seis agentes (incluido `ai/triage.py`, que
@@ -526,7 +634,7 @@ respectivamente.
   de `mediamarkt.es` (severidad `LOW` razonada correctamente),
   `analyst.analyze_scan` sobre un escaneo mediano y sobre el escaneo
   grande de `github.com` (117 activos/204 hallazgos — el caso que rompía
-  con Gemini antes del arreglo de la sección de arriba; con Anthropic
+  con Gemini antes del arreglo del punto siguiente; con Anthropic
   nunca falló), `prompter.route_and_answer` en sus dos rutas (general →
   analyst, takeover → takeover_detective), `assess_takeover_risk` sobre
   un candidato construido a mano, `analyze_diff` sobre dos escaneos
@@ -570,36 +678,6 @@ respectivamente.
   Verificado en vivo antes y después del arreglo (mismos casos: fallaban,
   ahora responden) y cubierto con 4 tests de regresión deterministas en
   `tests/test_ai_provider.py`.
-- **Cuota gratuita de Gemini: ~20 peticiones/día**, se agota rápido
-  combinando triaje + prompter + diff + informe en la misma sesión de
-  pruebas. Verlo como límite de verificación manual, no del código.
-- **Sin detección de comodines DNS.** Un dominio que resuelve cualquier
-  subdominio inexistente inflaría el recuento de activos.
-- **API sin autenticación.** Asumible en local; bloqueante si se despliega con
-  IP pública.
-- **Variabilidad del DNS.** Dos escaneos del mismo dominio no dan resultados
-  idénticos (timeouts, balanceo, caché). Es normal, y refuerza la necesidad de
-  persistir escaneos para distinguir un cambio real de una fluctuación.
-- **Informe solo en PDF, sin histórico.** `reporting/generator.py` sobrescribe
-  un único PDF por escaneo (`reports/atalaya_informe_{dominio}_{id}.pdf`) en
-  cada descarga; no guarda versiones anteriores ni ofrece DOCX (el parámetro
-  `fmt` del stub original se conserva como punto de extensión, pero solo
-  "pdf" está implementado).
-- **Puertos: solo `COMMON_PORTS`, sin banner grabbing.** `discovery/ports.py`
-  confirma si un puerto está abierto, no qué servicio ni versión corre
-  detrás (eso exigiría enviar payloads específicos por protocolo, más
-  intrusivo). Un barrido completo de los 65535 puertos tampoco está
-  contemplado, por la misma razón de intrusividad acotada.
-- **TLS: sin validar cadena de confianza ni hostname del certificado.**
-  `discovery/tls.py` inspecciona el certificado que presenta el servidor
-  (versión, emisor, caducidad) con `verify_mode=CERT_NONE` a propósito —
-  necesita poder reportar un certificado autofirmado o caducado, no
-  rechazarlo antes de verlo — pero no comprueba si la cadena es válida ni si
-  el certificado corresponde al hostname consultado (mismatch de SAN/CN).
-- **Cabeceras: sin seguir redirecciones entre esquemas ni evaluar CORS.**
-  `discovery/headers.py` cubre las seis cabeceras que pide el enunciado; no
-  evalúa `Access-Control-Allow-Origin` ni cookies (`Set-Cookie` con
-  `Secure`/`HttpOnly`/`SameSite`), fuera del alcance explícito de este paso.
 
 ---
 
@@ -613,7 +691,8 @@ streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
 atalaya subdomains ejemplo.com       # CLI de enumeración
 atalaya subdomains ejemplo.com --save # enumera y persiste el resultado en BD
-ruff check src tests                 # linter
+ruff check src tests                 # linter (0 avisos)
+mypy src                             # tipos (0 errores); ambos: make lint
 docker compose up --build            # stack completo
 ```
 
@@ -625,10 +704,15 @@ Solo hace falta la clave del proveedor activo.
 explícitamente para reconocimiento autorizado.
 
 **Verificación visual del dashboard:** `_shot.py` en la raíz del proyecto
-(no versionado, herramienta de desarrollo — Playwright) levanta el
-dashboard real, lanza un escaneo real y captura pantallas en
-`.claude/shots/`. Requiere la API y el dashboard ya arrancados
-(`uvicorn`/`streamlit run`, arriba) y `playwright install` hecho una vez.
+(versionado desde `e815dda`, pero herramienta de desarrollo, no parte del
+paquete — Playwright; `playwright` no está en las dependencias declaradas)
+abre un
+navegador real contra el dashboard en marcha y captura pantallas en
+`.claude/shots/`, reutilizando los escaneos que ya hay en BD; `--scan` lanza
+además uno real contra `scanme.nmap.org` y `--triage` lo tría. Puerto por
+defecto 8502: con `streamlit run` (8501) hay que pasar `--port 8501`.
+Requiere la API y el dashboard ya arrancados y `playwright install` hecho
+una vez.
 
 ---
 
@@ -653,16 +737,20 @@ dashboard real, lanza un escaneo real y captura pantallas en
 
 ### Subagentes de Claude Code (tooling de desarrollo, no parte del producto)
 
-`.claude/agents/` define cuatro subagentes de proyecto para dividir el
-trabajo de ampliar Atalaya, cada uno con responsabilidad exclusiva y sin
-solape: `atalaya-discovery` (descubrimiento/DNS), `atalaya-ai-agents`
-(capa IA), `atalaya-api` (cableado a la API) y `atalaya-dashboard`
-(diseño visual). **Estos ficheros no se recargan dentro de una sesión ya
-iniciada** — solo están disponibles como `subagent_type` con nombre propio
-en sesiones que arrancan *después* de que existan; si no aparecen en la
-lista de agentes disponibles, hay que despacharlos como `general-purpose`
-pegando el contenido completo del `.md` correspondiente como instrucciones
-(mismo resultado práctico, solo cambia el mecanismo de invocación).
+`.claude/agents/` define cuatro subagentes de proyecto, uno por área y sin
+solape: `atalaya-discovery` (`discovery/` + `core/persistence.py`),
+`atalaya-ai-agents` (`ai/`, salvo `triage.py`), `atalaya-api` (`api/`,
+`core/repository.py`, `reporting/`) y `atalaya-dashboard` (`dashboard/`,
+`.streamlit/`, `_shot.py`). Nacieron como encargos de la ampliación de
+agentes y se reescribieron como **responsables de mantenimiento** de su
+área: cada uno recoge las reglas y trampas ya aprendidas en ella, verifica
+con `pytest`/`ruff`/`mypy` más una prueba real, **no hace commits** y
+termina diciendo qué documentos hay que actualizar. **Estos ficheros no se
+recargan dentro de una sesión ya iniciada** — solo están disponibles como
+`subagent_type` con nombre propio en sesiones que arrancan *después* de su
+última modificación; si no aparecen en la lista de agentes disponibles, hay
+que despacharlos como `general-purpose` pegando el contenido completo del
+`.md` correspondiente como instrucciones.
 
 Ninguno de los cuatro toca `ai/triage.py` — instrucción explícita, se
 mantiene igual desde el Paso 5.
