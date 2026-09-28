@@ -80,7 +80,9 @@ src/atalaya/
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
 │   ├── audit.py                 get_audit_logger() — traza de auditoría
 │   │                             siempre visible (restricción #6, salvaguarda c)
-│   └── netutils.py              classify_ip() — 10 alcances de red
+│   ├── netutils.py              classify_ip() — 10 alcances de red
+│   └── scoring.py               compute_risk_score() — índice 0-100: banda por
+│                                 severidad máxima; única fuente (PDF y API)
 ├── discovery/
 │   ├── models.py                SubdomainRecord, SubdomainScanResult,
 │   │                             DiscoveryFinding, HeaderScanResult, TlsScanResult,
@@ -276,7 +278,8 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `previous`/`current` se deciden por `started_at`, no por el orden en la
 > URL. Propaga `AIProviderError` → 502 (petición puntual). El informe PDF
 > gana `risk_score` (0-100, pesos `critical=25/high=10/medium=4/low=1`,
-> `reporting/generator.py::_RISK_WEIGHTS`) y un resumen ejecutivo de
+> `reporting/generator.py::_RISK_WEIGHTS` — *fórmula sustituida después por
+> `core/scoring.py`, ver "Decisiones ya tomadas"*) y un resumen ejecutivo de
 > `ai/report_writer.py` — pero, a diferencia del diff, **nunca falla** por
 > ausencia o fallo del proveedor de IA: el informe con portada era un
 > requisito obligatorio antes de que existiera la capa IA, así que no puede
@@ -493,6 +496,7 @@ cómo trata esto.
 | Fechas: UTC *naive* en BD vía `UtcDateTime`, no `TIMESTAMPTZ` | Arreglo del bug de PostgreSQL sin migración y con la misma salida de lectura en SQLite y PostgreSQL; toda columna de fecha nueva debe usar `UtcDateTime` (hay un test que lo exige) |
 | Wildcards DNS: reclasificar, no borrar | Un host que solo resuelve a la IP del comodín pasa a `wildcard` y sale del inventario activo, pero se conserva en `records`: descartar en silencio impediría auditar el filtro |
 | Detección de takeover: solo patrón DNS por defecto | La detección (`discovery/takeover.py`) es pasiva pura: patrón de CNAME, sin HTTP. La verificación HTTP existe pero es **opt-in** (`TAKEOVER_VERIFY`, off por defecto) y vive en un módulo aparte (`discovery/takeover_verify.py`) — ver restricción #6, "Excepción acotada". Eleva a "alta sospecha", nunca a "confirmado" |
+| `risk_score`: la banda la fija la severidad máxima presente; el volumen solo mueve dentro de ella, con rendimientos decrecientes por tipo (`core/scoring.py`) | La suma ponderada acotada saturaba con volumen: github.com (194 `low` + 9 `medium`) salía 100/100 «crítico», igual que un escaneo con diez críticos. Monótono por construcción (`tests/test_scoring.py` lo comprueba por propiedades). Una sola función para PDF y API: el dashboard pinta el de la API, ya no replica pesos |
 | Demo sin red: reproducir respuestas reales grabadas (`AI_PROVIDER=replay`), nunca inventarlas | Una petición no grabada falla con 502 como un proveedor caído; servir una respuesta "parecida" presentaría como análisis del modelo algo que nunca dijo sobre esos datos. `tests/test_demo_data.py` detecta grabaciones obsoletas |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
 

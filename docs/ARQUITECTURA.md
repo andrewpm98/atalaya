@@ -168,10 +168,17 @@ con impacto y remediación. Cubre el requisito de "reporte con portada".
   `xhtml2pdf` en un hilo aparte vía `asyncio.to_thread`, para no bloquear el
   loop de eventos con trabajo de CPU). Recibe un `Scan` ya cargado, no un
   `scan_id` — mismo criterio que `ai/prompter.py`/`ai/analyst.py`.
-- `_compute_risk_score()` — pesos por severidad (`critical=25, high=10,
-  medium=4, low=1`), sumados y acotados a 100. Fuente de verdad única: el
-  dashboard replica exactamente estos pesos para no mostrar un número
-  distinto al del PDF del mismo escaneo.
+- `risk_score` (0-100) — sale de `core/scoring.py::compute_risk_score()`,
+  fuente de verdad única que usan el PDF y la API (y, a través de ella, el
+  dashboard). **La banda la fija la severidad máxima presente** (solo `low`
+  → 1-24, `medium` → 25-49, `high` → 50-74, `critical` → 75-100): ningún
+  volumen de hallazgos leves alcanza la banda de uno grave, y un solo
+  crítico basta para la banda crítica. Dentro de la banda, el volumen con
+  rendimientos decrecientes por tipo (`peso · log2(1 + n)` por
+  `(severidad, finding_type)`) y saturación suave hacia el techo. Monótono:
+  añadir o triar un hallazgo nunca baja el índice. Sustituye a la suma
+  ponderada acotada (`min(100, Σ peso·n)`), que saturaba con volumen:
+  github.com, con 194 `low` y 9 `medium`, salía 100/100 «crítico».
 - `generate_report(scan, provider=None)` — con `provider`, incluye un
   resumen ejecutivo de `ai/report_writer.py::write_executive_summary()`.
   **Si `provider` es `None`, o si falla (`AIProviderError`), el informe se
@@ -192,10 +199,10 @@ con impacto y remediación. Cubre el requisito de "reporte con portada".
 Aplicación web que consume la API: lanzar escaneos, explorar activos y
 hallazgos, triar con IA, consultar en lenguaje natural, descargar el
 informe PDF de un escaneo, y ver el `risk_score` como métrica principal del
-detalle de un escaneo (calculado en el propio dashboard a partir de la
-severidad de los hallazgos ya devueltos por `GET /scans/{id}`, con los
-mismos pesos que `reporting/generator.py::_RISK_WEIGHTS`, sin llamar a la
-capa de reporting directamente — el dashboard es siempre un cliente HTTP
+detalle de un escaneo (lo devuelve `GET /scans/{id}` como `risk_score`,
+calculado por `core/scoring.py`: el dashboard lo pinta sin recalcularlo, así
+que no puede contradecir al PDF — antes replicaba la fórmula con una copia
+de los pesos sincronizada a mano; el dashboard sigue siendo un cliente HTTP
 puro de la API).
 
 Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
