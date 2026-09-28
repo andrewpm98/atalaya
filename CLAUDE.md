@@ -300,7 +300,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **358 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **359 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -310,7 +310,7 @@ verificación HTTP opt-in de takeover, ver `memorias/
 Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
-reserva para la demo, ver la sección dedicada; +32 al rehacer el `risk_score`
+reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
 y arreglar el PDF). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
@@ -642,10 +642,6 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Pendiente
 
-- **Informe PDF: los hostnames largos se solapan con la columna de estado**
-  en la tabla de activos (p. ej. `m.communication.github.com` pisa «active»):
-  la plantilla no parte la palabra ni ensancha la columna. Visto al revisar
-  el PDF de la demo; cosmético.
 - **`replay` solo cubre el guion grabado.** Por diseño (ver "Datos de
   reserva para la demo"); no sustituye al modelo fuera de esos datos.
 
@@ -725,6 +721,13 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**PDF: hostnames largos invadían la columna de estado**~~ (visto al
+  revisar el PDF de la demo: 38 de 118 hosts) → anchos de columna medidos con
+  las métricas de Helvetica, corte CJK solo en el host como último recurso e
+  IPs una por línea. Dos intentos intermedios, descartados al mirar el PDF,
+  partían una IPv4 por la mitad o pegaban las IPs sin separador; el test
+  `test_tabla_de_activos_sin_solapes_ni_ips_partidas` mide la geometría real
+  del PDF (posiciones con pypdf, anchos con reportlab) con el peor caso.
 - ~~**`risk_score` saturado**~~ (encontrado al construir los datos de la
   demo) → github.com, con 194 `low` + 9 `medium` y ningún `critical`/`high`,
   salía «100/100 · riesgo crítico». Nueva fórmula en `core/scoring.py`
@@ -844,7 +847,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 358)
+pytest -q                            # tests (deben pasar los 359)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
