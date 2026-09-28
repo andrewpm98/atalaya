@@ -43,15 +43,22 @@ from atalaya.config import settings
 from atalaya.core.exceptions import AIProviderError
 from atalaya.core.models import Finding, FindingSeverity, Scan
 from atalaya.core.scoring import compute_risk_score, risk_band
+from atalaya.reporting.pdf_text import finalize, markdown_inline, markdown_to_html
 
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
+#: `finalize` pasa toda salida por `pdf_safe` (glifos que el PDF no puede
+#: dibujar); los filtros `md`/`md_inline` renderizan el Markdown del modelo.
+#: Ver `reporting/pdf_text.py`.
 _env = Environment(
     loader=FileSystemLoader(_TEMPLATES_DIR),
     autoescape=select_autoescape(["html"]),
+    finalize=finalize,
 )
+_env.filters["md"] = markdown_to_html
+_env.filters["md_inline"] = markdown_inline
 
 #: Orden de severidad de mayor a menor riesgo, para listar los hallazgos más
 #: graves primero — igual criterio que un analista revisaría el informe.

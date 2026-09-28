@@ -169,6 +169,11 @@
     .hallazgo .campo { font-size: 9pt; margin-top: 3px; }
     .hallazgo .campo b { color: #1a1a2e; }
     .sin-datos { color: #888888; font-style: italic; }
+    /* Markdown del modelo, renderizado por reporting/pdf_text.py */
+    code { font-family: Courier, monospace; font-size: 0.92em; }
+    .md .md-h { font-weight: bold; font-size: 11pt; color: #1a1a2e; margin: 8px 0 2px 0; }
+    .md hr { border: 0; border-top: 1px solid #cccccc; margin: 6px 0; }
+    .md ul, .md ol { margin: 2px 0 6px 0; }
 </style>
 </head>
 <body>
@@ -210,9 +215,7 @@
 {% endif %}
 
 {% if executive_summary %}
-{% for parrafo in executive_summary.split('\n') %}
-{% if parrafo.strip() %}<p>{{ parrafo }}</p>{% endif %}
-{% endfor %}
+<div class="md">{{ executive_summary | md }}</div>
 {% else %}
 <p class="sin-datos">
     Resumen ejecutivo en lenguaje natural no disponible para este informe
@@ -253,7 +256,7 @@
     </tr>
     {% for asset in assets %}
     <tr>
-        <td>{{ asset.hostname }}{% if asset.leaks_internal_addressing %} ⚠️{% endif %}</td>
+        <td>{{ asset.hostname }}{% if asset.leaks_internal_addressing %} (IP interna){% endif %}</td>
         <td>{{ asset.status }}</td>
         <td>{{ asset.ip_addresses | join(", ") or "—" }}</td>
         <td>{{ asset.open_ports | join(", ") or "—" }}</td>
@@ -276,10 +279,10 @@
     </div>
     <div class="evidencia">{{ finding.evidence }}</div>
     {% if finding.impact %}
-    <div class="campo"><b>Impacto:</b> {{ finding.impact }}</div>
+    <div class="campo"><b>Impacto:</b> {{ finding.impact | md_inline }}</div>
     {% endif %}
     {% if finding.remediation %}
-    <div class="campo"><b>Remediación:</b> {{ finding.remediation }}</div>
+    <div class="campo"><b>Remediación:</b> {{ finding.remediation | md_inline }}</div>
     {% endif %}
     {% if not finding.impact and not finding.remediation %}
     <div class="campo sin-datos">Pendiente de triaje por IA.</div>
