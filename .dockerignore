@@ -11,3 +11,4 @@
 reports/
 memorias/
 *.sqlite3
+demo/.ai_cache.json

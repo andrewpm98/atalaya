@@ -19,6 +19,12 @@ RUN pip install --no-cache-dir -e .
 COPY alembic.ini ./
 COPY migrations ./migrations
 
+# Datos de reserva de la demo: `docker compose exec api python
+# scripts/seed_demo_data.py --reset` siembra el Postgres del compose, y con
+# AI_PROVIDER=replay las respuestas grabadas se sirven sin red (~1 MB).
+COPY scripts ./scripts
+COPY demo ./demo
+
 EXPOSE 8000
 # `exec` deja a uvicorn como PID 1: recibe el SIGTERM de `docker stop` y se
 # cierra limpio, en vez de esperar 10 s a que Docker lo mate.

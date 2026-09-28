@@ -68,6 +68,16 @@ def test_imagen_api_incluye_migraciones_y_las_aplica_antes_de_arrancar() -> None
     assert "alembic upgrade head && exec uvicorn" in cmd
 
 
+def test_imagen_api_incluye_los_datos_de_reserva_de_la_demo() -> None:
+    """Sin ellos, el stack de Docker no podría sembrar la demo ni servir
+    `AI_PROVIDER=replay`: justo el escenario sin red para el que existen."""
+    dockerfile = _read("docker/Dockerfile.api")
+    assert re.search(r"^COPY scripts ", dockerfile, re.MULTILINE)
+    assert re.search(r"^COPY demo ", dockerfile, re.MULTILINE)
+    # La caché completa del constructor no se versiona ni entra en la imagen.
+    assert "demo/.ai_cache.json" in _read(".dockerignore")
+
+
 # --- Imagen del dashboard ----------------------------------------------------
 
 
