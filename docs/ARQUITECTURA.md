@@ -143,6 +143,20 @@ el Paso 5 (`ask()` propaga, `triage_finding()` degrada):
 `prompter.py`, que lo reemplaza con más señal (patrones, combinaciones,
 prioridades) en vez de solo prosa libre.
 
+**Proveedor de reserva para la demo (`replay.py`).** Tercera implementación
+de `LLMProvider`, activable con `AI_PROVIDER=replay`, que no es un modelo:
+sirve respuestas reales grabadas (`demo/ai_recordings.json`) para que la demo
+funcione sin red. `RecordingProvider` envuelve al proveedor real y graba;
+`ReplayProvider` reproduce. La clave de cada grabación es un hash de la
+petición completa (prompt de sistema, prompt, herramienta y schema), así que
+una petición no grabada — una pregunta fuera del guion, o datos distintos de
+los sembrados — falla con `AIProviderError` (el mismo 502 que un proveedor
+caído): nunca se sirve una respuesta "parecida". Como los prompts incluyen el
+orden de activos y hallazgos, `Scan.assets` y `Asset.findings` llevan
+`order_by` por id (en PostgreSQL, sin él, un `UPDATE` del triaje cambia el
+orden de lectura). Ningún agente cambió para incorporarlo. Datos y guion:
+§2.8.
+
 ### 2.5 Informes — `src/atalaya/reporting` (Paso 7 ✅ + resumen con IA)
 Genera un informe ejecutivo en PDF a partir de un escaneo ya persistido:
 portada (dominio, fecha), `risk_score` (0-100), resumen ejecutivo en
@@ -208,6 +222,23 @@ puro y no necesita secretos. Todos los puertos se publican solo en
 `127.0.0.1`, porque la BD usa credenciales fijas de desarrollo y la API no
 tiene autenticación. El dashboard espera al healthcheck de la API.
 `tests/test_deploy_config.py` fija estas propiedades sin levantar Docker.
+
+### 2.8 Datos de reserva para la demo — `scripts/`, `demo/`
+
+Herramienta de demo, fuera del paquete `atalaya` (mismo criterio que
+`_shot.py`). `demo/github.com.json` contiene dos escaneos reales de
+github.com hechos con `POST /scans` (21/09 y 28/09/2026), triados por el
+modelo real salvo los hallazgos que aparecieron entre uno y otro, que quedan
+`unknown` para triarlos en directo. `scripts/seed_demo_data.py --reset` los
+carga en la BD configurada (SQLite o el PostgreSQL de Docker, cuya imagen de
+la API incluye `scripts/` y `demo/`), reiniciando las secuencias para que los
+ids sean siempre #1 y #2: el prompt del diff los incluye. Se niega a pisar una
+BD con escaneos sin `--reset`. `scripts/build_demo_data.py` es quien los
+produjo (una vez, con red): tría con el modelo real, recorre el guion por la
+API antes y después del triaje en directo — el orden de los pasos en la demo
+no importa — graba solo lo usado y verifica la reproducción en `replay`.
+`tests/test_demo_data.py` repite esa verificación en la suite: si un cambio
+de prompt deja obsoleta la grabación, falla la suite, no la defensa.
 
 ## 3. Flujo de datos
 

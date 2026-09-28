@@ -213,6 +213,27 @@ portada (dominio y fecha), `risk_score`, resumen ejecutivo con IA (opcional
 detalle de cada activo y hallazgo con su impacto y remediación. También se
 descarga desde la pestaña «Escaneos» del dashboard.
 
+## Demo sin red: datos de reserva
+
+Para enseñar la herramienta aunque crt.sh o el proveedor de IA no respondan,
+el repositorio incluye dos escaneos **reales** de github.com (21/09 y
+28/09/2026) ya triados por el modelo, y las respuestas reales del modelo a un
+guion de preguntas, grabadas para reproducirlas sin conexión:
+
+```bash
+python scripts/seed_demo_data.py --reset   # BORRA los escaneos de la BD y siembra la demo
+# en .env: AI_PROVIDER=replay              # sin clave ni red; reinicia la API
+```
+
+Con Docker: `docker compose exec api python scripts/seed_demo_data.py --reset`
+y `AI_PROVIDER=replay` en `.env` aplicado con `docker compose up -d`.
+
+`AI_PROVIDER=replay` **no es un modelo**: sirve respuestas grabadas (y lo
+avisa en el log de la API). Solo responde a las peticiones grabadas — las
+preguntas del guion sobre estos datos, que el script imprime al sembrar —;
+cualquier otra falla con 502, igual que un proveedor caído. El detalle está
+en `CLAUDE.md` («Datos de reserva para la demo»).
+
 ## Arquitectura (resumen)
 
 ```

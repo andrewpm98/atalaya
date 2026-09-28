@@ -116,7 +116,10 @@ src/atalaya/
 │   │                             a subdomain takeover ya detectados
 │   ├── report_writer.py          write_executive_summary() — resumen ejecutivo
 │   │                             del informe PDF, en lenguaje no técnico
-│   └── diff_analyst.py           analyze_diff() — valora el diff entre dos escaneos
+│   ├── diff_analyst.py           analyze_diff() — valora el diff entre dos escaneos
+│   └── replay.py                 RecordingProvider/ReplayProvider — respuestas
+│                                 reales grabadas para la demo sin red
+│                                 (AI_PROVIDER=replay); no es un modelo
 │
 │   `ai/query.py::ask()` (consulta NL original) se retiró: `POST /findings/ask`
 │   pasa por `prompter.py`, que reemplaza su función y devuelve más señal
@@ -146,6 +149,11 @@ dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
 .claude/agents/                  Subagentes de proyecto de Claude Code (no
                                   es parte del producto, es tooling de
                                   desarrollo — ver "Cómo quiero trabajar")
+scripts/                         Datos de reserva de la demo (fuera del paquete):
+                                  seed_demo_data.py (siembra, un comando) y
+                                  build_demo_data.py (los produjo, con red)
+demo/                            github.com.json (2 escaneos reales) +
+                                  ai_recordings.json (respuestas grabadas)
 _shot.py                         Capturas del dashboard con Playwright
                                   (tooling de desarrollo, versionado; no es
                                   parte del paquete `atalaya`)
@@ -287,7 +295,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **305 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **326 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -296,8 +304,9 @@ ver "Deuda técnica conocida"; +7 en la detección de wildcards DNS y +15 en la
 verificación HTTP opt-in de takeover, ver `memorias/
 Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
-`LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"). La suite pasa también sobre Python 3.11, el mínimo declarado y
-la versión de las imágenes.
+`LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
+reserva para la demo, ver la sección dedicada). La suite pasa también sobre
+Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
 
@@ -484,6 +493,7 @@ cómo trata esto.
 | Fechas: UTC *naive* en BD vía `UtcDateTime`, no `TIMESTAMPTZ` | Arreglo del bug de PostgreSQL sin migración y con la misma salida de lectura en SQLite y PostgreSQL; toda columna de fecha nueva debe usar `UtcDateTime` (hay un test que lo exige) |
 | Wildcards DNS: reclasificar, no borrar | Un host que solo resuelve a la IP del comodín pasa a `wildcard` y sale del inventario activo, pero se conserva en `records`: descartar en silencio impediría auditar el filtro |
 | Detección de takeover: solo patrón DNS por defecto | La detección (`discovery/takeover.py`) es pasiva pura: patrón de CNAME, sin HTTP. La verificación HTTP existe pero es **opt-in** (`TAKEOVER_VERIFY`, off por defecto) y vive en un módulo aparte (`discovery/takeover_verify.py`) — ver restricción #6, "Excepción acotada". Eleva a "alta sospecha", nunca a "confirmado" |
+| Demo sin red: reproducir respuestas reales grabadas (`AI_PROVIDER=replay`), nunca inventarlas | Una petición no grabada falla con 502 como un proveedor caído; servir una respuesta "parecida" presentaría como análisis del modelo algo que nunca dijo sobre esos datos. `tests/test_demo_data.py` detecta grabaciones obsoletas |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
 
 ---
@@ -541,9 +551,103 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
 
 ---
 
+## Datos de reserva para la demo
+
+Para hacer la demo completa (escaneos → triaje → pregunta NL → informe →
+diff) aunque el día de la defensa no haya red o crt.sh/el proveedor de IA
+fallen. Dos piezas: datos en BD y respuestas del modelo grabadas.
+
+**Cargarlos (un solo comando, repetible antes de cada ensayo):**
+
+```bash
+python scripts/seed_demo_data.py --reset                               # local (DATABASE_URL de .env)
+docker compose exec api python scripts/seed_demo_data.py --reset       # stack Docker (su Postgres)
+```
+
+Y en `.env`, `AI_PROVIDER=replay` (sin clave ni red). Aplicarlo **reiniciando
+la API**; en Docker con `docker compose up -d`, no `restart` (no recarga
+`.env`). Para volver al modelo real, `AI_PROVIDER=anthropic`.
+
+**`--reset` borra todos los escaneos de esa BD.** Sin él, el script se niega
+si hay datos. No usarlo contra la BD de desarrollo (`atalaya.sqlite3`, con
+escaneos de otras sesiones) sin querer perderlos: para ensayar, mejor
+`DATABASE_URL=sqlite+aiosqlite:///./demo.sqlite3` en la misma terminal o el
+stack Docker.
+
+**Qué se carga** (`demo/github.com.json`): dos escaneos **reales** de
+github.com hechos con `POST /scans` — #1 del 21/09/2026 (117 activos, 204
+hallazgos) y #2 del 28/09/2026 (118 activos, 211 hallazgos) —, triados por
+`claude-sonnet-4-6` el 28/09. Todo triado salvo **8 hallazgos del #2 que no
+existían en el #1** (los 6 de `skills.github.com`, activo nuevo; un
+`hsts_max_age_bajo` nuevo en `maintainers.github.com`; y un certificado de
+`vpn-ca.iad.github.com` que caduca en ~27 días): quedan `unknown` para pulsar
+«Triar con IA» en directo. El diff real es modesto — 1 activo nuevo
+(`skills.github.com`), 0 desaparecidos, 117 comunes —, que es lo creíble en
+una semana para una superficie como la de GitHub. El triaje del modelo da
+solo `low`/`medium` (ningún `critical`/`high`): ver la deuda del `risk_score`.
+
+**Guion grabado** (`demo/ai_recordings.json`, 24 respuestas, dominio
+`github.com`): las cuatro preguntas siguientes, antes **y** después del
+triaje en directo — el orden de los pasos en la defensa no importa —, más el
+informe PDF de los dos escaneos (con resumen ejecutivo), el diff `2`↔`1` y el
+triaje de los 8 pendientes.
+
+1. ¿Algún activo filtra direccionamiento interno? *(placeholder del dashboard)*
+2. ¿Qué debería arreglar primero y por qué?
+3. ¿Qué subdominios parecen entornos de prueba o de uso interno?
+4. ¿Hay riesgo de subdomain takeover en este dominio? *(enruta al detective;
+   sin candidatos, responde sin segunda llamada)*
+
+Mayúsculas y espacios dan igual; cualquier **otra** pregunta, o sobre otro
+dominio, falla con 502 («no hay respuesta grabada») — a propósito: `replay`
+nunca inventa una respuesta. En la defensa conviene decir que las respuestas
+son grabadas (la API lo registra como `WARNING` en cada petición, con fecha y
+modelo). Lanzar un escaneo nuevo sin red también es demostrable: crt.sh cae y
+el escaneo se guarda con la incidencia en `errors` (degradación controlada).
+
+**Cómo se produjeron** (`scripts/build_demo_data.py --previous 2 --current 7`,
+con red y clave; versionado como respuesta a "¿de dónde salen?"): exporta dos
+escaneos de la BD, los tría con el modelo real vía `RecordingProvider`,
+escribe el fixture, recorre el guion por la API en una BD temporal (antes y
+después del triaje) grabando solo lo usado, y lo verifica en `replay`. Costó
+358 llamadas de triaje (los prompts idénticos entre escaneos se reutilizan
+desde la caché `demo/.ai_cache.json`, no versionada) + 16 del guion.
+
+**Si la suite dice que la grabación está obsoleta**
+(`tests/test_demo_data.py::test_la_demo_completa_se_reproduce_sin_red`): un
+cambio tocó un prompt, el contexto que recibe el modelo o el orden de los
+datos. Regenerar con el comando anterior (hace falta la BD de desarrollo con
+los escaneos #2 y #7; con la caché presente, solo se pagan las llamadas nuevas).
+Por eso `Scan.assets`/`Asset.findings` llevan `order_by` por id: en
+PostgreSQL, sin él, el `UPDATE` del triaje cambia el orden de lectura y con
+él los prompts.
+
+**Verificado** (28/09/2026): guion completo por HTTP contra la API real en
+`replay` sin ninguna clave, en local (SQLite) y en el stack Docker
+(PostgreSQL 16), dos veces seguidas con `--reset` entre medias; dashboard
+capturado con los datos sembrados y una pregunta del guion respondida.
+
+---
+
 ## Deuda técnica conocida
 
 ### Pendiente
+
+- **`risk_score` saturado: github.com sale «100/100 · riesgo crítico» sin un
+  solo `critical`/`high`.** Encontrado al construir los datos de la demo. La
+  suma ponderada acotada (`reporting/generator.py::_RISK_WEIGHTS`, replicada
+  en el dashboard) llega al tope con volumen: 194 `low` + 9 `medium` =
+  230 → 100. Es lo primero que se ve al abrir el escaneo, en rojo. El propio
+  resumen ejecutivo grabado lo señala («puede responder a la metodología de
+  cálculo propia de la herramienta»). Cambiar la fórmula invalida las
+  grabaciones de la demo (regenerar: solo el guion, ~16 llamadas).
+- **Informe PDF: Markdown y algunos glifos del modelo salen mal.** El resumen
+  ejecutivo y el análisis llegan con `##`/`**` de Markdown, que el PDF
+  imprime literales; y la fuente Helvetica de xhtml2pdf no tiene `→`
+  (U+2192), que sale en blanco (12 apariciones en los textos del triaje de
+  la demo).
+- **`replay` solo cubre el guion grabado.** Por diseño (ver "Datos de
+  reserva para la demo"); no sustituye al modelo fuera de esos datos.
 
 - **Shodan: cobertura real limitada por el plan de la clave disponible.**
   `/dns/domain/{domain}` devuelve `403` en el plan gratuito `oss`
@@ -726,7 +830,7 @@ suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 305)
+pytest -q                            # tests (deben pasar los 326)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
@@ -736,6 +840,7 @@ ruff check src tests                 # linter (0 avisos)
 mypy src                             # tipos (0 errores); ambos: make lint
 docker compose up --build -d         # stack completo (migra solo; .env opcional)
 docker compose up -d db              # solo PostgreSQL, para la API en local
+python scripts/seed_demo_data.py --reset # BORRA la BD y carga la demo de reserva
 ```
 
 **Cambiar de proveedor de IA:** `AI_PROVIDER=anthropic` o `AI_PROVIDER=gemini`
