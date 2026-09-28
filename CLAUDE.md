@@ -129,6 +129,8 @@ src/atalaya/
 ├── reporting/
 │   ├── generator.py               generate_report()/render_html() — informe PDF
 │   │                               con portada (Jinja2 + xhtml2pdf)
+│   ├── pdf_text.py                Markdown del modelo → HTML seguro y glifos
+│   │                               que el PDF no puede dibujar
 │   └── templates/report.html      Plantilla del informe
 └── api/
     ├── main.py                  FastAPI + exception_handler (dominio inválido → 400,
@@ -298,7 +300,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **326 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **358 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -308,7 +310,8 @@ verificación HTTP opt-in de takeover, ver `memorias/
 Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
-reserva para la demo, ver la sección dedicada). La suite pasa también sobre
+reserva para la demo, ver la sección dedicada; +32 al rehacer el `risk_score`
+y arreglar el PDF). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -588,9 +591,10 @@ existían en el #1** (los 6 de `skills.github.com`, activo nuevo; un
 «Triar con IA» en directo. El diff real es modesto — 1 activo nuevo
 (`skills.github.com`), 0 desaparecidos, 117 comunes —, que es lo creíble en
 una semana para una superficie como la de GitHub. El triaje del modelo da
-solo `low`/`medium` (ningún `critical`/`high`): ver la deuda del `risk_score`.
+solo `low`/`medium` (ningún `critical`/`high`), así que el índice es 39
+«medio» antes del triaje en directo y 40 después.
 
-**Guion grabado** (`demo/ai_recordings.json`, 24 respuestas, dominio
+**Guion grabado** (`demo/ai_recordings.json`, 25 respuestas, dominio
 `github.com`): las cuatro preguntas siguientes, antes **y** después del
 triaje en directo — el orden de los pasos en la defensa no importa —, más el
 informe PDF de los dos escaneos (con resumen ejecutivo), el diff `2`↔`1` y el
@@ -615,7 +619,8 @@ escaneos de la BD, los tría con el modelo real vía `RecordingProvider`,
 escribe el fixture, recorre el guion por la API en una BD temporal (antes y
 después del triaje) grabando solo lo usado, y lo verifica en `replay`. Costó
 358 llamadas de triaje (los prompts idénticos entre escaneos se reutilizan
-desde la caché `demo/.ai_cache.json`, no versionada) + 16 del guion.
+desde la caché `demo/.ai_cache.json`, no versionada) + 16 del guion, y 2 más
+al regrabar los resúmenes ejecutivos tras el cambio de `risk_score`.
 
 **Si la suite dice que la grabación está obsoleta**
 (`tests/test_demo_data.py::test_la_demo_completa_se_reproduce_sin_red`): un
@@ -637,19 +642,10 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Pendiente
 
-- **`risk_score` saturado: github.com sale «100/100 · riesgo crítico» sin un
-  solo `critical`/`high`.** Encontrado al construir los datos de la demo. La
-  suma ponderada acotada (`reporting/generator.py::_RISK_WEIGHTS`, replicada
-  en el dashboard) llega al tope con volumen: 194 `low` + 9 `medium` =
-  230 → 100. Es lo primero que se ve al abrir el escaneo, en rojo. El propio
-  resumen ejecutivo grabado lo señala («puede responder a la metodología de
-  cálculo propia de la herramienta»). Cambiar la fórmula invalida las
-  grabaciones de la demo (regenerar: solo el guion, ~16 llamadas).
-- **Informe PDF: Markdown y algunos glifos del modelo salen mal.** El resumen
-  ejecutivo y el análisis llegan con `##`/`**` de Markdown, que el PDF
-  imprime literales; y la fuente Helvetica de xhtml2pdf no tiene `→`
-  (U+2192), que sale en blanco (12 apariciones en los textos del triaje de
-  la demo).
+- **Informe PDF: los hostnames largos se solapan con la columna de estado**
+  en la tabla de activos (p. ej. `m.communication.github.com` pisa «active»):
+  la plantilla no parte la palabra ni ensancha la columna. Visto al revisar
+  el PDF de la demo; cosmético.
 - **`replay` solo cubre el guion grabado.** Por diseño (ver "Datos de
   reserva para la demo"); no sustituye al modelo fuera de esos datos.
 
@@ -729,6 +725,20 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**`risk_score` saturado**~~ (encontrado al construir los datos de la
+  demo) → github.com, con 194 `low` + 9 `medium` y ningún `critical`/`high`,
+  salía «100/100 · riesgo crítico». Nueva fórmula en `core/scoring.py`
+  (banda por severidad máxima, rendimientos decrecientes por tipo, monótona;
+  ver "Decisiones ya tomadas"), única para PDF y API; el dashboard pinta el
+  de la API. github.com pasa a 39 «medio». Regrabados solo los 2 resúmenes
+  ejecutivos de la demo (su prompt lleva el score); el diff no cambia
+  (`837d593`).
+- ~~**PDF con Markdown literal y glifos en blanco**~~ → `reporting/pdf_text.py`
+  renderiza el Markdown del modelo escapando antes el HTML (el modelo no
+  puede inyectar etiquetas que xhtml2pdf siga, como una `<img>` remota) y el
+  `finalize` de Jinja sustituye lo que Helvetica no dibuja (`→` → `->`). Un
+  test genera el PDF real de la demo y exige cero avisos de glifo
+  (`a2af874`).
 - ~~**Sin consulta de CNAME / fuente única de enumeración**~~ (Paso 2) →
   `discovery/takeover.py` y `discovery/shodan.py` (ampliación de agentes).
 - ~~**Sin detección de comodines DNS**~~ (Paso 2) → `detect_wildcard_dns()` +
@@ -834,7 +844,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 326)
+pytest -q                            # tests (deben pasar los 358)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

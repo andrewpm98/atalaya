@@ -186,6 +186,12 @@ con impacto y remediación. Cubre el requisito de "reporte con portada".
   obligatorio antes de que existiera la capa IA, así que nunca puede
   depender de ella. Asimetría deliberada frente al endpoint de diff (2.1),
   que sí propaga el fallo del proveedor.
+- `pdf_text.py` — el texto del modelo llega con Markdown (`código`, `**`,
+  `##`) y con caracteres que las fuentes estándar del PDF no tienen (`→`).
+  Filtros Jinja `md`/`md_inline` renderizan un subconjunto de Markdown
+  **escapando antes el HTML** (nunca la librería `markdown`, que deja pasar
+  HTML crudo e imágenes remotas que xhtml2pdf descargaría), y el `finalize`
+  del entorno sustituye glifos en toda la salida de la plantilla.
 - Se elige **xhtml2pdf** sobre WeasyPrint porque es Python puro: no depende
   de Pango/Cairo/GTK, ausentes en un Windows sin ese runtime instalado.
 - El PDF se escribe de forma determinista en
