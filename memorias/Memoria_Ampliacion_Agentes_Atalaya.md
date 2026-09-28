@@ -505,6 +505,14 @@ determinista sobre `severity_counts`. El dashboard replica exactamente
 estos mismos pesos (ver sección 8) para que el número que ve el usuario en
 pantalla no contradiga al que aparece en el PDF del mismo escaneo.
 
+> **Estado posterior:** esta fórmula se sustituyó el 28/09/2026 (`837d593`):
+> saturaba con volumen — github.com, sin ningún hallazgo `critical`/`high`,
+> salía 100/100 «crítico». Hoy `core/scoring.py` fija la banda por la
+> severidad máxima presente y dentro de ella pondera el volumen con
+> rendimientos decrecientes por tipo. El dashboard ya no replica los pesos:
+> pinta el `risk_score` que devuelve `GET /scans/{id}`, calculado por la misma
+> función que usa el PDF. Ver CLAUDE.md, "Decisiones ya tomadas".
+
 ---
 
 ## 8. Dashboard: diseño visual profesional
