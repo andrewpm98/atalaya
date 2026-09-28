@@ -1,0 +1,282 @@
+{
+  "entries": {
+    "041cfe9159da2d844ebb0fc2cd24c3779594289acb90e65ac603807892cbcd60": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "El sitio maintainers.github.com tiene configurada la cabecera de seguridad HSTS (HTTP Strict Transport Security) con un período de validez de 30 días (2.592.000 segundos). Esto significa que el navegador solo \"recuerda\" que debe usar HTTPS durante ese tiempo. Si un usuario no visita el sitio durante más de 30 días, su navegador podría aceptar una conexión HTTP inicial antes de redirigir a HTTPS, lo que abre una ventana breve en la que un atacante en la misma red (por ejemplo, en una WiFi pública) podría intentar interceptar o manipular ese primer acceso. El impacto afecta principalmente a usuarios finales de la plataforma, no directamente a la infraestructura de GitHub.",
+        "remediation": "Incrementar el valor de max-age en la cabecera Strict-Transport-Security a un mínimo de 31.536.000 segundos (1 año), que es el valor recomendado por las buenas prácticas y requerido para la prelista HSTS de los navegadores. La cabecera debería quedar: `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`. Adicionalmente, considerar registrar el dominio en la preload list de HSTS (https://hstspreload.org) para eliminar por completo la dependencia de la primera visita.",
+        "severity": "low"
+      }
+    },
+    "0922d09b501a3ee9553cb66d3412be7c80dd5cfc98ece616b33643f51a786618": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Qué debería arreglar primero y por qué?",
+      "response": {
+        "agent": "analyst",
+        "refined_question": "Dado el escaneo del dominio github.com con 118 activos totales y los siguientes hallazgos: 9 de severidad media, 194 de severidad baja y 8 de severidad desconocida (sin candidatos a subdomain takeover), ¿qué hallazgos o categorías debería priorizar para remediar primero y por qué?"
+      }
+    },
+    "18ae680678d052af36ffd498cf5dda7362f0455b322c27c82d56ae9063ed2a7a": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Hay riesgo de subdomain takeover en este dominio?",
+      "response": {
+        "agent": "takeover",
+        "refined_question": "¿Hay riesgo de subdomain takeover en el dominio github.com? El escaneo analizó 118 activos en total, encontró 201 hallazgos de severidad baja y 10 de severidad media, y el campo 'has_takeover_candidates' figura como false. ¿Confirma esto que no existe ningún riesgo de subdomain takeover, o hay matices que revisar (CNAMEs sin reclamar, servicios de terceros, etc.)?"
+      }
+    },
+    "2287c832caa19e53f61cb49c4f67df5ba3f26e7ac847fb6a0681e6be63228612": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "El certificado TLS del servidor VPN de GitHub (`vpn-ca.iad.github.com`) caduca en aproximadamente 27 días. Si no se renueva a tiempo, los clientes VPN y navegadores rechazarán la conexión por considerarla no confiable, lo que interrumpirá el acceso VPN para los empleados o sistemas que dependan de este endpoint. Aunque no expone datos directamente, una caducidad no gestionada puede derivar en una interrupción de servicio significativa o, en el peor caso, en una ventana donde un operador presionado renueve el certificado con prisas y cometa errores de configuración.",
+        "remediation": "Iniciar de inmediato el proceso de renovación del certificado TLS para `vpn-ca.iad.github.com` antes de que se alcance la fecha de caducidad (2026-10-25). Si el entorno usa una CA interna o un proveedor externo (e.g., DigiCert, Let's Encrypt), generar la CSR, obtener el nuevo certificado e instalarlo en el servidor VPN con al menos 14 días de margen. Además, verificar que el sistema de alertas de expiración de certificados esté configurado para notificar con un mínimo de 30–60 días de antelación y evitar situaciones similares en el futuro.",
+        "severity": "medium"
+      }
+    },
+    "291bab86ca4ae879d48d489241f26bd6c176a2141d8109a56bc71e5bd458e97f": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "El sitio skills.github.com no envía la cabecera HTTP Strict-Transport-Security (HSTS). Esto significa que, en ciertas condiciones (por ejemplo, si un usuario escribe la URL sin \"https://\" o sigue un enlace HTTP), el navegador podría realizar la primera conexión en claro (HTTP) antes de ser redirigido a HTTPS. Un atacante en la misma red (por ejemplo, en una WiFi pública) podría interceptar esa conexión inicial no cifrada mediante un ataque de degradación de protocolo (SSL stripping), exponiendo potencialmente datos del usuario como cookies de sesión o credenciales. El riesgo es moderado en la práctica: GitHub ya redirige de HTTP a HTTPS, y muchos navegadores modernos intentan HTTPS directamente, pero la ausencia de HSTS deja una ventana de exposición real para usuarios en redes no confiables.",
+        "remediation": "Añadir la cabecera `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` en todas las respuestas HTTPS del servidor de skills.github.com. Adicionalmente, enviar el dominio para su inclusión en la lista de precarga de HSTS de los navegadores (https://hstspreload.org), lo que elimina por completo la ventana de primera conexión insegura.",
+        "severity": "low"
+      }
+    },
+    "2ff11163fc2d78429740d9a47f6649ed7fbf98bec38549e07660c1c9961dfce9": {
+      "kind": "tool",
+      "label": "record_analysis · Pregunta: Dado el escaneo del dominio github.com, que presenta 118 activos en total, 10 hallazgos de severidad media y 2",
+      "response": {
+        "answer": "No existen hallazgos críticos ni altos en este escaneo de github.com. La superficie de ataque verificada se limita a 10 hallazgos de severidad media y 201 de severidad baja sobre 118 activos. En ausencia de vulnerabilidades críticas/altas y sin candidatos a subdomain takeover, la prioridad debe centrarse en los 10 hallazgos medios como primer frente de remediación, seguidos de un análisis agrupado de los 201 bajos para identificar patrones sistémicos (p. ej. cabeceras de seguridad ausentes, configuraciones TLS subóptimas) que, en volumen, pueden representar una deuda técnica de seguridad acumulada relevante.",
+        "concerning_combinations": [
+          "Volumen alto de findings bajos (201) sin críticos/altos: aunque individualmente son de bajo impacto, su concentración puede indicar una deuda técnica de seguridad sistémica; un atacante puede encadenar múltiples hallazgos bajos para elevar el impacto real.",
+          "10 hallazgos medios sin contexto de detalle: en ausencia de hallazgos críticos/altos, los medios se convierten en el techo de riesgo actual; si alguno de ellos involucra autenticación, gestión de sesiones o exposición de información sensible, su impacto relativo es mayor al que la severidad nominal sugiere.",
+          "Alta dispersión de hallazgos bajos sobre 118 activos: si los 201 bajos están concentrados en pocos activos (en lugar de distribuidos), esos activos específicos representan un riesgo agregado superior al que cada finding individual indica."
+        ],
+        "patterns": [
+          "Ausencia total de hallazgos críticos y altos: el perfil de riesgo del dominio es bajo-medio, coherente con una organización madura en seguridad.",
+          "Ratio hallazgos bajos/activos muy elevado (~1.7 hallazgos bajos por activo): sugiere la presencia de una o varias misconfiguraciones sistémicas repetidas en todos o la mayoría de los activos (p. ej. cabeceras HTTP de seguridad, políticas de cookies, o versiones de TLS legacy).",
+          "Cero activos con direccionamiento interno expuesto: no hay fuga de infraestructura privada hacia el exterior.",
+          "Sin candidatos a subdomain takeover sobre 118 activos: la higiene de DNS y registros colgantes está controlada.",
+          "10 hallazgos medios sobre 118 activos (~8.5% de activos afectados): concentración baja pero no despreciable; probablemente asociados a configuraciones puntuales en subdominios específicos."
+        ]
+      }
+    },
+    "39e69d2ae31ed4b950c57cba7efa9468efa1f6d399fa999eb15a362c2eb07a2e": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "El sitio skills.github.com no incluye la cabecera HTTP 'Permissions-Policy', lo que significa que no declara explícitamente qué funciones del navegador (como cámara, micrófono o geolocalización) están permitidas o bloqueadas. Esto no representa una vulnerabilidad explotable por sí misma, pero reduce la defensa en profundidad: si en algún momento se inyectara contenido de terceros (por ejemplo, iframes o scripts maliciosos), estos podrían intentar solicitar acceso a esas APIs sin que la política del servidor lo impida. El impacto real para los usuarios actuales del sitio es bajo, especialmente dado que se trata de una plataforma educativa de GitHub sin funcionalidades que requieran hardware del dispositivo.",
+        "remediation": "Añadir la cabecera HTTP 'Permissions-Policy' en la configuración del servidor o CDN de skills.github.com con una política restrictiva por defecto. Por ejemplo: `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()`. Esto desactiva explícitamente el acceso a las APIs sensibles más comunes. Si el sitio utiliza GitHub Pages o una CDN gestionada, la cabecera debe configurarse a nivel de la infraestructura subyacente o mediante un proxy inverso como Cloudflare Workers o un middleware de aplicación.",
+        "severity": "low"
+      }
+    },
+    "3fd52d54e452097975dc8717af0c15854dcce5e80e4b764e3c0660433ba93e55": {
+      "kind": "tool",
+      "label": "record_analysis · Pregunta: Dado el escaneo del dominio github.com con 118 activos totales y los siguientes hallazgos: 9 de severidad medi",
+      "response": {
+        "answer": "No existen hallazgos críticos ni altos en el escaneo de github.com. La superficie de ataque observada es relativamente contenida para un dominio de 118 activos. La prioridad de remediación debe centrarse en: (1) los 9 hallazgos de severidad media, por ser los de mayor severidad confirmada; (2) los 8 hallazgos de severidad desconocida, que requieren clasificación manual urgente antes de poder descartarlos; y (3) revisión estructurada de los 194 hallazgos bajos en busca de patrones acumulativos que eleven el riesgo real.",
+        "concerning_combinations": [
+          "Los 9 hallazgos medios combinados con los 8 de severidad desconocida: si alguno de los 'desconocidos' escala a medio o alto tras clasificación manual, el conjunto de riesgo medio se amplía sin haberlo anticipado.",
+          "Volumen alto de hallazgos bajos (194) distribuidos en 118 activos: aunque individualmente menores, su concentración en ciertos subdominios podría indicar activos mal mantenidos que, combinados, ofrecen superficie compuesta (p. ej. falta de cabeceras de seguridad + versiones desactualizadas en el mismo host).",
+          "Hallazgos de severidad desconocida sin contexto + ausencia de hallazgos críticos/altos: puede generar falsa sensación de seguridad si los desconocidos no se investigan, creando un punto ciego operativo."
+        ],
+        "patterns": [
+          "Ausencia total de hallazgos críticos y altos: perfil de riesgo bajo-medio, consistente con una organización madura en seguridad.",
+          "Alto volumen de hallazgos bajos (194) frente a activos totales (118): ratio >1,6 hallazgos bajos por activo, lo que sugiere acumulación de deuda técnica de seguridad en configuración o cabeceras.",
+          "8 hallazgos de severidad desconocida sin clasificar: representan un punto ciego en la cobertura del escaneo; su distribución entre activos no está resuelta.",
+          "Cero activos con direccionamiento interno expuesto: buena segmentación de red o gestión de DNS sin fugas de RFC-1918.",
+          "Sin candidatos a subdomain takeover: gestión de DNS activa y sin registros colgantes detectados en los 118 activos."
+        ],
+        "priorities": [
+          "PRIMERO — Clasificar y resolver los 8 hallazgos de severidad desconocida: son una incógnita activa. Deben triarse manualmente para determinar si alguno escala a medio o superior antes de cualquier otra acción. Un hallazgo no clasificado es un riesgo no gestionado.",
+          "SEGUNDO — Remediar los 9 hallazgos de severidad media: son los de mayor severidad confirmada del escaneo. Deben analizarse por categoría (p. ej. configuración TLS/SSL, cabeceras HTTP de seguridad ausentes, cookies sin atributos adecuados) para agrupar remediaciones similares y maximizar eficiencia.",
+          "TERCERO — Auditar los 194 hallazgos bajos de forma agrupada por tipo y por activo: identificar si hay activos que concentran múltiples hallazgos bajos (riesgo acumulativo), y priorizar esos hosts. Categorías típicas a revisar: cabeceras de seguridad (CSP, HSTS, X-Frame-Options), atributos de cookies, versiones de software expuestas en banners.",
+          "CUARTO — Establecer revisión periódica del inventario de 118 activos: aunque hoy no hay takeover ni IPs internas expuestas, el crecimiento del inventario de subdominios debe monitorizarse continuamente para mantener ese estado."
+        ]
+      }
+    },
+    "48d7cdd9bfb029ee5826f48e3ff634cd84ab16f504d2fbf753eb00198d0d9902": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Hay riesgo de subdomain takeover en este dominio?",
+      "response": {
+        "agent": "takeover",
+        "refined_question": "¿Hay riesgo de subdomain takeover en el dominio github.com? El escaneo ha analizado 118 activos en total y ha detectado 194 hallazgos de severidad baja, 9 de severidad media y 8 de severidad desconocida. El campo 'has_takeover_candidates' figura como false, lo que indica que no se han identificado candidatos explícitos a takeover. ¿Puede confirmarse que no existe riesgo de subdomain takeover, o hay algún matiz a considerar dados los hallazgos de severidad desconocida?"
+      }
+    },
+    "51c7927d6a503c4a07144c7670423d3d66a37d1d5b2d24ecaec6adc9130fe452": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Qué subdominios parecen entornos de prueba o de uso interno?",
+      "response": {
+        "agent": "analyst",
+        "refined_question": "Del escaneo realizado sobre el dominio github.com, que ha identificado un total de 118 activos y 211 hallazgos (201 de severidad baja y 10 de severidad media), ¿qué subdominios parecen corresponder a entornos de prueba (staging, test, QA, dev, sandbox, etc.) o de uso interno (intranet, corp, internal, etc.)?"
+      }
+    },
+    "52a0b842c78a8b0af3e69d8cea0941f7fc2b6ea02d6a1cc5e8d5f77c7db21ffd": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "El sitio skills.github.com no declara una cabecera Referrer-Policy, lo que significa que el navegador decide por su cuenta cuánta información de la URL de origen comparte cuando un usuario hace clic en un enlace hacia otro sitio externo. En la práctica, esto puede provocar que fragmentos de la URL (como rutas de navegación o parámetros de consulta) sean visibles para sitios de terceros a través del campo \"Referer\" de las peticiones HTTP. En un dominio educativo como este, el riesgo es limitado: no suele haber datos sensibles en las URLs, y los usuarios afectados serían principalmente personas que navegan los cursos de GitHub Skills. No hay exposición de credenciales ni datos personales directa, pero sí una pequeña fuga de información de comportamiento de navegación.",
+        "remediation": "Añadir la cabecera HTTP `Referrer-Policy: strict-origin-when-cross-origin` en la configuración del servidor web o CDN que sirve skills.github.com. Esta política es el estándar moderno recomendado: envía el origen completo en peticiones del mismo sitio, y solo el origen (sin ruta ni parámetros) en peticiones cruzadas, eliminando la fuga de rutas a terceros sin romper funcionalidades que dependan del referer.",
+        "severity": "low"
+      }
+    },
+    "5603552e074ad25af262ca027cf9ead393ea9d1d3908f85ec74b3b77ac2d0512": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "La página skills.github.com no incluye cabeceras que impidan su carga dentro de un iframe en sitios de terceros (ni X-Frame-Options ni la directiva frame-ancestors en la Content Security Policy). Esto significa que un atacante podría embeber visualmente esta página dentro de un sitio malicioso y engañar a un usuario para que haga clic en elementos de la página sin darse cuenta (técnica conocida como clickjacking). En el contexto concreto de skills.github.com —un portal educativo de GitHub con contenidos de aprendizaje— el riesgo real es limitado, ya que las acciones sensibles (autenticación, pagos, cambios de cuenta) se gestionan en dominios distintos como github.com. No obstante, podría usarse para inducir clics en botones de inscripción, seguimiento de cursos o enlaces de redirección de forma encubierta, afectando principalmente a usuarios finales que visiten el sitio fraudulento.",
+        "remediation": "Añadir la cabecera HTTP `X-Frame-Options: DENY` (o `SAMEORIGIN` si se necesita embeber en el propio dominio) en la configuración del servidor o CDN que sirve skills.github.com. Alternativamente, incluir la directiva `frame-ancestors 'none'` (o `frame-ancestors 'self'`) dentro de la cabecera Content-Security-Policy ya existente, lo que es el mecanismo moderno y recomendado. Dado que el activo apunta a IPs de GitHub Pages (185.199.x.x), la configuración debe aplicarse a nivel de las cabeceras de respuesta gestionadas por el equipo de infraestructura de GitHub Pages o mediante el pipeline de despliegue del sitio.",
+        "severity": "low"
+      }
+    },
+    "58a2d08543b1b1d540e8ad18c178fbdf8d11d95140571d6c7aa54c98367b8f94": {
+      "kind": "tool",
+      "label": "record_analysis · Pregunta: Del escaneo realizado sobre el dominio github.com, que ha identificado un total de 118 activos y 211 hallazgos",
+      "response": {
+        "answer": "No se identifican hallazgos críticos ni altos en el escaneo de github.com. Respecto a la pregunta específica sobre subdominios que parezcan entornos de prueba/staging/QA/dev o de uso interno: los datos estructurados del escaneo proporcionados no incluyen el listado nominal de los 118 activos individuales (solo se entregan totales agregados y la distribución de severidad). Por tanto, no es posible listar candidatos concretos ni analizar patrones de nomenclatura subdominio a subdominio desde este JSON. Lo que sí puede inferirse del conjunto de metadatos disponibles se detalla en los campos de análisis.",
+        "concerning_combinations": [
+          "assets_with_internal_addressing=0 + 8 hallazgos 'unknown': aunque no hay IPs privadas expuestas, los 8 hallazgos de severidad desconocida podrían corresponder a activos atípicos (entornos de prueba, servicios beta) cuya tecnología no fue clasificada correctamente; merecen revisión manual.",
+          "118 activos totales + 0 hallazgos critical/high + listado nominal ausente: la falta del inventario detallado impide confirmar si subdominios tipo 'staging.github.com', 'dev.github.com' o 'sandbox.github.com' están presentes y cuál es su postura real de seguridad.",
+          "9 hallazgos de severidad media distribuidos entre 118 activos: si varios de estos medios se concentran en un subconjunto reducido de activos, ese subconjunto podría ser precisamente entornos de soporte/prueba con controles menos maduros."
+        ],
+        "patterns": [
+          "El JSON proporcionado solo contiene métricas agregadas (total_assets: 118, distribución de severidades) pero no el inventario nominal de activos, lo que impide un análisis de nomenclatura directo sobre subdominios individuales.",
+          "assets_with_internal_addressing: 0 indica que ninguno de los 118 activos resuelve a rangos de IP privadas (RFC 1918), lo que reduce —pero no elimina— la probabilidad de que existan entornos internos expuestos accidentalmente.",
+          "La ausencia total de hallazgos critical/high en un dominio de 118 activos con perfil público alto (github.com) es consistente con una superficie endurecida, aunque no descarta activos de staging/dev con controles más laxos que simplemente no dispararon reglas de severidad alta.",
+          "La proporción de hallazgos 'unknown' (8 de 211, ~3.8%) merece atención: etiquetas de severidad desconocida suelen aparecer cuando las herramientas de reconocimiento encuentran tecnologías o respuestas inusuales, patrón frecuente en entornos de prueba con configuraciones no estándar.",
+          "El volumen de hallazgos bajos (194) frente a medios (9) sugiere una superficie amplia con misconfiguraciones menores dispersas, patrón típico de organizaciones con muchos subdominios funcionales y algunos legacy o de soporte."
+        ]
+      }
+    },
+    "62949c5b6568f41843e1016d3380076fa0abc170335a4dc768ba5fd0657446df": {
+      "kind": "tool",
+      "label": "record_analysis · Pregunta: Del escaneo realizado sobre el dominio github.com, que ha identificado un total de 118 activos y 211 hallazgos",
+      "response": {
+        "answer": "Del escaneo sobre github.com (118 activos, 211 hallazgos: 201 bajos y 10 medios, sin críticos ni altos), los datos proporcionados **no incluyen el listado explícito de subdominios individuales** detectados, por lo que no es posible identificar con certeza qué subdominios específicos corresponden a entornos de prueba (staging, dev, QA, sandbox, etc.) o de uso interno (intranet, corp, internal, etc.) a partir de este JSON resumido. Sin embargo, dado el conocimiento público sobre la infraestructura de GitHub y el perfil del escaneo, se pueden señalar patrones relevantes y orientar las prioridades de revisión manual.",
+        "concerning_combinations": [
+          "Ausencia de detalle de subdominios + 118 activos detectados: sin el listado nominal es imposible auditar si existen patrones como 'staging.github.com', 'dev.github.com', 'sandbox.github.com', etc., que podrían tener controles de seguridad más laxos que producción.",
+          "assets_with_internal_addressing = 0 combinado con la falta de subdominio detail: aunque no hay IPs privadas, subdominios de entornos no productivos podrían estar expuestos públicamente con IPs públicas, siendo igualmente riesgosos sin aparecer como 'internos' en esta métrica.",
+          "10 hallazgos de severidad media sin contexto de a qué activos corresponden: si estos hallazgos están concentrados en activos con nombres sugestivos de entornos no productivos, su criticidad real podría ser mayor al no tener los mismos controles que producción."
+        ],
+        "patterns": [
+          "El JSON del escaneo solo contiene métricas agregadas (totales y distribución de severidad), sin desglose de los 118 activos individuales ni sus nombres de subdominio, lo que impide hacer una clasificación directa de entornos de prueba o internos a partir de los datos suministrados.",
+          "El valor assets_with_internal_addressing es 0, lo que indica que ninguno de los 118 activos resuelve a rangos de IP privadas (RFC1918), descartando que haya subdominios 'internos' accesibles por direccionamiento privado dentro del perímetro escaneado.",
+          "La ausencia total de hallazgos críticos y altos, junto con 201 hallazgos bajos y solo 10 medios en 118 activos, sugiere una superficie relativamente bien controlada, coherente con una organización madura. Sin embargo, la presencia de activos de prueba/staging en un dominio de producción podría estar enmascarada por la falta de detalle en el JSON.",
+          "La ratio de hallazgos por activo (~1,8 hallazgos/activo) es baja, lo que puede indicar buenas prácticas generales, pero también podría sugerir que algunos activos de staging o internos tienen menor exposición de servicios y por eso generan menos hallazgos, pasando desapercibidos."
+        ]
+      }
+    },
+    "8ca11cea6a849235f1b8e782c1609657073ea3f5ed89cd3603b16b86cb04e184": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Qué debería arreglar primero y por qué?",
+      "response": {
+        "agent": "analyst",
+        "refined_question": "Dado el escaneo del dominio github.com, que presenta 118 activos en total, 10 hallazgos de severidad media y 201 de severidad baja (sin candidatos a subdomain takeover), ¿qué debería priorizarse para remediar primero y por qué?"
+      }
+    },
+    "9390ff4166ca63bacf3661d809ad001f999cba728c9409b11ab6e87465fd68db": {
+      "kind": "text",
+      "label": "texto libre · Analiza esta comparación entre dos escaneos (JSON):",
+      "response": "## Análisis de cambios en la superficie de ataque — github.com\n\n### Resumen del cambio\n\nEntre los dos escaneos consecutivos se identificó **un único hostname nuevo**: `skills.github.com`. No se registraron hostnames desaparecidos, y los 117 activos comunes se mantienen estables.\n\n### Valoración del nuevo activo\n\nLa incorporación de `skills.github.com` no va acompañada de ningún hallazgo calificado como `critical` o `high`, lo cual es un indicador inicial favorable. El subdominio corresponde a **GitHub Skills**, la plataforma de aprendizaje interactivo de GitHub, por lo que su aparición responde a un patrón coherente con la expansión orgánica de servicios de la plataforma y no presenta, a priori, señales de riesgo elevado.\n\n### Patrón de exposición\n\nCon 117 activos comunes estables y un único subdominio nuevo sin hallazgos graves, **no se aprecia un patrón de expansión acelerada o desordenada** de la superficie de exposición. El crecimiento es puntual y aparentemente controlado.\n\n### Consideraciones sobre variabilidad DNS\n\nDado que no hay activos desaparecidos, no aplica en este caso la advertencia sobre variabilidad DNS. No obstante, conviene recordar que la aparición de `skills.github.com` en este escaneo podría deberse también a que el subdominio existía previamente pero no era resolvible en el momento del escaneo anterior (caché, TTL, balanceo). Esto no cambia la valoración de riesgo, pero sí matiza la interpretación del \"cuándo\" apareció realmente.\n\n### Conclusión\n\nEl cambio detectado es de **bajo impacto desde la perspectiva de seguridad** en base a la información disponible. Se recomienda mantener `skills.github.com` bajo monitorización continua para detectar eventuales hallazgos futuros, especialmente si el servicio incorpora funcionalidades de autenticación o ejecución de código de usuario, áreas históricamente sensibles en plataformas de este tipo."
+    },
+    "aae91013e6d38083bc2d3aef4a655b2a33ab2aacd5341760ded4f5c99c60aa1f": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "El sitio skills.github.com no incluye la cabecera de seguridad Content-Security-Policy (CSP) en sus respuestas HTTP. Esto significa que, si un atacante lograra inyectar código malicioso en la página (por ejemplo, mediante XSS), el navegador del usuario no tendría ninguna restricción adicional que limitara la ejecución de ese código o la carga de recursos externos no autorizados. El riesgo afecta principalmente a los usuarios finales que visitan el sitio: sus sesiones, datos o credenciales podrían verse comprometidos si se explotara una vulnerabilidad de inyección de contenido en combinación con la ausencia de esta cabecera. Sin embargo, la ausencia de CSP por sí sola no es explotable: requiere que exista previamente una vulnerabilidad de inyección de contenido en la aplicación.",
+        "remediation": "Configurar la cabecera HTTP `Content-Security-Policy` en el servidor o CDN que sirve skills.github.com. Como punto de partida seguro y restrictivo, añadir una política base como `Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self';` y ajustarla progresivamente según los recursos legítimos que cargue la aplicación. Dado que el activo se apoya en IPs de GitHub Pages (185.199.x.x), la cabecera debe configurarse a nivel del repositorio mediante un archivo `_headers` (si se usa Netlify/CF Pages) o a través de la configuración de proxy/CDN que se sitúe delante del contenido estático.",
+        "severity": "low"
+      }
+    },
+    "b5b4087e61f8141e6b708b7478522c9c175e511f7ac516433a918067385fdb75": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Algún activo filtra direccionamiento interno?",
+      "response": {
+        "agent": "analyst",
+        "refined_question": "En el escaneo del dominio github.com, que cuenta con 118 activos analizados y 211 hallazgos en total (194 de severidad baja, 9 media y 8 desconocida), ¿alguno de los activos filtra direccionamiento interno (por ejemplo, IPs privadas, rangos RFC 1918, hostnames internos u otra información de red interna)?"
+      }
+    },
+    "b789878d6cd316eced45d54e5964f18ada21684d2a7fa8daa4339fb37aa755bd": {
+      "kind": "tool",
+      "label": "record_triage · Analiza este hallazgo y registra tu triaje:",
+      "response": {
+        "impact": "El servidor skills.github.com no incluye la cabecera de seguridad 'X-Content-Type-Options: nosniff'. Esto significa que algunos navegadores antiguos o mal configurados podrían intentar \"adivinar\" el tipo de contenido de ciertos archivos servidos, en lugar de respetar el tipo declarado por el servidor. En un escenario concreto, si un atacante pudiera lograr que el sitio sirva contenido que él controla (por ejemplo, un archivo de texto que en realidad contiene código JavaScript), el navegador podría ejecutarlo como script. Sin embargo, en un sitio como GitHub Skills —que es esencialmente una plataforma de contenido educativo estático, servida a través de la CDN de GitHub Pages— la superficie de ataque real para explotar esta ausencia es muy reducida, ya que el atacante no tiene capacidad de subir contenido arbitrario que sea servido desde este dominio con tipos MIME ambiguos.",
+        "remediation": "Añadir la cabecera HTTP 'X-Content-Type-Options: nosniff' en todas las respuestas del servidor. En GitHub Pages, esto puede configurarse a través de los ajustes del repositorio o, si se usa un proxy/CDN propio delante (como Cloudflare o similar), añadir la cabecera a nivel de regla de transformación de respuesta. Si el sitio es gestionado directamente por GitHub, abrir un ticket con el equipo de infraestructura de GitHub para que apliquen la cabecera globalmente en el dominio skills.github.com.",
+        "severity": "low"
+      }
+    },
+    "baef6a1f8e1f3e0420f900db4aeaaa4a56add94808e6e1f63e559ed5e1d8d049": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Algún activo filtra direccionamiento interno?",
+      "response": {
+        "agent": "analyst",
+        "refined_question": "En el escaneo del dominio github.com, que cuenta con 118 activos, 201 hallazgos de severidad baja y 10 de severidad media, ¿alguno de los activos filtra direccionamiento interno (por ejemplo, IPs privadas, rangos RFC 1918 o referencias a infraestructura interna expuestas públicamente)?"
+      }
+    },
+    "c3b76f39750f2633e4bf3333b9337a419d2342e638e538372ddd3838c888cca6": {
+      "kind": "tool",
+      "label": "record_analysis · Pregunta: En el escaneo del dominio github.com, que cuenta con 118 activos, 201 hallazgos de severidad baja y 10 de seve",
+      "response": {
+        "answer": "No. Según los datos del escaneo, ninguno de los 118 activos de github.com filtra direccionamiento interno. El campo `assets_with_internal_addressing` es 0, lo que indica que no se detectaron IPs privadas, rangos RFC 1918 ni referencias a infraestructura interna expuestas públicamente en ningún activo analizado.",
+        "concerning_combinations": [
+          "Los 10 hallazgos de severidad media, aunque no críticos, deben revisarse en conjunto para descartar que su combinación pueda elevar el riesgo real (p. ej., cabeceras de seguridad ausentes + información de versiones expuesta).",
+          "El alto número de hallazgos bajos acumulados (201) podría enmascarar patrones de exposición de información que, combinados, aporten contexto útil a un atacante (enumeración de tecnología, versiones, etc.)."
+        ],
+        "patterns": [
+          "Sin filtración de direccionamiento interno en ninguno de los 118 activos escaneados.",
+          "Distribución de severidad contenida: 201 hallazgos bajos y 10 medios, sin hallazgos high ni critical.",
+          "Ausencia total de hallazgos críticos/altos, lo que sugiere una superficie de ataque externa bien gestionada para un dominio de esta escala.",
+          "El volumen de hallazgos bajos (201) es elevado en proporción al número de activos (118), con una media de ~1,7 hallazgos bajos por activo."
+        ],
+        "priorities": [
+          "1. Revisar y clasificar los 10 hallazgos de severidad media para confirmar que ninguno implica exposición de información sensible o encadenamiento de riesgo con hallazgos bajos.",
+          "2. Agrupar y analizar los 201 hallazgos bajos por categoría o tipo para identificar patrones sistémicos (p. ej., cabeceras HTTP ausentes de forma generalizada, cookies sin flags de seguridad) que justifiquen remediación en bloque.",
+          "3. Mantener monitoreo continuo sobre el indicador `assets_with_internal_addressing`, dado que en dominios de gran escala como github.com los cambios de infraestructura son frecuentes y podrían introducir fugas de este tipo en futuros escaneos."
+        ]
+      }
+    },
+    "c55fb35b6208de9b16d1eed341bc048c31c423929ba1dd1594663cde7f67969c": {
+      "kind": "tool",
+      "label": "route_query · Pregunta del usuario: ¿Qué subdominios parecen entornos de prueba o de uso interno?",
+      "response": {
+        "agent": "analyst",
+        "refined_question": "Del escaneo realizado sobre el dominio github.com, que ha identificado un total de 118 activos y 211 hallazgos (194 de severidad baja, 9 media y 8 desconocida), ¿qué subdominios parecen corresponder a entornos de prueba (staging, test, QA, dev, sandbox, etc.) o de uso interno (intranet, corp, internal, etc.)? Por favor, identifica patrones de nomenclatura y lista los candidatos más relevantes."
+      }
+    },
+    "ec010bed911cf28571d5dbfe97f16e26c90f113be72a5a48f22a00e8b2e1f692": {
+      "kind": "text",
+      "label": "texto libre · Redacta el resumen ejecutivo con estos datos del escaneo (JSON):",
+      "response": "## Resumen Ejecutivo – Superficie de Exposición\n\nEl análisis de superficie de exposición realizado sobre el dominio evaluado ha concluido sin identificar hallazgos de severidad crítica ni alta. Esto significa que, en el momento del escaneo, no se detectaron vulnerabilidades o exposiciones conocidas que pudieran traducirse en riesgo inmediato para la continuidad del servicio, la confidencialidad de los datos de clientes o el cumplimiento normativo de la organización.\n\nNo obstante, es importante interpretar este resultado en su contexto adecuado. Una puntuación de riesgo elevada en la escala del sistema de medición no refleja necesariamente la presencia de amenazas activas, sino que puede responder a la metodología de cálculo propia de la herramienta utilizada. La ausencia de hallazgos críticos o altos es una señal positiva, aunque no debe interpretarse como garantía de seguridad absoluta: la superficie de exposición de cualquier organización evoluciona constantemente a medida que se incorporan nuevos servicios, proveedores o cambios tecnológicos.\n\nSe recomienda mantener una cadencia periódica de este tipo de evaluaciones para detectar de forma temprana cualquier cambio en la exposición de la organización. Asimismo, conviene complementar este análisis con revisiones internas de accesos y procesos, dado que los riesgos más significativos para una empresa no siempre provienen del exterior y no siempre son detectables mediante herramientas automatizadas de análisis de superficie."
+    },
+    "ecc032ab16fd565892ef151b768742a4eb95ea1017b465710ec2deecb9e4df41": {
+      "kind": "tool",
+      "label": "record_analysis · Pregunta: En el escaneo del dominio github.com, que cuenta con 118 activos analizados y 211 hallazgos en total (194 de s",
+      "response": {
+        "answer": "No. Ninguno de los 118 activos analizados del dominio github.com filtra direccionamiento interno. El campo `assets_with_internal_addressing` es 0, lo que indica que no se detectaron IPs privadas (RFC 1918), rangos reservados, hostnames internos ni otra información de red interna expuesta en ninguno de los activos del escaneo.",
+        "concerning_combinations": [
+          "Los 8 hallazgos de severidad 'unknown' combinados con la ausencia de clasificación podrían ocultar riesgos no cuantificados; aunque no hay filtraciones internas confirmadas, estos hallazgos sin categorizar deberían revisarse para descartar que alguno implique exposición de red interna u otro vector no detectado.",
+          "La concentración de 9 hallazgos medios sobre 118 activos es baja en términos relativos, pero sin detalle de su naturaleza específica no se puede descartar que alguno tenga contexto agravante (p. ej., cabeceras de seguridad ausentes en activos críticos de autenticación)."
+        ],
+        "patterns": [
+          "Ausencia total de filtración de direccionamiento interno: 0 de 118 activos exponen IPs privadas, rangos RFC 1918 u hostnames internos.",
+          "Perfil de hallazgos de bajo riesgo global: 194 hallazgos bajos, 9 medios, 8 desconocidos y 0 críticos/altos, lo que sugiere una superficie de ataque controlada y madura para un dominio de esta escala.",
+          "No se registran hallazgos críticos ni altos en todo el escaneo, lo cual es destacable dado el volumen de 118 activos analizados.",
+          "Los 8 hallazgos de severidad desconocida merecen atención de clasificación, ya que su naturaleza aún no está determinada."
+        ],
+        "priorities": [
+          "1. CLASIFICAR los 8 hallazgos de severidad 'unknown': son la mayor incógnita del escaneo. Deben revisarse manualmente para asignarles severidad real y descartar que encubran vectores de riesgo relevantes, incluyendo posibles filtraciones de red no categorizadas.",
+          "2. REVISAR los 9 hallazgos de severidad media: aunque el número es bajo, identificar si alguno afecta activos de alta criticidad (autenticación, API endpoints, gestión de tokens) para priorizar su remediación.",
+          "3. MANTENER monitorización continua sobre filtración de red interna: el resultado actual es favorable (0 activos afectados), pero dado el volumen y la naturaleza pública de github.com, se recomienda incluir esta verificación en ciclos de escaneo periódicos.",
+          "4. DOCUMENTAR y cerrar los 194 hallazgos bajos de forma programática, agrupándolos por tipo para optimizar el esfuerzo de remediación (p. ej., cabeceras HTTP faltantes, configuraciones TLS menores)."
+        ]
+      }
+    }
+  },
+  "meta": {
+    "fixture": "demo/github.com.json",
+    "format": 1,
+    "model": "anthropic/claude-sonnet-4-6",
+    "recorded_at": "2026-09-28"
+  }
+}

@@ -26,6 +26,9 @@ data/
 htmlcov/
 
 # Salidas de la herramienta
+# Caché completa de respuestas del modelo de scripts/build_demo_data.py: solo se
+# versiona lo que usa la demo (demo/ai_recordings.json).
+demo/.ai_cache.json
 reports/*.pdf
 reports/*.docx
 scans/
