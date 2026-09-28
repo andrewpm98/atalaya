@@ -96,8 +96,13 @@ class Scan(Base):
     #: Incidencias no fatales del escaneo (p. ej. una fuente externa caída).
     errors: Mapped[list[str]] = mapped_column(JSON, default=list)
 
+    #: `order_by` explícito: sin él, el orden de carga no está garantizado, y en
+    #: PostgreSQL cambia de verdad — un `UPDATE` (el triaje) reescribe la fila
+    #: al final del heap. Ese orden llega a los prompts de la capa IA, al informe
+    #: y al dashboard; con él, los tres son reproducibles entre motores y antes/
+    #: después de triar (lo exige el proveedor `replay`, ver `ai/replay.py`).
     assets: Mapped[list[Asset]] = relationship(
-        back_populates="scan", cascade="all, delete-orphan"
+        back_populates="scan", cascade="all, delete-orphan", order_by="Asset.id"
     )
 
 
@@ -122,8 +127,9 @@ class Asset(Base):
     open_ports: Mapped[list[int]] = mapped_column(JSON, default=list)
 
     scan: Mapped[Scan] = relationship(back_populates="assets")
+    #: Mismo motivo que `Scan.assets`: orden estable independiente del motor.
     findings: Mapped[list[Finding]] = relationship(
-        back_populates="asset", cascade="all, delete-orphan"
+        back_populates="asset", cascade="all, delete-orphan", order_by="Finding.id"
     )
 
 

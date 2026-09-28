@@ -105,3 +105,13 @@ def test_toda_columna_de_fecha_usa_utc_datetime() -> None:
 
     assert columnas_fecha, "no se encontró ninguna columna de fecha"
     assert sin_convertir == []
+
+
+def test_colecciones_con_orden_explicito_por_id() -> None:
+    """Sin `order_by`, PostgreSQL devuelve las filas en orden de heap, que
+    cambia tras un `UPDATE` (el triaje): los prompts de la capa IA, el informe
+    y el dashboard dejarían de ser reproducibles, y el proveedor `replay` de
+    la demo no encontraría sus grabaciones. SQLite no lo reproduce, así que
+    se comprueba la definición."""
+    assert [str(c) for c in Scan.assets.property.order_by] == ["assets.id"]
+    assert [str(c) for c in Asset.findings.property.order_by] == ["findings.id"]
