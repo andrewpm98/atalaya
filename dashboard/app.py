@@ -54,21 +54,20 @@ _SEVERITY_TAG = {
 _SEVERITY_ORDER = ("critical", "high", "medium", "low", "unknown")
 _SEVERITY_RANK = {sev: i for i, sev in enumerate(_SEVERITY_ORDER)}
 
-#: Peso de cada severidad en el score de riesgo (0-100).
-#:
-#: **Fuente de verdad: `src/atalaya/reporting/generator.py::_RISK_WEIGHTS`.**
-#: Los valores están duplicados aquí a propósito, no importados: el
-#: dashboard es un cliente HTTP puro de la API (ver el docstring del módulo)
-#: y no importa código del backend ni siquiera para una constante. El precio
-#: de esa independencia es esta nota: **si cambias un peso allí, cámbialo
-#: aquí**, o el número que ve el usuario en pantalla contradirá al del PDF
-#: que se descarga de ese mismo escaneo.
-_RISK_WEIGHTS = {"critical": 25, "high": 10, "medium": 4, "low": 1, "unknown": 0}
+#: Banda del score que fija cada severidad máxima (ver `core/scoring.py` en el
+#: backend, que es quien calcula el número: aquí solo se explica en la barra
+#: lateral). Si cambian las bandas allí, cambia este texto.
+_SEVERITY_BANDS = {
+    "critical": "75 – 100",
+    "high": "50 – 74",
+    "medium": "25 – 49",
+    "low": "1 – 24",
+    "unknown": "no puntúa",
+}
 
 #: Cortes de banda del score: (límite superior exclusivo, etiqueta, clase CSS).
-#: Un solo hallazgo crítico (25) ya sale de la banda baja; dos (50) entran en
-#: la alta, coherente con la proporción de pesos que documenta
-#: `reporting/generator.py`.
+#: Coinciden con las bandas de `core/scoring.py`: como la banda la fija la
+#: severidad máxima, el color del score y el de la peor severidad coinciden.
 _SCORE_BANDS = (
     (25, "RIESGO BAJO", "low"),
     (50, "RIESGO MEDIO", "medium"),
@@ -299,6 +298,11 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
   color: var(--fg-dim); padding: 0.18rem 0;
 }
 .atl-side-kv span:last-child { color: var(--fg); }
+/* Prosa explicativa en la barra lateral: sans, no mono (es texto, no dato). */
+.atl-side-note {
+  font-family: var(--sans); font-size: 0.7rem; line-height: 1.45;
+  color: var(--fg-dim);
+}
 .atl-legend { display: flex; flex-direction: column; gap: 0.3rem; }
 .atl-legend-row {
   display: flex; align-items: center; gap: 0.5rem;
@@ -876,23 +880,14 @@ def severity_counts(scan: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
-def compute_risk_score(scan: dict[str, Any]) -> int:
-    """Score de riesgo 0-100 del escaneo, calculado en el propio dashboard.
+def risk_score(scan: dict[str, Any]) -> int:
+    """Score de riesgo 0-100 del escaneo, tal como lo calcula la API.
 
-    `GET /scans/{id}` no expone un `risk_score`, pero sí la severidad de cada
-    hallazgo, que es todo lo que necesita la fórmula. Se replica aquí la de
-    `reporting/generator.py::_compute_risk_score()` — suma ponderada acotada
-    a 100 — para que el número de la pantalla y el del PDF del mismo escaneo
-    no puedan contradecirse (ver la nota de `_RISK_WEIGHTS`).
-
-    Los hallazgos sin triar pesan 0: el score mide riesgo *confirmado por el
-    triaje*, no volumen de trabajo pendiente. Por eso la tarjeta avisa
-    aparte de cuántos quedan sin triar — un score bajo con 40 pendientes no
-    significa lo mismo que un score bajo con todo triado.
+    `GET /scans/{id}` lo expone (`core/scoring.py`): el dashboard lo pinta, no
+    lo recalcula. Antes tenía su propia copia de la fórmula, sincronizada con
+    la del PDF solo por convención; ahora los dos leen la misma función.
     """
-    counts = severity_counts(scan)
-    total = sum(_RISK_WEIGHTS[sev] * n for sev, n in counts.items())
-    return min(100, total)
+    return int(scan["risk_score"])
 
 
 def risk_band(score: int) -> tuple[str, str]:
@@ -906,7 +901,7 @@ def risk_band(score: int) -> tuple[str, str]:
 def render_risk_score(scan: dict[str, Any]) -> None:
     """Tarjeta principal del detalle: score grande, banda de color, reparto
     por severidad y aviso de pendientes de triar."""
-    score = compute_risk_score(scan)
+    score = risk_score(scan)
     etiqueta, clase = risk_band(score)
     counts = severity_counts(scan)
 
@@ -920,7 +915,7 @@ def render_risk_score(scan: dict[str, Any]) -> None:
     )
     pendientes = counts["unknown"]
     nota = (
-        f"{pendientes} hallazgo(s) sin triar no puntúan — el score subirá al triarlos"
+        f"{pendientes} hallazgo(s) sin triar no puntúan — el score puede subir al triarlos"
         if pendientes
         else "Todos los hallazgos están triados: el score refleja el escaneo completo"
     )
@@ -1198,21 +1193,20 @@ with st.sidebar:
     _html(f'<div class="atl-side-kv"><span>endpoint</span><span>{escape(API_URL)}</span></div>')
 
     _html(
-        '<div class="atl-side-h atl-side-h--gap">Severidad · peso</div>'
+        '<div class="atl-side-h atl-side-h--gap">Severidad máx. · banda</div>'
         '<div class="atl-legend">'
         + "".join(
             f'<div class="atl-legend-row"><i style="background: var(--sev-{sev})"></i>'
-            f"<b>{_SEVERITY_TAG[sev]}</b><span>{peso} pts</span></div>"
-            for sev, peso in _RISK_WEIGHTS.items()
+            f"<b>{_SEVERITY_TAG[sev]}</b><span>{banda}</span></div>"
+            for sev, banda in _SEVERITY_BANDS.items()
         )
         + "</div>"
     )
     _html(
-        '<div class="atl-side-h atl-side-h--gap">Bandas de score</div>'
-        '<div class="atl-side-kv"><span>0 – 24</span><span>bajo</span></div>'
-        '<div class="atl-side-kv"><span>25 – 49</span><span>medio</span></div>'
-        '<div class="atl-side-kv"><span>50 – 74</span><span>alto</span></div>'
-        '<div class="atl-side-kv"><span>75 – 100</span><span>crítico</span></div>'
+        '<div class="atl-side-h atl-side-h--gap">Score</div>'
+        '<div class="atl-side-note">La peor severidad triada fija la banda; el volumen'
+        " solo mueve dentro de ella, y repetir un mismo tipo de hallazgo suma cada vez"
+        " menos.</div>"
     )
 
 tab_nuevo, tab_escaneos, tab_preguntar = st.tabs(

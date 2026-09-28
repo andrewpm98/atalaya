@@ -22,7 +22,7 @@ import httpx
 from streamlit.testing.v1 import AppTest
 
 from atalaya.core.models import FindingSeverity
-from atalaya.reporting.generator import _compute_risk_score
+from atalaya.core.scoring import compute_risk_score
 
 #: Ruta absoluta: `AppTest.from_file` resuelve una ruta relativa contra el
 #: fichero que llama, no contra el directorio de trabajo del proceso.
@@ -124,8 +124,20 @@ def _finding(severity: str = "unknown") -> dict[str, Any]:
     }
 
 
+def _api_risk_score(findings: list[dict[str, Any]]) -> int:
+    """El `risk_score` que calcularía la API para estos hallazgos. Una
+    severidad fuera de la escala (ver el test de severidad desconocida) la
+    API nunca la emitiría: aquí se ignora en vez de romper el doble."""
+    validas = {sev.value for sev in FindingSeverity}
+    return compute_risk_score(
+        (f["severity"], f["finding_type"]) for f in findings if f["severity"] in validas
+    )
+
+
 def _scan_detail(scan_id: int = 1, findings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    findings = findings if findings is not None else [_finding()]
     return {
+        "risk_score": _api_risk_score(findings),
         "id": scan_id,
         "domain": "ejemplo.com",
         "status": "completed",
@@ -142,7 +154,7 @@ def _scan_detail(scan_id: int = 1, findings: list[dict[str, Any]] | None = None)
                 "is_active": False,
                 "leaks_internal_addressing": True,
                 "open_ports": [],
-                "findings": findings if findings is not None else [_finding()],
+                "findings": findings,
             }
         ],
     }
@@ -316,19 +328,27 @@ def test_triage_con_fallos_muestra_los_errores() -> None:
 # ─── Score de riesgo ────────────────────────────────────────────────────────
 
 
-def test_score_de_riesgo_coincide_con_el_del_informe() -> None:
-    """El número que ve el usuario en el dashboard y el `risk_score` del PDF
-    del mismo escaneo salen de fórmulas *distintas* (el dashboard no importa
-    `atalaya.reporting`: es un cliente HTTP puro de la API). Que no se
-    separen no lo garantiza el intérprete, lo garantiza esta prueba, que sí
-    mira los dos lados a la vez.
-    """
-    severidades = ["critical", "critical", "high", "medium", "low", "unknown"]
-    findings = [_finding(sev) for sev in severidades]
-    esperado = _compute_risk_score(
-        {sev: sum(1 for s in severidades if s == sev.value) for sev in FindingSeverity}
+def test_score_de_riesgo_es_el_de_la_api_sin_recalcular() -> None:
+    """El dashboard pinta el `risk_score` que devuelve `GET /scans/{id}`
+    (`core/scoring.py`, la misma función que usa el PDF), no uno propio. Se
+    comprueba devolviendo a propósito un número que no se deduce de los
+    hallazgos: si el dashboard recalculara, no saldría 42."""
+    detalle = _scan_detail(findings=[_finding("critical")])
+    detalle["risk_score"] = 42
+
+    at = _run_app(
+        get_map={"/scans": _Resp(200, [_scan_summary()]), "/scans/1": _Resp(200, detalle)}
     )
 
+    assert not at.exception
+    assert _score_mostrado(at) == 42
+    assert any("RIESGO MEDIO" in m.value for m in at.tabs[1].markdown)
+
+
+def test_banda_del_score_sigue_a_la_severidad_maxima() -> None:
+    """Muchos hallazgos leves y uno medio: banda media, nunca crítica (el
+    defecto de la suma acotada, que ponía github.com en 100/100)."""
+    findings = [_finding("low")] * 40 + [_finding("medium")]
     at = _run_app(
         get_map={
             "/scans": _Resp(200, [_scan_summary()]),
@@ -337,24 +357,8 @@ def test_score_de_riesgo_coincide_con_el_del_informe() -> None:
     )
 
     assert not at.exception
-    assert esperado == 65  # 2x25 + 10 + 4 + 1; `unknown` no puntúa
-    assert _score_mostrado(at) == esperado
-    assert any("RIESGO ALTO" in m.value for m in at.tabs[1].markdown)
-
-
-def test_score_de_riesgo_se_acota_a_100() -> None:
-    """Cinco críticos suman 125 en bruto; el índice es 0-100, no una suma
-    sin límite (mismo acotado que `reporting/generator.py`)."""
-    at = _run_app(
-        get_map={
-            "/scans": _Resp(200, [_scan_summary()]),
-            "/scans/1": _Resp(200, _scan_detail(findings=[_finding("critical")] * 5)),
-        }
-    )
-
-    assert not at.exception
-    assert _score_mostrado(at) == 100
-    assert any("RIESGO CRÍTICO" in m.value for m in at.tabs[1].markdown)
+    assert 25 <= (_score_mostrado(at) or 0) <= 49
+    assert any("RIESGO MEDIO" in m.value for m in at.tabs[1].markdown)
 
 
 def test_score_ignora_los_hallazgos_sin_triar_pero_lo_advierte() -> None:

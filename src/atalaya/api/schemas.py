@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from atalaya.core.models import FindingSeverity, ScanStatus
+from atalaya.core.scoring import compute_risk_score
 
 
 class ScanRequest(BaseModel):
@@ -66,6 +67,20 @@ class ScanSummary(BaseModel):
 
 class ScanDetail(ScanSummary):
     assets: list[AssetDetail] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def risk_score(self) -> int:
+        """Índice de riesgo 0-100 (`core/scoring.py`), el mismo que el del PDF.
+
+        Se expone aquí para que el dashboard lo pinte en vez de recalcularlo:
+        antes tenía su propia copia de la fórmula, sincronizada a mano.
+        """
+        return compute_risk_score(
+            (finding.severity, finding.finding_type)
+            for asset in self.assets
+            for finding in asset.findings
+        )
 
 
 class TriageResponse(BaseModel):

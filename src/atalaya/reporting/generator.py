@@ -42,6 +42,7 @@ from atalaya.ai.report_writer import write_executive_summary
 from atalaya.config import settings
 from atalaya.core.exceptions import AIProviderError
 from atalaya.core.models import Finding, FindingSeverity, Scan
+from atalaya.core.scoring import compute_risk_score, risk_band
 
 logger = logging.getLogger(__name__)
 
@@ -71,32 +72,13 @@ _SEVERITY_LABEL = {
 }
 
 
-#: Peso de cada severidad en `risk_score` (0-100). La proporción entre pesos
-#: (crítica ≈ 2.5x alta ≈ 2.5x media ≈ 4x baja) es deliberada, no arbitraria:
-#: aproxima que un único hallazgo crítico ya debería acercar el informe a la
-#: banda alta del índice (dos críticas superan 50/100 sin necesidad de nada
-#: más), mientras que acumular hallazgos `low` por sí solos no debe empujar
-#: el score hacia el mismo terreno que un puñado de críticas/altas — no son
-#: comparables en impacto real. No hace falta más sofisticación (p. ej.
-#: ponderar por activo o por tipo de hallazgo): el objetivo es un número que
-#: sitúe el informe en una banda de un vistazo, no un score defendible como
-#: CVSS.
-_RISK_WEIGHTS: dict[FindingSeverity, int] = {
-    FindingSeverity.CRITICAL: 25,
-    FindingSeverity.HIGH: 10,
-    FindingSeverity.MEDIUM: 4,
-    FindingSeverity.LOW: 1,
-    FindingSeverity.UNKNOWN: 0,
-}
-
-
-def _compute_risk_score(counts: dict[FindingSeverity, int]) -> int:
-    """Calcula el `risk_score` (0-100) a partir de los contadores por
-    severidad. Acotado a 100: es un índice para el lector, no una suma sin
-    límite que un escaneo con muchos hallazgos `low` pudiera desbordar.
-    """
-    total = sum(_RISK_WEIGHTS[sev] * count for sev, count in counts.items())
-    return min(100, total)
+def scan_risk_score(scan: Scan) -> int:
+    """`core/scoring.py::compute_risk_score` sobre los hallazgos de `scan`."""
+    return compute_risk_score(
+        (finding.severity, finding.finding_type)
+        for asset in scan.assets
+        for finding in asset.findings
+    )
 
 
 def build_report_context(
@@ -112,9 +94,9 @@ def build_report_context(
     `executive_summary` es opcional y ajeno a este cálculo: quien llama
     (`generate_report`) ya decidió si hay resumen ejecutivo de IA disponible
     o no (`None` si no hay proveedor, o si `ai/report_writer.py` falló). Esta
-    función solo lo coloca en el contexto junto al `risk_score`, que sí
-    calcula aquí porque depende únicamente de `severity_counts` — ya
-    calculado en esta misma función — sin necesitar IA.
+    función solo lo coloca en el contexto junto al `risk_score`, que sale de
+    `core/scoring.py` — la misma función que expone la API al dashboard, así
+    que el número del PDF y el de la pantalla no pueden contradecirse.
     """
     findings: list[Finding] = [f for asset in scan.assets for f in asset.findings]
     counts = dict.fromkeys(_SEVERITY_ORDER, 0)
@@ -139,7 +121,8 @@ def build_report_context(
         "severity_counts": [(_SEVERITY_LABEL[sev], counts[sev]) for sev in _SEVERITY_ORDER],
         "findings": findings_ordenados,
         "severity_label": _SEVERITY_LABEL,
-        "risk_score": _compute_risk_score(counts),
+        "risk_score": scan_risk_score(scan),
+        "risk_band": risk_band(scan_risk_score(scan)),
         "executive_summary": executive_summary,
     }
 
@@ -187,10 +170,7 @@ async def _build_executive_summary(provider: LLMProvider, scan: Scan) -> str | N
     findings: list[Finding] = [f for asset in scan.assets for f in asset.findings]
     critical = [f for f in findings if f.severity is FindingSeverity.CRITICAL]
     high = [f for f in findings if f.severity is FindingSeverity.HIGH]
-    counts = dict.fromkeys(_SEVERITY_ORDER, 0)
-    for finding in findings:
-        counts[finding.severity] += 1
-    risk_score = _compute_risk_score(counts)
+    risk_score = scan_risk_score(scan)
 
     try:
         return await write_executive_summary(

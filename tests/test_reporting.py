@@ -165,23 +165,47 @@ def test_build_report_context_risk_score_sin_hallazgos_es_cero() -> None:
     assert ctx["risk_score"] == 0
 
 
-def test_build_report_context_risk_score_pondera_por_severidad() -> None:
+def test_build_report_context_risk_score_sigue_la_severidad_maxima() -> None:
+    """La fórmula en sí se prueba en `tests/test_scoring.py`; aquí, que el
+    informe la usa: un crítico cae en la banda crítica y la banda se muestra."""
     scan = _scan()
-    _asset_con_findings(scan, ("a", FindingSeverity.CRITICAL), ("b", FindingSeverity.HIGH))
+    _asset_con_findings(scan, ("a", FindingSeverity.CRITICAL), ("b", FindingSeverity.LOW))
 
     ctx = build_report_context(scan)
 
-    # 1 crítica (25) + 1 alta (10) = 35, ver `_RISK_WEIGHTS` en generator.py.
-    assert ctx["risk_score"] == 35
+    assert ctx["risk_score"] >= 75
+    assert ctx["risk_band"] == "crítico"
+    assert "crítico" in render_html(scan)
 
 
-def test_build_report_context_risk_score_se_acota_a_cien() -> None:
+def test_build_report_context_muchos_leves_no_llegan_a_critico() -> None:
+    """Regresión del defecto de la suma acotada: volumen de leves = 100/100."""
     scan = _scan()
-    _asset_con_findings(scan, *[(f"c{i}", FindingSeverity.CRITICAL) for i in range(10)])
+    _asset_con_findings(scan, *[(f"tipo{i % 6}", FindingSeverity.LOW) for i in range(200)])
 
-    ctx = build_report_context(scan)
+    assert build_report_context(scan)["risk_band"] == "bajo"
 
-    assert ctx["risk_score"] == 100
+
+def test_risk_score_del_informe_y_de_la_api_coinciden() -> None:
+    """El PDF y `GET /scans/{id}` (que es lo que pinta el dashboard) usan la
+    misma función: el número de la pantalla y el del informe no pueden
+    contradecirse. Se comprueba con el esquema real que serializa la API."""
+    from atalaya.api.schemas import ScanDetail
+
+    scan = _scan()
+    _asset_con_findings(
+        scan,
+        ("a", FindingSeverity.HIGH),
+        ("b", FindingSeverity.MEDIUM),
+        ("b", FindingSeverity.MEDIUM),
+        ("c", FindingSeverity.UNKNOWN),
+    )
+    for finding in scan.assets[0].findings:
+        finding.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    api = ScanDetail.model_validate(scan).model_dump()
+
+    assert api["risk_score"] == build_report_context(scan)["risk_score"]
 
 
 # ─── executive_summary (resumen ejecutivo con IA) ────────────────────────────
@@ -238,8 +262,11 @@ async def test_generate_report_con_provider_llama_a_write_executive_summary(
 
     assert path.exists()
     assert path.read_bytes().startswith(b"%PDF")
+    # El mismo índice que muestra el informe (y la API), no uno propio.
+    esperado = build_report_context(scan)["risk_score"]
+    assert esperado >= 75
     assert llamadas == [
-        {"domain": "ejemplo.com", "risk_score": 25, "critical_count": 1, "high_count": 0}
+        {"domain": "ejemplo.com", "risk_score": esperado, "critical_count": 1, "high_count": 0}
     ]
 
 

@@ -96,6 +96,11 @@
         ]
       }
     },
+    "47485d0d7947a33a416fd5a73194d6a1ffa2a6e6ab26c7bb503815d0c1818f36": {
+      "kind": "text",
+      "label": "texto libre · Redacta el resumen ejecutivo con estos datos del escaneo (JSON):",
+      "response": "## Resumen Ejecutivo — Análisis de Superficie de Exposición\n\n**Dominio evaluado:** github.com | **Puntuación de riesgo:** 40 / 100\n\n---\n\nEl análisis de superficie de exposición realizado sobre el dominio evaluado refleja un perfil de riesgo **moderado**, sin hallazgos de severidad crítica o alta en el momento del escaneo. Esto indica que la organización no presenta, en este corte temporal, vulnerabilidades graves de acceso inmediato que puedan comprometer de forma directa los datos de clientes, la continuidad del servicio o el cumplimiento de las obligaciones normativas vigentes. Este resultado es positivo y sugiere que los controles de seguridad implementados están cumpliendo su función en las áreas evaluadas.\n\nNo obstante, una puntuación de riesgo de 40 sobre 100 advierte que el nivel de exposición no es despreciable. Aunque no se identificaron amenazas inminentes de alto impacto, la puntuación refleja la presencia de factores de riesgo de severidad menor o media que, si no se gestionan de forma continua, pueden evolucionar con el tiempo hacia problemas de mayor calado. La superficie de ataque de cualquier organización es dinámica: nuevas vulnerabilidades emergen constantemente, y una fotografía favorable hoy no garantiza la misma situación mañana.\n\nSe recomienda que la dirección entienda este informe como un punto de partida, no como un certificado de seguridad. Es aconsejable mantener un programa de revisión periódica de la exposición externa, asegurando que cualquier cambio en la infraestructura o en el entorno de amenazas sea detectado y gestionado con la debida antelación. La inversión en una vigilancia continua protege tanto la reputación de la compañía como la confianza de clientes y socios, y contribuye al cumplimiento de marcos regulatorios que exigen una gestión activa del riesgo tecnológico."
+    },
     "48d7cdd9bfb029ee5826f48e3ff634cd84ab16f504d2fbf753eb00198d0d9902": {
       "kind": "tool",
       "label": "route_query · Pregunta del usuario: ¿Hay riesgo de subdomain takeover en este dominio?",
@@ -166,6 +171,11 @@
           "La ratio de hallazgos por activo (~1,8 hallazgos/activo) es baja, lo que puede indicar buenas prácticas generales, pero también podría sugerir que algunos activos de staging o internos tienen menor exposición de servicios y por eso generan menos hallazgos, pasando desapercibidos."
         ]
       }
+    },
+    "699115c97fde9f4334919de33c700d9a6aca12f6f7f87d7c3c0fffa06edb2b42": {
+      "kind": "text",
+      "label": "texto libre · Redacta el resumen ejecutivo con estos datos del escaneo (JSON):",
+      "response": "## Resumen Ejecutivo — Análisis de Superficie de Exposición\n**Dominio evaluado:** github.com | **Puntuación de riesgo:** 39 / 100\n\n---\n\nEl análisis de superficie de exposición realizado sobre el dominio evaluado arroja una puntuación de riesgo de 39 sobre 100, lo que sitúa a la organización en un nivel de exposición **moderado-bajo**. No se han identificado hallazgos de carácter crítico ni de gravedad alta durante el periodo de evaluación. Este resultado indica que los activos digitales analizados no presentan, en este momento, vulnerabilidades conocidas que pudieran comprometer de forma inmediata la continuidad del servicio, la confidencialidad de los datos de clientes o el cumplimiento de las obligaciones regulatorias aplicables.\n\nNo obstante, una puntuación por encima de cero refleja que existen áreas de mejora en la postura de seguridad del dominio. La ausencia de hallazgos críticos o altos no equivale a una exposición nula: el panorama de amenazas evoluciona de forma continua, y configuraciones o activos que hoy no representan un riesgo elevado pueden convertirse en vectores de ataque ante nuevas vulnerabilidades publicadas o cambios en el entorno tecnológico de la organización.\n\nSe recomienda mantener un programa de revisión periódica de la superficie de exposición, con una cadencia al menos trimestral, para asegurar que la postura actual se preserve y que cualquier nuevo activo incorporado al entorno digital sea evaluado antes de su exposición pública. En términos de prioridad inmediata, los hallazgos de menor gravedad que sustentan la puntuación de 39 deben ser revisados por el equipo técnico correspondiente, con el objetivo de reducir progresivamente esa puntuación y minimizar la superficie disponible para un eventual atacante."
     },
     "8ca11cea6a849235f1b8e782c1609657073ea3f5ed89cd3603b16b86cb04e184": {
       "kind": "tool",
@@ -243,11 +253,6 @@
         "agent": "analyst",
         "refined_question": "Del escaneo realizado sobre el dominio github.com, que ha identificado un total de 118 activos y 211 hallazgos (194 de severidad baja, 9 media y 8 desconocida), ¿qué subdominios parecen corresponder a entornos de prueba (staging, test, QA, dev, sandbox, etc.) o de uso interno (intranet, corp, internal, etc.)? Por favor, identifica patrones de nomenclatura y lista los candidatos más relevantes."
       }
-    },
-    "ec010bed911cf28571d5dbfe97f16e26c90f113be72a5a48f22a00e8b2e1f692": {
-      "kind": "text",
-      "label": "texto libre · Redacta el resumen ejecutivo con estos datos del escaneo (JSON):",
-      "response": "## Resumen Ejecutivo – Superficie de Exposición\n\nEl análisis de superficie de exposición realizado sobre el dominio evaluado ha concluido sin identificar hallazgos de severidad crítica ni alta. Esto significa que, en el momento del escaneo, no se detectaron vulnerabilidades o exposiciones conocidas que pudieran traducirse en riesgo inmediato para la continuidad del servicio, la confidencialidad de los datos de clientes o el cumplimiento normativo de la organización.\n\nNo obstante, es importante interpretar este resultado en su contexto adecuado. Una puntuación de riesgo elevada en la escala del sistema de medición no refleja necesariamente la presencia de amenazas activas, sino que puede responder a la metodología de cálculo propia de la herramienta utilizada. La ausencia de hallazgos críticos o altos es una señal positiva, aunque no debe interpretarse como garantía de seguridad absoluta: la superficie de exposición de cualquier organización evoluciona constantemente a medida que se incorporan nuevos servicios, proveedores o cambios tecnológicos.\n\nSe recomienda mantener una cadencia periódica de este tipo de evaluaciones para detectar de forma temprana cualquier cambio en la exposición de la organización. Asimismo, conviene complementar este análisis con revisiones internas de accesos y procesos, dado que los riesgos más significativos para una empresa no siempre provienen del exterior y no siempre son detectables mediante herramientas automatizadas de análisis de superficie."
     },
     "ecc032ab16fd565892ef151b768742a4eb95ea1017b465710ec2deecb9e4df41": {
       "kind": "tool",
