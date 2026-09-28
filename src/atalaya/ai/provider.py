@@ -328,9 +328,17 @@ def get_provider() -> LLMProvider:
     `anthropic` y `gemini` están implementados. La interfaz existe para que
     sumar otro proveedor sea una nueva subclase + una rama aquí, no un
     cambio en `triage.py` ni en `query.py`.
+
+    `replay` no es un modelo: sirve respuestas reales grabadas para la demo
+    sin red (`ai/replay.py`). Se importa aquí dentro porque `ai/replay.py`
+    depende de `LLMProvider`, definido en este módulo.
     """
     if settings.ai_provider == "anthropic":
         return AnthropicProvider()
     if settings.ai_provider == "gemini":
         return GeminiProvider()
+    if settings.ai_provider == "replay":
+        from atalaya.ai.replay import load_replay_provider
+
+        return load_replay_provider(settings.ai_replay_file)
     raise AIProviderError(f"proveedor de IA no soportado: {settings.ai_provider!r}")

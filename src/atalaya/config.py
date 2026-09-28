@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     #: misma razón que `dns_concurrency`: no saturar al proveedor ni disparar
     #: el coste de una tacada de llamadas simultáneas sin control.
     ai_concurrency: int = 5
+    #: Grabaciones que sirve `AI_PROVIDER=replay` (demo sin red, `ai/replay.py`).
+    #: Relativo al directorio de trabajo, igual que `reports_dir`.
+    ai_replay_file: str = "demo/ai_recordings.json"
 
     # ─── Informes ─────────────────────────────────────────────────────
     #: Directorio donde se escriben los informes PDF generados. Relativo al
