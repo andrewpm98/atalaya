@@ -134,6 +134,14 @@
         padding: 5px 6px;
         vertical-align: top;
     }
+    /* Un hostname no tiene espacios y xhtml2pdf no parte una palabra salvo
+       que se le pida: sin esto invadía la columna siguiente (38 de los 118
+       hosts de la demo). CJK permite cortar en cualquier carácter, solo si no
+       cabe. Las IPs no lo llevan a propósito: con CJK, una lista separada
+       por comas partía una IPv4 por la mitad (se leía como otra dirección) y
+       los saltos de línea se ignoraban (las IPs salían pegadas). Van una por
+       línea, en una columna donde cabe la IPv6 más larga posible. */
+    table.activos td.partible { -pdf-word-wrap: CJK; }
     .badge {
         padding: 1px 6px;
         color: #ffffff;
@@ -248,17 +256,22 @@
 {% if assets %}
 <table class="activos">
     <tr>
-        <th>Host</th>
-        <th>Estado</th>
-        <th>IPs</th>
-        <th>Puertos</th>
-        <th>Hallazgos</th>
+        {# Anchos medidos con las métricas de Helvetica 8,5 pt sobre 493 pt de
+           tabla. Prioridad: que una IP no se parta nunca — su longitud está
+           acotada (una IPv6 tiene como mucho 39 caracteres, ~168 pt). Un
+           hostname no lo está (hasta 253): cabe si es como los de la demo
+           (hasta 35) y, si no, se parte (CJK) sin invadir la columna de al lado. #}
+        <th width="32%">Host</th>
+        <th width="11%">Estado</th>
+        <th width="37%">IPs</th>
+        <th width="10%">Puertos</th>
+        <th width="10%">Hallazgos</th>
     </tr>
     {% for asset in assets %}
     <tr>
-        <td>{{ asset.hostname }}{% if asset.leaks_internal_addressing %} (IP interna){% endif %}</td>
+        <td class="partible">{{ asset.hostname }}{% if asset.leaks_internal_addressing %} (IP interna){% endif %}</td>
         <td>{{ asset.status }}</td>
-        <td>{{ asset.ip_addresses | join(", ") or "—" }}</td>
+        <td>{% for ip in asset.ip_addresses %}{{ ip }}{% if not loop.last %}<br/>{% endif %}{% else %}—{% endfor %}</td>
         <td>{{ asset.open_ports | join(", ") or "—" }}</td>
         <td>{{ asset.findings | length }}</td>
     </tr>

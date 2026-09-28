@@ -9,6 +9,7 @@ una vez, contra un directorio temporal.
 
 from __future__ import annotations
 
+import itertools
 from datetime import UTC, datetime
 from typing import Any
 
@@ -333,3 +334,73 @@ async def test_generate_report_formato_no_soportado_lanza_value_error(tmp_path, 
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
     with pytest.raises(ValueError):
         await generate_report(_scan(), fmt="docx")
+
+
+# ─── Maquetación de la tabla de activos ──────────────────────────────────────
+
+
+def _runs_del_pdf(pdf: bytes) -> list[tuple[float, str, float, str]]:
+    """(x, texto, tamaño, fuente) de cada línea de texto del PDF."""
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    runs: list[tuple[float, str, float, str]] = []
+
+    def visitor(text, cm, tm, font_dict, font_size):  # type: ignore[no-untyped-def]
+        if text.strip():
+            font = (font_dict or {}).get("/BaseFont", "")
+            runs.append((tm[4] + cm[4], text.strip(), font_size, str(font).lstrip("/")))
+
+    for page in PdfReader(BytesIO(pdf)).pages:
+        page.extract_text(visitor_text=visitor)
+    return runs
+
+
+def test_tabla_de_activos_sin_solapes_ni_ips_partidas() -> None:
+    """Geometría real del PDF, no solo que se genere.
+
+    Antes, las cinco columnas medían lo mismo y xhtml2pdf no parte una
+    palabra sin espacios: un hostname largo invadía la columna «Estado». Y
+    los primeros intentos de arreglo partían una IPv4 por la mitad (se leía
+    como otra dirección) o pegaban las IPs sin separador. Se comprueba con
+    el peor caso: la IPv6 más ancha posible y un hostname más largo que la
+    columna (tiene que partirse sin invadir la siguiente)."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    from atalaya.reporting.generator import _html_to_pdf_bytes
+
+    ipv6_peor = ":".join(["dddd"] * 8)  # 39 caracteres, los más anchos en Helvetica
+    ips = ["185.199.108.153", "185.199.109.153", ipv6_peor, "2606:50c0:8000::153"]
+    scan = _scan(domain="github.com")
+    for hostname, status in (
+        ("examregistration-uat-api.github.com", "active"),
+        ("un-subdominio-extraordinariamente-largo-de-prueba.github.com", "unroutable"),
+    ):
+        asset = Asset(
+            id=len(scan.assets) + 1, scan_id=scan.id, hostname=hostname, status=status,
+            ip_addresses=ips, sources=["crtsh"], is_active=True,
+            leaks_internal_addressing=False, open_ports=[80, 443, 8080, 8443],
+        )  # fmt: skip
+        asset.findings = []
+        scan.assets.append(asset)
+
+    runs = _runs_del_pdf(_html_to_pdf_bytes(render_html(scan)))
+    # Solo la tabla de activos: otras tablas pueden empezar en la misma x.
+    textos_doc = [t for _, t, _, _ in runs]
+    runs = runs[textos_doc.index("Activos descubiertos") : textos_doc.index("Hallazgos detallados")]
+
+    cabeceras = ["Host", "Estado", "IPs", "Puertos", "Hallazgos"]
+    columnas = [next(x for x, t, _, f in runs if t == c and "Bold" in f) for c in cabeceras]
+    assert columnas == sorted(columnas)
+
+    for x, texto, tamano, fuente in runs:
+        for inicio, siguiente in itertools.pairwise(columnas):
+            if abs(x - inicio) < 1:
+                fin = x + stringWidth(texto, fuente, tamano)
+                assert fin <= siguiente, f"{texto!r} invade la columna siguiente"
+
+    textos = [t for _, t, _, _ in runs]
+    for ip in ips:
+        assert textos.count(ip) == 2, f"{ip} no aparece entera y sola en su línea"
+    assert "examregistration-uat-api.github.com" in textos  # los de la demo caben enteros
