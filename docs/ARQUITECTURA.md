@@ -31,7 +31,8 @@ orquesta el resto de módulos. Endpoints principales:
 - `GET /scans/{id}/diff/{other_id}` ✅ — compara dos escaneos del mismo
   dominio (`core/repository.py::diff_scans()`) y valora los cambios con
   `ai/diff_analyst.py`. `previous`/`current` se deciden por `started_at`,
-  no por el orden en la URL.
+  no por el orden en la URL. `?analysis=false` devuelve solo el cálculo, sin
+  llamar al modelo (`analysis: null`), y por tanto sin posible 502.
 - `GET /scans/{id}/report` ✅ — informe PDF con portada, `risk_score` y
   resumen ejecutivo de `ai/report_writer.py` (opcional: el informe se
   genera igual sin IA disponible, ver 2.5).
@@ -238,8 +239,10 @@ recuentos de nuevos, desaparecidos y sin cambios (mismo hostname en ambos),
 los hostnames de cada grupo y la valoración de `ai/diff_analyst.py`. Va
 después del score y antes de los activos. Se pide con botón, no al cambiar el
 selector, y se guarda en `session_state` por pareja de escaneos: el endpoint
-llama al modelo y Streamlit reejecuta el script en cada interacción. Un 502
-del proveedor se muestra como error sin tumbar el resto del detalle.
+llama al modelo y Streamlit reejecuta el script en cada interacción. Si la
+IA falla (502), repite con `?analysis=false` y muestra los cambios con un
+aviso del motivo: los hostnames son puro cálculo y no deben perderse porque
+falte el proveedor (Docker sin `.env`, o `replay` con una pareja no grabada).
 
 Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
 `st.markdown(..., unsafe_allow_html=True)` — ver "Decisiones de diseño")

@@ -908,6 +908,34 @@ def api_get_bytes(path: str) -> bytes | None:
     return resp.content
 
 
+def fetch_diff(scan_id: int, other_id: int) -> dict[str, Any] | None:
+    """`GET /scans/{id}/diff/{other_id}`, con respaldo sin IA ante un 502.
+
+    El endpoint devuelve 502 si falla el proveedor de IA, y con él se
+    perderían también los hostnames nuevos/desaparecidos, que son puro
+    cálculo. En ese caso se repite con `analysis=false` y se guarda en
+    `_aviso_ia` por qué falta la valoración. Solo ante un 502: un 404 o un
+    400 fallarían igual sin IA, y repetir la petición duplicaría el error.
+    """
+    path = f"/scans/{scan_id}/diff/{other_id}"
+    try:
+        with _client() as client:
+            resp = client.get(path)
+    except httpx.HTTPError as exc:
+        st.error(f"No se pudo contactar con la API ({path}): {exc}")
+        return None
+    if resp.status_code == 502:
+        base = api_get(path, analysis="false")
+        if base is None:
+            return None
+        return {**base, "_aviso_ia": _detail(resp)}
+    if resp.status_code >= 400:
+        st.error(f"{path} → {resp.status_code}: {_detail(resp)}")
+        return None
+    result: dict[str, Any] = resp.json()
+    return result
+
+
 def _detail(resp: httpx.Response) -> str:
     try:
         return str(resp.json().get("detail", resp.text))
@@ -1180,6 +1208,13 @@ def render_diff(diff: dict[str, Any]) -> None:
         "haber variado. Un host desaparecido puede ser solo variabilidad DNS."
     )
 
+    if diff.get("analysis") is None:
+        # Respaldo sin IA (ver `fetch_diff`): los cambios son reales, solo
+        # falta la valoración del modelo, y se dice por qué.
+        motivo = str(diff.get("_aviso_ia") or "no solicitada").rstrip(".")
+        st.warning(f"Valoración IA no disponible ({motivo}). Se muestran solo los cambios.")
+        return
+
     # Prosa del modelo con su propio markdown: mismo panel que «Preguntar»
     # (la regla de `_CSS` casa con cualquier clave que empiece por
     # `atl-answer`; la clave tiene que ser distinta porque ambas conviven en
@@ -1197,7 +1232,8 @@ def render_comparacion(scan: dict[str, Any], otros: list[dict[str, Any]]) -> Non
     (coste y segundos de espera), y Streamlit reejecuta el script entero en
     cada interacción, así que pedirlo al renderizar repetiría la llamada al
     triar, al pedir el informe o al cambiar de pestaña. El resultado se guarda
-    en `session_state` por pareja de escaneos, mismo patrón que el PDF.
+    en `session_state` por pareja de escaneos, mismo patrón que el PDF. Si la
+    IA falla, `fetch_diff` recupera al menos los cambios de hostnames.
     """
     if not otros:
         return
@@ -1221,7 +1257,7 @@ def render_comparacion(scan: dict[str, Any], otros: list[dict[str, Any]]) -> Non
     diff_key = f"diff_{scan['id']}_{otro_id}"
     if fila.button("Comparar", key=f"diff-btn-{scan['id']}"):
         with st.spinner("Comparando escaneos y valorando los cambios con IA..."):
-            diff = api_get(f"/scans/{scan['id']}/diff/{otro_id}")
+            diff = fetch_diff(scan["id"], otro_id)
         if diff is not None:
             st.session_state[diff_key] = diff
 

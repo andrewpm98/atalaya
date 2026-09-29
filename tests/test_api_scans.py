@@ -307,6 +307,42 @@ async def test_diff_scan_proveedor_caido_da_502(client: TestClient, monkeypatch)
     assert resp.status_code == 502
 
 
+async def test_diff_scan_sin_analisis_no_llama_al_modelo(
+    client: TestClient, monkeypatch
+) -> None:
+    """`analysis=false`: el cálculo de hostnames es puro, no depende de la IA."""
+    scan_id_1, scan_id_2 = _crear_dos_escaneos(client, monkeypatch)
+
+    def _no_debe_llamarse() -> None:
+        raise AssertionError("analysis=false no debe instanciar el proveedor")
+
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", _no_debe_llamarse)
+
+    resp = client.get(f"/scans/{scan_id_2}/diff/{scan_id_1}", params={"analysis": "false"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "previous_scan_id": scan_id_1,
+        "current_scan_id": scan_id_2,
+        "nuevos": ["new.ejemplo.com"],
+        "desaparecidos": ["old.ejemplo.com"],
+        "comunes": ["www.ejemplo.com"],
+        "analysis": None,
+    }
+
+
+async def test_diff_scan_sin_analisis_mantiene_404_y_400(client: TestClient, monkeypatch) -> None:
+    """Saltarse la IA no se salta las validaciones."""
+    _mock_discovery(monkeypatch)
+    a = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    _mock_discovery(monkeypatch)
+    b = client.post("/scans", json={"domain": "otro.com"}).json()
+
+    params = {"analysis": "false"}
+    assert client.get(f"/scans/{a['id']}/diff/999", params=params).status_code == 404
+    assert client.get(f"/scans/{a['id']}/diff/{b['id']}", params=params).status_code == 400
+
+
 # ─── GET /scans/{id}/report ──────────────────────────────────────────────────
 
 

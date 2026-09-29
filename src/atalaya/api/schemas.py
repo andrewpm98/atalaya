@@ -143,4 +143,6 @@ class ScanDiffOut(BaseModel):
     nuevos: list[str] = Field(default_factory=list)
     desaparecidos: list[str] = Field(default_factory=list)
     comunes: list[str] = Field(default_factory=list)
-    analysis: str
+    #: Valoración de `ai/diff_analyst.py`. `None` solo si se pidió
+    #: `analysis=false`; por defecto, si el modelo falla, el endpoint da 502.
+    analysis: str | None = None

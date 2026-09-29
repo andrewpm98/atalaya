@@ -642,7 +642,7 @@ def _boton(at: AppTest, etiqueta: str) -> Any:
     return next(b for b in at.button if b.label == etiqueta)
 
 
-def _get_map_diff(diff: _Resp) -> dict[str, Any]:
+def _get_map_diff(diff: _Resp | list[_Resp]) -> dict[str, Any]:
     return {
         "/scans": _Resp(200, _ESCANEOS),
         "/scans/1": _Resp(200, _scan_detail(scan_id=1)),
@@ -710,18 +710,56 @@ def test_comparar_muestra_nuevos_desaparecidos_y_sin_cambios() -> None:
     assert any(e.label.startswith("Sin cambios · 1") for e in at.tabs[1].expander)
 
 
-def test_diff_que_falla_muestra_el_error_sin_romper_el_detalle() -> None:
-    """Sin proveedor de IA el endpoint responde 502: se ve el motivo y el resto
-    del detalle (score, activos) sigue en pie."""
-    get_map = _get_map_diff(_Resp(502, {"detail": "no hay respuesta grabada"}))
+def test_si_la_ia_falla_muestra_los_cambios_sin_valoracion() -> None:
+    """502 del proveedor: se repite con `analysis=false` y se ven igual los
+    hostnames (puro cálculo), con el motivo de que falte la valoración."""
+    peticiones: list[tuple[str, object]] = []
+    sin_ia = {**_DIFF, "analysis": None}
+    get_map = _get_map_diff(
+        [_Resp(502, {"detail": "no hay respuesta grabada"}), _Resp(200, sin_ia)]
+    )
     at = _app_con_registro(get_map, [])
-    with patch("httpx.Client", _fake_client(get_map)):
+    base = _fake_client(get_map)
+
+    class _Registrador(base):  # type: ignore[misc, valid-type]
+        def get(self, path: str, params: dict[str, object] | None = None) -> _Resp:
+            peticiones.append((path, params))
+            return super().get(path, params)
+
+    with patch("httpx.Client", _Registrador):
         _boton(at, "Comparar").click().run()
 
     assert not at.exception
-    assert any("502" in e.value and "no hay respuesta grabada" in e.value for e in at.error)
-    assert not any(m.label == "Nuevos" for m in at.tabs[1].metric)
+    diffs = [(path, params) for path, params in peticiones if "/diff/" in path]
+    assert diffs == [("/scans/2/diff/1", None), ("/scans/2/diff/1", {"analysis": "false"})]
+    assert any("no hay respuesta grabada" in w.value for w in at.tabs[1].warning)
+    assert not at.error
+    metricas = {m.label: m.value for m in at.tabs[1].metric}
+    assert (metricas["Nuevos"], metricas["Sin cambios"]) == ("1", "1")
     assert _score_mostrado(at) is not None
+
+
+def test_un_error_que_no_es_de_la_ia_no_reintenta() -> None:
+    """Un 404 fallaría igual sin IA: se muestra una vez y no se repite."""
+    peticiones: list[str] = []
+    get_map = _get_map_diff(_Resp(404, {"detail": "Escaneo 1 no encontrado"}))
+    at = _app_con_registro(get_map, [])
+    base = _fake_client(get_map)
+
+    class _Registrador(base):  # type: ignore[misc, valid-type]
+        def get(self, path: str, params: dict[str, object] | None = None) -> _Resp:
+            peticiones.append(path)
+            return super().get(path, params)
+
+    with patch("httpx.Client", _Registrador):
+        _boton(at, "Comparar").click().run()
+
+    assert not at.exception
+    assert peticiones.count("/scans/2/diff/1") == 1
+    assert [e.value for e in at.error if "no encontrado" in e.value] == [
+        "/scans/2/diff/1 → 404: Escaneo 1 no encontrado"
+    ]
+    assert not any(m.label == "Nuevos" for m in at.tabs[1].metric)
 
 
 def test_el_diff_se_conserva_sin_volver_a_pedirlo() -> None:

@@ -213,6 +213,8 @@ curl -X POST http://localhost:8000/findings/ask \
 # Compara dos escaneos del mismo dominio, con valoración de IA
 # (requiere haber lanzado dos escaneos; en el dashboard: «Comparar con»)
 curl http://localhost:8000/scans/1/diff/2
+# ...o solo el cálculo, sin IA (no necesita clave del proveedor)
+curl "http://localhost:8000/scans/1/diff/2?analysis=false"
 ```
 
 El triaje recibe **contexto estructurado** (hostname, IPs, estado, fuentes,

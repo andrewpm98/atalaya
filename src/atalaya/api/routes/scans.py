@@ -91,7 +91,16 @@ async def get_scan(scan_id: int, session: AsyncSession = Depends(get_session)) -
 
 @router.get("/{scan_id}/diff/{other_scan_id}", response_model=ScanDiffOut)
 async def diff_scan(
-    scan_id: int, other_scan_id: int, session: AsyncSession = Depends(get_session)
+    scan_id: int,
+    other_scan_id: int,
+    analysis: bool = Query(
+        default=True,
+        description=(
+            "false: solo nuevos/desaparecidos/comunes, sin llamar al modelo "
+            "(`analysis` sale null). No depende de la IA ni puede dar 502."
+        ),
+    ),
+    session: AsyncSession = Depends(get_session),
 ) -> ScanDiffOut:
     """Compara dos escaneos del mismo dominio y valora los cambios con IA.
 
@@ -119,6 +128,13 @@ async def diff_scan(
     `GET /scans/{id}/report` (Tarea 3), donde el informe ya era una
     funcionalidad completa sin IA antes de que existiera esta capa; el diff
     nace con la IA como parte integral de la respuesta.
+
+    `analysis=false` no cambia ese criterio por defecto: es una salida
+    explícita para quien solo necesita el cálculo, que es puro y no depende
+    del proveedor. Sin ella, un cliente sin IA disponible (el stack de Docker
+    sin `.env`, o la demo en `replay` comparando una pareja no grabada) no
+    podría ver ni siquiera qué hostnames aparecieron: el dashboard la usa
+    como respaldo cuando la petición completa da 502.
     """
     scan_a = await repository.get_scan(session, scan_id)
     scan_b = await repository.get_scan(session, other_scan_id)
@@ -142,21 +158,22 @@ async def diff_scan(
     )
     diff = diff_scans(previous, current)
 
-    provider = get_provider()
-    analysis = await analyze_diff(
-        provider,
-        domain=current.domain,
-        diff=diff,
-        previous_scan=previous,
-        current_scan=current,
-    )
+    valoracion: str | None = None
+    if analysis:
+        valoracion = await analyze_diff(
+            get_provider(),
+            domain=current.domain,
+            diff=diff,
+            previous_scan=previous,
+            current_scan=current,
+        )
     return ScanDiffOut(
         previous_scan_id=previous.id,
         current_scan_id=current.id,
         nuevos=diff.nuevos,
         desaparecidos=diff.desaparecidos,
         comunes=diff.comunes,
-        analysis=analysis,
+        analysis=valoracion,
     )
 
 
