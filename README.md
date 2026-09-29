@@ -347,7 +347,8 @@ Ampliación posterior, más allá de los requisitos obligatorios:
       sin avisos (`make lint`)
 - [x] Cierre pre-entrega: PostgreSQL y Docker verificados, demo sin red,
       autenticación opcional por `X-API-Key`, «Comparar con» en el
-      dashboard, redirección HTTP → HTTPS, cookies y re-triaje forzado
+      dashboard, redirección HTTP → HTTPS, cookies, validación TLS
+      (hostname y cadena) y re-triaje forzado
 
 La memoria técnica de cada fase está en [`memorias/`](memorias/).
 

@@ -373,7 +373,7 @@ pide evitar explícitamente ("los stubs no son código muerto").
 11. **Cierre pre-entrega** ✅ — P0: PostgreSQL real, stack Docker, ensayo
     desde clon limpio, demo sin red, `risk_score` y PDF. P1: autenticación
     opcional (`X-API-Key`), «Comparar con» en el dashboard, redirección
-    HTTP → HTTPS, cookies, re-triaje forzado y diff sin IA. Memoria:
+    HTTP → HTTPS, cookies, validación TLS, re-triaje forzado y diff sin IA. Memoria:
     `memorias/Memoria_Cierre_Preentrega_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre. Los siete pasos de la hoja de

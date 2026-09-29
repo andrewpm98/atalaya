@@ -8,7 +8,7 @@ visual y robustez. No añade fases nuevas: busca que lo ya construido funcione
 **donde se va a evaluar** (PostgreSQL, Docker, una máquina sin red el día de
 la defensa) y cierra las brechas de producto que un evaluador vería primero.
 **Estado:** Completa. P0 cerrado y en `origin/main`; P1 cerrado en local
-(pendiente de `push`). 421 tests, `ruff` y `mypy` a cero, suite verificada
+(pendiente de `push`). 441 tests, `ruff` y `mypy` a cero, suite verificada
 también sobre Python 3.11 con instalación limpia.
 
 ---
@@ -30,10 +30,11 @@ la herramienta no funcionara en absoluto en su configuración de producción:
   aplicaba las migraciones y, además, usaba la SQLite del `.env` de
   desarrollo en vez del PostgreSQL del propio compose.
 
-**P1 cerró seis brechas**, cada una en su commit: autenticación opcional de la
-API, comparación entre escaneos en el dashboard, dos comprobaciones nuevas de
-descubrimiento (redirección HTTP → HTTPS y atributos de cookies), re-triaje
-forzado, y un diff que no depende de la IA para enseñar lo que es puro cálculo.
+**P1 cerró siete brechas**, cada una en su commit: autenticación opcional de
+la API, comparación entre escaneos en el dashboard, tres comprobaciones
+nuevas de descubrimiento (redirección HTTP → HTTPS, atributos de cookies y
+validez del certificado TLS), re-triaje forzado, y un diff que no depende de
+la IA para enseñar lo que es puro cálculo.
 
 ---
 
@@ -52,6 +53,7 @@ por lo que costaba hacerlo:
 | Autenticación | Deuda marcada como «bloqueante si se despliega con IP pública» |
 | Diff en dashboard | La comparación temporal, parte del enunciado de la herramienta, solo existía por API |
 | HTTP→HTTPS, cookies | Dos comprobaciones básicas de cualquier escáner web que faltaban |
+| Validez TLS | Un certificado autofirmado o emitido para otro dominio pasaba sin hallazgo |
 | Re-triaje | Cambiar de modelo exigía editar la BD a mano |
 
 ---
@@ -222,13 +224,46 @@ endpoint). El dashboard usa la variante solo como respaldo ante un 502 y
 avisa del motivo; un 404 o 400 no se reintenta. Verificado en real sin clave
 de proveedor.
 
+### 4.7 Validez del certificado TLS (`06b3e53`)
+
+`tls.py` inspeccionaba el certificado con `CERT_NONE`, a propósito (tiene que
+poder *ver* un certificado inválido para reportarlo), pero no comprobaba si un
+cliente lo aceptaría. Dos hallazgos nuevos:
+
+- **`tls_hostname_no_coincide`**, sin red, sobre los SAN del certificado ya
+  obtenido y con las reglas de un navegador: el comodín solo vale como
+  etiqueta izquierda completa y cubre exactamente una, y no se recurre al CN
+  (los navegadores lo ignoran desde 2017).
+- **`tls_cadena_no_confiable`**, con una segunda negociación **con**
+  verificación, en paralelo con la de inspección (no añade latencia).
+
+Dos decisiones con consecuencias medibles:
+
+- **Almacén de CA explícito (`certifi`)**, no el del sistema. El del sistema
+  cambia entre Windows y Debian, y un contenedor sin CA instaladas marcaría
+  *todos* los hosts como no confiables.
+- **`VERIFY_X509_STRICT` desactivado.** Python 3.13+ lo activa por defecto y
+  rechaza certificados sin extensiones que los navegadores no exigen. Se
+  descubrió porque el test de «cadena correcta» fallaba con *Missing
+  Authority Key Identifier*: el mismo certificado habría salido válido en
+  Docker (Python 3.11) y no confiable en desarrollo (3.14). El criterio es el
+  del cliente real.
+
+La caducidad no se duplica: OpenSSL la reporta como error de verificación,
+pero ya tiene su propio hallazgo. Los tests levantan un servidor TLS real en
+`127.0.0.1` con certificados y una CA generados en memoria. Verificado contra
+`badssl.com`, un servicio público para probar clientes TLS: autofirmado,
+nombre equivocado, raíz no confiable, caducado y cadena incompleta dan cada
+uno su hallazgo, y `github.com` sale limpio. El resultado es idéntico en
+Python 3.14 local y 3.11 en la imagen de Docker.
+
 ---
 
 ## 5. Verificación
 
 Cuatro capas, ninguna sustituye a las otras:
 
-1. **Suite**: de 359 a **421 tests**, `ruff` y `mypy` a cero antes de cada
+1. **Suite**: de 359 a **441 tests**, `ruff` y `mypy` a cero antes de cada
    commit.
 2. **Integración real en local**: API con uvicorn y dashboard con Streamlit,
    dirigidos por un navegador (Playwright). Incluye el guion completo de la
@@ -240,7 +275,12 @@ Cuatro capas, ninguna sustituye a las otras:
    recreado con `API_KEY` (401 sin cabecera, 200 con ella, healthcheck sano
    y el dashboard del contenedor cargando datos con la clave interpolada).
 4. **Python 3.11 con instalación limpia** en un contenedor, a partir solo de
-   los ficheros versionados: 421 tests, `ruff` y `mypy` a cero.
+   los ficheros versionados: 421 tests (antes de la validación TLS), `ruff` y
+   `mypy` a cero. La validación TLS se verificó después en la imagen de la API.
+
+Por último, un escaneo real de `scanme.nmap.org` por la API con la clave
+activada, con todo integrado: se completó con crt.sh caído de verdad (502,
+registrado en `errors`), y los hallazgos llegaron a la BD y a la respuesta.
 
 ---
 
@@ -253,6 +293,7 @@ Cuatro capas, ninguna sustituye a las otras:
 | `/docs` y `/openapi.json` tras la clave | Describen la API sin devolver datos, y desde `/docs` se introduce la clave con «Authorize» |
 | Botón de re-triaje forzado | Coste y riesgo de clic accidental en la demo (4.5) |
 | TLS en la API | Fuera del plazo; mitigado publicando solo en `127.0.0.1` |
+| TLS en otros puertos (8443…) y cifrados | Solo se inspecciona el 443; enumerar cifrados exige muchas negociaciones por host |
 
 ---
 
@@ -267,6 +308,7 @@ Cuatro capas, ninguna sustituye a las otras:
 | `47ebdab` | feat(api)       | re-triaje forzado (`?force=true`) |
 | `b628830` | feat(api)       | diff sin valoración IA y respaldo en el dashboard |
 | `d6efad9` | chore(tooling)  | `_shot.py --diff` |
+| `06b3e53` | feat(discovery) | validación TLS de hostname y cadena de confianza |
 
 Ninguno toca un prompt de `ai/` ni los datos de la demo: la grabación sigue
 reproduciéndose completa.
@@ -327,6 +369,24 @@ token simulado.
 Porque un puerto 80 filtrado no responde: la conexión espera hasta el
 timeout. En serie, cada host así sumaría ese timeout al escaneo; en paralelo
 no añade nada al tiempo de HTTPS.
+
+### Sobre la validación TLS
+
+**Si la herramienta desactiva la verificación para inspeccionar, ¿cómo valida?**
+Con dos negociaciones en paralelo: una sin verificación, para poder leer
+cualquier certificado, incluido uno inválido, y otra con verificación, para
+saber si un cliente lo aceptaría. Leer y juzgar son operaciones distintas.
+
+**¿Por qué `certifi` y no el almacén del sistema?**
+Para que el resultado no dependa de dónde se ejecute. Con el del sistema, un
+contenedor sin paquete de CA marcaría todos los hosts como no confiables: un
+falso positivo masivo que parecería un hallazgo.
+
+**¿Por qué relajar el modo estricto de Python? ¿No es menos seguro?**
+El objetivo es informar de lo que un navegador rechazaría, no de lo que
+rechazaría la configuración más estricta posible. Con el modo estricto, la
+herramienta daba resultados distintos según la versión de Python para el
+mismo certificado, y eso es un error de medida, no rigor.
 
 ### Sobre el diff
 

@@ -389,7 +389,8 @@ obligatorios:
 12. **Cierre pre-entrega** ✅ — PostgreSQL y Docker verificados de verdad
     (dos fallos graves corregidos), demo sin red, `risk_score` rehecho;
     autenticación opcional (§2.1), «Comparar con» (§2.6), redirección
-    HTTP → HTTPS y cookies (§2.2), re-triaje forzado y diff sin IA (§2.1).
+    HTTP → HTTPS, cookies y validación TLS (§2.2), re-triaje forzado y
+    diff sin IA (§2.1).
     *(`memorias/Memoria_Cierre_Preentrega_Atalaya.md`.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
