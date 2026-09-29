@@ -369,12 +369,18 @@ pide evitar explícitamente ("los stubs no son código muerto").
     verificación HTTP opt-in de subdomain takeover (con la restricción #6
     reabierta de forma acotada). Memoria:
     `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
+11. **Cierre pre-entrega** ✅ — P0: PostgreSQL real, stack Docker, ensayo
+    desde clon limpio, demo sin red, `risk_score` y PDF. P1: autenticación
+    opcional (`X-API-Key`), «Comparar con» en el dashboard, redirección
+    HTTP → HTTPS, cookies, re-triaje forzado y diff sin IA. Memoria:
+    `memorias/Memoria_Cierre_Preentrega_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre. Los siete pasos de la hoja de
 ruta y los cinco requisitos obligatorios están cerrados desde antes de las
-ampliaciones 8-10 — ninguna era necesaria para aprobar: profundizan el
+ampliaciones 8-11 — ninguna era necesaria para aprobar: profundizan el
 componente diferencial (capa IA), la calidad percibida (dashboard) y la
-fiabilidad de la entrega (robustez) de cara a la defensa oral.
+fiabilidad de la entrega (robustez y cierre pre-entrega) de cara a la
+defensa oral.
 
 ---
 

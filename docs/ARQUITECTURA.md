@@ -386,6 +386,11 @@ obligatorios:
     `ruff`/`mypy` a cero, detección de wildcards DNS (§7.6) y verificación
     HTTP opt-in de subdomain takeover (§8.3).
     *(`memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.)*
+12. **Cierre pre-entrega** ✅ — PostgreSQL y Docker verificados de verdad
+    (dos fallos graves corregidos), demo sin red, `risk_score` rehecho;
+    autenticación opcional (§2.1), «Comparar con» (§2.6), redirección
+    HTTP → HTTPS y cookies (§2.2), re-triaje forzado y diff sin IA (§2.1).
+    *(`memorias/Memoria_Cierre_Preentrega_Atalaya.md`.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
 CLAUDE.md (que cuenta Shodan, takeover y agentes como una sola ampliación);
