@@ -52,7 +52,8 @@ La API aplica las migraciones sola al arrancar. Sin `.env` el stack arranca
 igual: todo funciona salvo los endpoints de IA, que responden con un error
 explicando que falta la clave (el informe PDF se genera sin resumen
 ejecutivo). Los puertos solo se publican en `127.0.0.1`: la base de datos usa
-credenciales fijas de desarrollo y la API no tiene autenticación.
+credenciales fijas de desarrollo y la autenticación de la API está
+desactivada por defecto (ver «Autenticación» más abajo).
 
 > **Si editas `.env` con el stack levantado**, aplícalo con
 > `docker compose up -d`, **no** con `docker compose restart`: `restart`
@@ -78,6 +79,23 @@ pytest -q                          # make test — suite completa (deterministas
 
 `make` es opcional (Windows no lo trae): cada objetivo del `Makefile` es un
 alias del comando que aparece a su izquierda.
+
+### Autenticación
+
+Opcional. Con `API_KEY` vacía en `.env` (por defecto) la API no pide nada.
+Con un valor, todo endpoint salvo `/health` exige la cabecera `X-API-Key` y
+responde `401` sin ella o con una clave distinta:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # genera una clave
+# en .env: API_KEY=<la clave>   — y reinicia la API (Docker: docker compose up -d)
+curl -H "X-API-Key: <la clave>" http://localhost:8000/scans
+```
+
+El dashboard la envía solo: la lee del mismo `.env` en local y, en Docker,
+Compose le pasa únicamente esa variable. En http://localhost:8000/docs se
+introduce con el botón «Authorize». Con la clave activada, añade
+`-H "X-API-Key: ..."` a los ejemplos de `curl` de este README.
 
 ### Ejemplos de uso con `curl`
 

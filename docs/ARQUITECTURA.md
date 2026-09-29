@@ -40,6 +40,21 @@ a 400/403 y `AIProviderError` a 502 vía `exception_handler`, en vez de que
 cada ruta gestione sus propios códigos de error. El triaje y el informe no
 llegan a ese 502 porque degradan antes (ver 2.4 y 2.5).
 
+**Autenticación opcional por `X-API-Key`** (`api/security.py`). Con `API_KEY`
+vacía (por defecto) no se exige nada y la API se comporta como antes. Con
+valor, `require_api_key()` se aplica a los tres routers y a `/`: sin la
+cabecera, o con una clave distinta, 401 con `WWW-Authenticate: X-API-Key`,
+antes de ejecutar la ruta (un `POST /scans` rechazado no llega a tocar la red).
+Se deja fuera `/health`, que usan el healthcheck de Docker y la sonda del
+dashboard; `/docs` y `/openapi.json` también, porque describen la API sin
+devolver datos, y desde `/docs` se introduce la clave con «Authorize» (la
+cabecera se declara con `APIKeyHeader`, así que aparece en el esquema OpenAPI).
+La comparación usa `secrets.compare_digest` sobre bytes: tiempo constante
+respecto al contenido, y sin el `TypeError` que lanzaría con texto no ASCII.
+Se aplica por router y no en `FastAPI(dependencies=...)` para poder excluir
+`/health`; `tests/test_api_auth.py` recorre el esquema OpenAPI para que un
+router nuevo que olvide la dependencia haga fallar la suite.
+
 ### 2.2 Descubrimiento — `src/atalaya/discovery` (Paso 2 ✅ + ampliación)
 Cada técnica es un módulo independiente con salida normalizada:
 
@@ -209,7 +224,10 @@ detalle de un escaneo (lo devuelve `GET /scans/{id}` como `risk_score`,
 calculado por `core/scoring.py`: el dashboard lo pinta sin recalcularlo, así
 que no puede contradecir al PDF — antes replicaba la fórmula con una copia
 de los pesos sincronizada a mano; el dashboard sigue siendo un cliente HTTP
-puro de la API).
+puro de la API). Si la API exige clave, el dashboard la envía en `X-API-Key`:
+la toma de `ATALAYA_API_KEY` o, si esa variable no existe, de `API_KEY` en el
+`.env` del directorio de trabajo — la misma que la activa en la API, para que
+en local se configure una sola vez. Sin clave no envía la cabecera.
 
 Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
 `st.markdown(..., unsafe_allow_html=True)` — ver "Decisiones de diseño")
@@ -231,9 +249,13 @@ Tres servicios: `db` (PostgreSQL 16), `api` y `dashboard`. La API aplica
 y siempre usa el Postgres del compose: `DATABASE_URL` se fija en
 `environment`, que prevalece sobre el `.env`. El `.env` es opcional (sin él
 solo la IA queda sin clave) y el dashboard no lo recibe: es un cliente HTTP
-puro y no necesita secretos. Todos los puertos se publican solo en
-`127.0.0.1`, porque la BD usa credenciales fijas de desarrollo y la API no
-tiene autenticación. El dashboard espera al healthcheck de la API.
+puro y no necesita las claves de IA ni de Shodan. Recibe solo
+`ATALAYA_API_KEY: ${API_KEY:-}`, que Compose interpola desde el `.env` del
+proyecto (vacía sin él: autenticación desactivada en los dos lados). Todos los
+puertos se publican solo en `127.0.0.1`, porque la BD usa credenciales fijas
+de desarrollo y la autenticación de la API está desactivada por defecto (y,
+aun activada, sin TLS la clave viaja en claro). El dashboard espera al
+healthcheck de la API, que usa `/health`, abierto aunque haya clave.
 `tests/test_deploy_config.py` fija estas propiedades sin levantar Docker.
 
 ### 2.8 Datos de reserva para la demo — `scripts/`, `demo/`
@@ -295,6 +317,10 @@ dominio
   conserva en el resultado, para que el filtro sea auditable (§7.6).
 - **Salvaguarda de autorización** (`SCAN_ALLOWLIST`): limita los objetivos
   escaneables, alineado con un uso responsable de la herramienta.
+- **Autenticación por clave compartida, opcional** (`API_KEY` →
+  `X-API-Key`), no cuentas de usuario: un operador y un cliente propio no
+  justifican login ni rotación de tokens. Desactivada por defecto para que la
+  demo y el stack sin `.env` no cambien — ver 2.1.
 - **Reconocimiento no confirma explotabilidad ni intenta el secuestro**
   (restricción de seguridad #6): la detección (`discovery/takeover.py`) es
   patrón de CNAME puro, sin HTTP. La verificación HTTP (`discovery/

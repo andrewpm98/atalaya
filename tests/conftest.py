@@ -34,7 +34,11 @@ def _sin_claves_reales(monkeypatch: pytest.MonkeyPatch) -> None:
     pasaría a depender de qué claves tenga configuradas quien la ejecute.
     Cada prueba que sí necesite ejercitar el camino "con clave" la fija de
     forma explícita con su propio `monkeypatch`.
+
+    `api_key` también: con una `API_KEY` en el `.env` de quien ejecuta la
+    suite, toda prueba de la API que no envía `X-API-Key` recibiría 401.
     """
+    monkeypatch.setattr(settings, "api_key", "")
     monkeypatch.setattr(settings, "shodan_api_key", "")
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     monkeypatch.setattr(settings, "gemini_api_key", "")

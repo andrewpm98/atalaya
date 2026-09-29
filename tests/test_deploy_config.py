@@ -107,13 +107,27 @@ def test_env_file_es_opcional() -> None:
     assert re.search(r"path:\s*\.env\s*\n\s*required:\s*false", api)
 
 
-def test_dashboard_no_recibe_secretos() -> None:
-    """El dashboard es un cliente HTTP puro: no necesita ninguna clave."""
+def test_dashboard_no_recibe_secretos_salvo_la_clave_de_la_api() -> None:
+    """El dashboard es un cliente HTTP puro: no necesita las claves de IA ni de
+    Shodan, así que no recibe el `.env`. Solo la clave de la propia API, y
+    vacía por defecto (autenticación desactivada sin `.env`)."""
     code = [
         line for line in _compose_service("dashboard").splitlines()
         if not line.strip().startswith("#")
     ]
     assert not any("env_file" in line for line in code)
+
+    inicio = code.index("    environment:") + 1
+    fin = next(
+        (i for i, line in enumerate(code[inicio:], inicio) if not line.startswith("      ")),
+        len(code),
+    )
+    variables = {
+        clave.strip(): valor.strip()
+        for clave, valor in (line.split(":", 1) for line in code[inicio:fin])
+    }
+    assert set(variables) == {"ATALAYA_API_URL", "ATALAYA_API_KEY"}
+    assert variables["ATALAYA_API_KEY"] == "${API_KEY:-}"
 
 
 def test_puertos_publicados_solo_en_localhost() -> None:

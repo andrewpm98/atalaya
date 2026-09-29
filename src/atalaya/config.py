@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     #: El host y el puerto no se configuran aquí: los fija quien lanza
     #: uvicorn (Dockerfile, Makefile), que es donde se leen de verdad.
     log_level: str = "INFO"
+    #: Clave compartida que exige la API en la cabecera `X-API-Key`
+    #: (`api/security.py`). Vacía = autenticación desactivada, que es el
+    #: default para que la demo y el stack sin `.env` funcionen igual; con
+    #: valor, todo endpoint salvo `/health` responde 401 sin ella. El dashboard
+    #: la envía si la tiene (`ATALAYA_API_KEY`, o esta misma en `.env`).
+    api_key: str = ""
 
     # ─── Salvaguarda de autorización ──────────────────────────────────
     #: Solo estos dominios pueden escanearse. Cadena separada por comas;

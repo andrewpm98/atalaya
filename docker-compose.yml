@@ -4,8 +4,9 @@
 #   docker compose up --build -d
 #
 # Todos los puertos se publican solo en 127.0.0.1: la BD usa credenciales
-# fijas de desarrollo y la API no tiene autenticación, así que ninguno de los
-# dos debe quedar accesible desde la red local.
+# fijas de desarrollo y la autenticación de la API (API_KEY en .env) está
+# desactivada por defecto, así que ninguno de los dos debe quedar accesible
+# desde la red local.
 
 services:
   db:
@@ -30,8 +31,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api
     container_name: atalaya-api
-    # Claves de IA/Shodan, SCAN_ALLOWLIST... Opcional: sin .env la API arranca
-    # y solo los endpoints de IA responden 502 por falta de clave.
+    # Claves de IA/Shodan, SCAN_ALLOWLIST, API_KEY... Opcional: sin .env la API
+    # arranca y solo los endpoints de IA responden 502 por falta de clave.
     env_file:
       - path: .env
         required: false
@@ -63,9 +64,12 @@ services:
       dockerfile: docker/Dockerfile.dashboard
     container_name: atalaya-dashboard
     # Sin env_file a propósito: el dashboard es un cliente HTTP puro de la API
-    # y no necesita ninguna clave. Mínimo privilegio.
+    # y no necesita las claves de IA ni de Shodan. Mínimo privilegio: recibe
+    # solo la clave de la propia API, interpolada desde el .env del proyecto
+    # (vacía si no hay .env o no está definida = autenticación desactivada).
     environment:
       ATALAYA_API_URL: http://api:8000
+      ATALAYA_API_KEY: ${API_KEY:-}
     depends_on:
       api:
         condition: service_healthy

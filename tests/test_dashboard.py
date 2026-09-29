@@ -19,6 +19,7 @@ from typing import Any, Self
 from unittest.mock import patch
 
 import httpx
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from atalaya.core.models import FindingSeverity
@@ -531,3 +532,61 @@ def test_pregunta_sin_escaneo_previo_muestra_error() -> None:
 
     assert not at.exception
     assert any("No hay un escaneo completado" in e.value for e in at.tabs[2].error)
+
+
+# ─── Autenticación (X-API-Key) ──────────────────────────────────────────────
+
+
+def _cabeceras_enviadas(get_map: dict[str, Any]) -> list[object]:
+    """Ejecuta el dashboard y devuelve las cabeceras con que se construyó cada
+    cliente de la API. La sonda de `/health` de la barra lateral no cuenta: es
+    pública y no se construye con `base_url`."""
+    capturadas: list[object] = []
+    base = _fake_client(get_map)
+
+    class _Capturador(base):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            if "base_url" in kwargs:
+                capturadas.append(kwargs.get("headers"))
+
+    with patch("httpx.Client", _Capturador):
+        at = AppTest.from_file(_APP_PATH, default_timeout=15)
+        at.run()
+    assert not at.exception
+    assert capturadas, "el dashboard no llegó a llamar a la API"
+    return capturadas
+
+
+def test_envia_la_clave_si_esta_configurada(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ATALAYA_API_KEY", "clave-del-dashboard")
+    cabeceras = _cabeceras_enviadas({"/scans": _Resp(200, [])})
+    assert cabeceras == [{"X-API-Key": "clave-del-dashboard"}] * len(cabeceras)
+
+
+def test_sin_clave_no_envia_la_cabecera(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ni siquiera vacía: contra una API con clave, una vacía sería una clave
+    incorrecta más, y el 401 no explicaría que falta configurarla."""
+    monkeypatch.setenv("ATALAYA_API_KEY", "")
+    cabeceras = _cabeceras_enviadas({"/scans": _Resp(200, [])})
+    assert cabeceras == [None] * len(cabeceras)
+
+
+def test_sin_variable_de_entorno_lee_api_key_del_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """En local basta con `API_KEY` en `.env`, el mismo sitio que la activa en
+    la API: sin esto, el dashboard recibiría 401 en todo."""
+    monkeypatch.delenv("ATALAYA_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("API_KEY=desde-el-env\nOTRA=1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    cabeceras = _cabeceras_enviadas({"/scans": _Resp(200, [])})
+    assert cabeceras == [{"X-API-Key": "desde-el-env"}] * len(cabeceras)
+
+
+def test_un_401_de_la_api_se_muestra_como_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ATALAYA_API_KEY", "")
+    at = _run_app(
+        get_map={"/scans": _Resp(401, {"detail": "Falta la cabecera X-API-Key o no es válida."})}
+    )
+    assert not at.exception
+    assert any("401" in e.value and "X-API-Key" in e.value for e in at.tabs[1].error)

@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from atalaya import __version__
 from atalaya.api.routes import assets, findings, scans
+from atalaya.api.security import require_api_key
 from atalaya.config import settings
 from atalaya.core.exceptions import AIProviderError, InvalidTargetError, UnauthorizedTargetError
 
@@ -44,9 +45,16 @@ app = FastAPI(
     version=__version__,
 )
 
-app.include_router(scans.router)
-app.include_router(assets.router)
-app.include_router(findings.router)
+# La clave se exige por router, no en `FastAPI(dependencies=...)`: eso la
+# aplicaría también a `/health`, y la sonda del healthcheck de Docker (y la del
+# dashboard) no lleva clave — ni debe llevarla: solo dice "estoy vivo". `/docs`
+# y `/openapi.json` quedan abiertos por el mismo motivo: describen la API, no
+# devuelven datos, y desde `/docs` se introduce la clave con «Authorize».
+_auth = [Depends(require_api_key)]
+
+app.include_router(scans.router, dependencies=_auth)
+app.include_router(assets.router, dependencies=_auth)
+app.include_router(findings.router, dependencies=_auth)
 
 
 @app.exception_handler(InvalidTargetError)
@@ -74,6 +82,6 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
-@app.get("/", tags=["sistema"])
+@app.get("/", tags=["sistema"], dependencies=_auth)
 async def root() -> dict[str, str]:
     return {"servicio": "Atalaya", "docs": "/docs"}

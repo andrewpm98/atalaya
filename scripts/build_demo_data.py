@@ -48,6 +48,7 @@ from atalaya.ai.triage import triage_findings
 from atalaya.api import main as api_main
 from atalaya.api.routes import findings as findings_routes
 from atalaya.api.routes import scans as scans_routes
+from atalaya.api.security import API_KEY_HEADER
 from atalaya.config import settings
 from atalaya.core import repository
 from atalaya.core.database import Base, SessionLocal, get_session
@@ -167,8 +168,11 @@ async def _with_seeded_api(
     try:
         with _patched_provider(provider):
             transport = httpx.ASGITransport(app=api_main.app)
+            # Con API_KEY en .env la API en proceso también la exige: sin la
+            # cabecera, todo el guion respondería 401.
+            headers = {API_KEY_HEADER: settings.api_key} if settings.api_key else None
             async with httpx.AsyncClient(
-                transport=transport, base_url="http://demo", timeout=600
+                transport=transport, base_url="http://demo", timeout=600, headers=headers
             ) as client:
                 return await run_demo_flow(
                     client,

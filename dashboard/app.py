@@ -33,8 +33,29 @@ from typing import Any
 
 import httpx
 import streamlit as st
+from dotenv import dotenv_values
 
 API_URL = os.getenv("ATALAYA_API_URL", "http://localhost:8000")
+
+
+def _api_key() -> str:
+    """Clave que el dashboard envía en `X-API-Key` (vacía = no se envía).
+
+    `ATALAYA_API_KEY` manda si está definida, aunque sea vacía: es lo que fija
+    `docker-compose.yml`, que pasa al dashboard solo esta variable y no el
+    `.env` entero (mínimo privilegio). Si no lo está, se lee `API_KEY` del
+    `.env` del directorio de trabajo — el mismo fichero y la misma variable
+    que activan la autenticación en la API —, para que en local baste con
+    configurarla una vez: con la clave solo en `.env`, un dashboard que no la
+    leyera recibiría 401 en todo sin que nada lo explicase.
+    """
+    explicit = os.environ.get("ATALAYA_API_KEY")
+    if explicit is not None:
+        return explicit.strip()
+    return (dotenv_values(".env").get("API_KEY") or "").strip()
+
+
+API_KEY = _api_key()
 
 #: Etiqueta monoespaciada por severidad. Sustituye a los emoji de semáforo
 #: de la versión anterior: la misma señal (y el mismo orden de lectura) con
@@ -809,12 +830,23 @@ st.html(_CSS)
 # ─── Cliente de la API ──────────────────────────────────────────────────────
 
 
+def _client() -> httpx.Client:
+    """Cliente HTTP de la API, con `X-API-Key` solo si hay clave.
+
+    Sin clave no se manda la cabecera vacía: la API la ignoraría con la
+    autenticación desactivada, pero con ella activada un valor vacío es
+    simplemente una clave incorrecta, y así el 401 dice «falta» y no confunde.
+    """
+    headers = {"X-API-Key": API_KEY} if API_KEY else None
+    return httpx.Client(base_url=API_URL, timeout=120.0, headers=headers)
+
+
 def api_get(path: str, **params: Any) -> Any | None:
     """GET contra la API. Devuelve `None` y muestra el error en la propia
     página si falla — nunca lanza excepción hacia el resto del script, para
     que un fallo puntual no tumbe todo el panel."""
     try:
-        with httpx.Client(base_url=API_URL, timeout=120.0) as client:
+        with _client() as client:
             resp = client.get(path, params=params or None)
     except httpx.HTTPError as exc:
         st.error(f"No se pudo contactar con la API ({path}): {exc}")
@@ -828,7 +860,7 @@ def api_get(path: str, **params: Any) -> Any | None:
 def api_post(path: str, json: dict[str, Any] | None = None) -> Any | None:
     """POST contra la API, mismo criterio de degradación que `api_get`."""
     try:
-        with httpx.Client(base_url=API_URL, timeout=120.0) as client:
+        with _client() as client:
             resp = client.post(path, json=json)
     except httpx.HTTPError as exc:
         st.error(f"No se pudo contactar con la API ({path}): {exc}")
@@ -844,7 +876,7 @@ def api_get_bytes(path: str) -> bytes | None:
     del informe (`/scans/{id}/report`). Mismo criterio de degradación que
     `api_get`: nunca lanza, informa el error en la propia página."""
     try:
-        with httpx.Client(base_url=API_URL, timeout=120.0) as client:
+        with _client() as client:
             resp = client.get(path)
     except httpx.HTTPError as exc:
         st.error(f"No se pudo contactar con la API ({path}): {exc}")

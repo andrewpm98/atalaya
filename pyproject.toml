@@ -28,6 +28,10 @@ dependencies = [
     "google-genai>=1.0",
     # Dashboard
     "streamlit>=1.37",
+    # El dashboard lee API_KEY del .env (dashboard/app.py::_api_key). Ya
+    # llegaba como dependencia de pydantic-settings; se declara porque se
+    # importa directamente (mismo motivo que greenlet).
+    "python-dotenv>=1.0",
     # Informes
     "jinja2>=3.1",
     "xhtml2pdf>=0.2.16",

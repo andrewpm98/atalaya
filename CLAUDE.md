@@ -13,7 +13,7 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
 | Base de datos | PostgreSQL + SQLAlchemy async | ✅ Modelos Scan/Asset/Finding + migraciones Alembic. Persiste subdominios, puertos abiertos y hallazgos de cabeceras/TLS/takeover |
-| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL vía agentes (`POST /findings/ask`), diff entre escaneos (`GET /scans/{id}/diff/{other_id}`) e informe (`GET /scans/{id}/report`) reales. Consume crt.sh, Shodan y (Anthropic o Gemini, configurable) |
+| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL vía agentes (`POST /findings/ask`), diff entre escaneos (`GET /scans/{id}/diff/{other_id}`) e informe (`GET /scans/{id}/report`) reales, con autenticación opcional por `X-API-Key`. Consume crt.sh, Shodan y (Anthropic o Gemini, configurable) |
 | Aplicación web | Dashboard Streamlit | ✅ Escaneos, triaje IA, consulta NL, descarga de informe — rediseño visual profesional (ver "Dashboard: diseño visual" más abajo) |
 | GitHub con historial | Commits por unidad lógica | ✅ commits por fase |
 | Reporte con portada | Informe generado por la herramienta | ✅ PDF con portada, resumen ejecutivo en lenguaje natural (IA), `risk_score` y hallazgos (`reporting/generator.py`) |
@@ -135,6 +135,8 @@ src/atalaya/
 └── api/
     ├── main.py                  FastAPI + exception_handler (dominio inválido → 400,
     │                             no autorizado → 403, fallo del proveedor IA → 502)
+    ├── security.py               require_api_key() — X-API-Key opcional (API_KEY
+    │                             vacía = desactivada); todo salvo /health
     ├── schemas.py                Esquemas Pydantic de respuesta (frontera BD ↔ API)
     └── routes/
         ├── scans.py              POST/GET /scans, GET /scans/{id},
@@ -300,7 +302,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **359 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **394 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -311,7 +313,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -501,6 +503,7 @@ cómo trata esto.
 | Detección de takeover: solo patrón DNS por defecto | La detección (`discovery/takeover.py`) es pasiva pura: patrón de CNAME, sin HTTP. La verificación HTTP existe pero es **opt-in** (`TAKEOVER_VERIFY`, off por defecto) y vive en un módulo aparte (`discovery/takeover_verify.py`) — ver restricción #6, "Excepción acotada". Eleva a "alta sospecha", nunca a "confirmado" |
 | `risk_score`: la banda la fija la severidad máxima presente; el volumen solo mueve dentro de ella, con rendimientos decrecientes por tipo (`core/scoring.py`) | La suma ponderada acotada saturaba con volumen: github.com (194 `low` + 9 `medium`) salía 100/100 «crítico», igual que un escaneo con diez críticos. Monótono por construcción (`tests/test_scoring.py` lo comprueba por propiedades). Una sola función para PDF y API: el dashboard pinta el de la API, ya no replica pesos |
 | Demo sin red: reproducir respuestas reales grabadas (`AI_PROVIDER=replay`), nunca inventarlas | Una petición no grabada falla con 502 como un proveedor caído; servir una respuesta "parecida" presentaría como análisis del modelo algo que nunca dijo sobre esos datos. `tests/test_demo_data.py` detecta grabaciones obsoletas |
+| Autenticación: una clave compartida en `X-API-Key`, opcional (`API_KEY` vacía = desactivada), no usuarios ni tokens | Un operador y un cliente propio: cuentas, login y rotación de tokens no protegerían nada más. Desactivada por defecto para que la demo y el stack sin `.env` no cambien. Todo endpoint salvo `/health` (sondas de Docker y del dashboard) la exige; `/docs` y `/openapi.json` quedan abiertos (describen, no devuelven datos; «Authorize» introduce la clave). `secrets.compare_digest` en bytes. `tests/test_api_auth.py` recorre el esquema OpenAPI: un router nuevo sin la dependencia hace fallar la suite |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
 
 ---
@@ -573,7 +576,9 @@ docker compose exec api python scripts/seed_demo_data.py --reset       # stack D
 
 Y en `.env`, `AI_PROVIDER=replay` (sin clave ni red). Aplicarlo **reiniciando
 la API**; en Docker con `docker compose up -d`, no `restart` (no recarga
-`.env`). Para volver al modelo real, `AI_PROVIDER=anthropic`.
+`.env`). Para volver al modelo real, `AI_PROVIDER=anthropic`. `API_KEY`
+puede quedar vacía (autenticación desactivada, como se ensaya el guion); si
+tiene valor, el dashboard la toma del mismo `.env` y la demo no cambia.
 
 **`--reset` borra todos los escaneos de esa BD.** Sin él, el script se niega
 si hay datos. No usarlo contra la BD de desarrollo (`atalaya.sqlite3`, con
@@ -673,8 +678,6 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 - **Cuota gratuita de Gemini: ~20 peticiones/día**, se agota rápido
   combinando triaje + prompter + diff + informe en la misma sesión de
   pruebas. Verlo como límite de verificación manual, no del código.
-- **API sin autenticación.** Asumible en local; bloqueante si se despliega con
-  IP pública.
 - **Variabilidad del DNS.** Dos escaneos del mismo dominio no dan resultados
   idénticos (timeouts, balanceo, caché). Es normal, y refuerza la necesidad de
   persistir escaneos para distinguir un cambio real de una fluctuación.
@@ -721,6 +724,15 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**API sin autenticación**~~ (bloqueante si se desplegaba con IP pública)
+  → `api/security.py::require_api_key()`: con `API_KEY` en `.env`, todo
+  endpoint salvo `/health` responde 401 sin `X-API-Key` correcta (comparación
+  con `secrets.compare_digest`). Vacía por defecto: la demo, el stack sin
+  `.env` y la suite no cambian. El dashboard la envía si la tiene
+  (`ATALAYA_API_KEY`, o `API_KEY` del mismo `.env` en local); en Docker recibe
+  solo esa variable, no el `.env` entero. Los puertos siguen publicados solo
+  en `127.0.0.1`: la clave no sustituye a TLS, que haría falta para exponerla
+  de verdad (sin él, la clave viaja en claro).
 - ~~**PDF: hostnames largos invadían la columna de estado**~~ (visto al
   revisar el PDF de la demo: 38 de 118 hosts) → anchos de columna medidos con
   las métricas de Helvetica, corte CJK solo en el host como último recurso e
@@ -847,7 +859,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 359)
+pytest -q                            # tests (deben pasar los 394)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
