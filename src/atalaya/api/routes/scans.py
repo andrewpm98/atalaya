@@ -161,11 +161,28 @@ async def diff_scan(
 
 
 @router.post("/{scan_id}/triage", response_model=TriageResponse)
-async def triage_scan(scan_id: int, session: AsyncSession = Depends(get_session)) -> TriageResponse:
+async def triage_scan(
+    scan_id: int,
+    force: bool = Query(
+        default=False,
+        description=(
+            "Vuelve a triar también los hallazgos ya triados (p. ej. tras cambiar de "
+            "modelo). Una llamada al proveedor por hallazgo: en un escaneo grande, cientos."
+        ),
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> TriageResponse:
     """Triaja con IA los hallazgos sin triar (`severity == unknown`) de un escaneo.
 
-    No repite el triaje de hallazgos ya triados: es idempotente frente a
-    llamadas repetidas y evita coste innecesario del proveedor de IA.
+    Por defecto no repite el triaje de hallazgos ya triados: es idempotente
+    frente a llamadas repetidas y evita coste innecesario del proveedor de IA.
+
+    `force=true` los incluye todos. Es explícito y no el comportamiento por
+    defecto por el coste (una llamada por hallazgo). Antes, re-triar exigía
+    devolver `severity` a `unknown` a mano en la BD. Si el re-triaje de un
+    hallazgo falla, conserva el triaje anterior en vez de quedar `unknown`:
+    `ai/triage.py::triage_finding` no toca el hallazgo si el proveedor falla o
+    la respuesta no valida, así que un proveedor caído a mitad no borra nada.
     """
     scan = await repository.get_scan(session, scan_id)
     if scan is None:
@@ -177,7 +194,7 @@ async def triage_scan(scan_id: int, session: AsyncSession = Depends(get_session)
         finding
         for asset in scan.assets
         for finding in asset.findings
-        if finding.severity is FindingSeverity.UNKNOWN
+        if force or finding.severity is FindingSeverity.UNKNOWN
     ]
     if not pendientes:
         return TriageResponse(scan_id=scan.id, triaged=0, errors=[])

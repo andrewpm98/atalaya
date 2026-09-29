@@ -21,7 +21,9 @@ orquesta el resto de módulos. Endpoints principales:
 - `GET  /findings` ✅ — hallazgos, filtrables por `asset_id`/`scan_id`;
   `severity` es `unknown` hasta triarlos.
 - `POST /scans/{id}/triage` ✅ — triaja con IA los hallazgos `unknown` de un
-  escaneo ya persistido. Idempotente: no repite los ya triados.
+  escaneo ya persistido. Idempotente: no repite los ya triados, salvo con
+  `?force=true` (p. ej. tras cambiar de modelo); un re-triaje que falla
+  conserva el triaje anterior.
 - `POST /findings/ask` ✅ — consulta en lenguaje natural, enrutada por
   `ai/prompter.py` al agente adecuado (visión global o riesgo de takeover)
   sobre el último escaneo completado de un dominio (o uno concreto vía

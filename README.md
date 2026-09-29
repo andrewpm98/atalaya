@@ -200,6 +200,9 @@ marcha", o `atalaya subdomains scanme.nmap.org --save`):
 ```bash
 # Triaja los hallazgos sin triar del escaneo #1 (idempotente)
 curl -X POST http://localhost:8000/scans/1/triage
+# ...y re-triar también los ya triados (p. ej. tras cambiar de modelo; una
+# llamada al proveedor por hallazgo). Si alguno falla, conserva su triaje.
+curl -X POST "http://localhost:8000/scans/1/triage?force=true"
 
 # Pregunta sobre la superficie ya escaneada — un agente "Prompter" decide
 # si la responde el analista de visión global o el detective de takeover

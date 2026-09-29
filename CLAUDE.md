@@ -306,7 +306,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **416 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **418 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -317,7 +317,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -716,10 +716,11 @@ capturado con los datos sembrados y una pregunta del guion respondida.
   su propia concurrencia (`AI_CONCURRENCY` en el triaje), pero no hay un
   tope agregado entre peticiones simultáneas ni entre los seis agentes, ni
   caché de respuestas.
-- **No se puede forzar un re-triaje.** `POST /scans/{id}/triage` solo procesa
-  hallazgos `unknown` (idempotente a propósito); volver a triar tras cambiar
-  de modelo exige devolver `severity` a `unknown` directamente en BD. El
-  triaje tampoco ve el histórico del dominio (hallazgos de escaneos previos).
+- **El triaje no ve el histórico del dominio** (hallazgos de escaneos
+  previos): cada hallazgo se valora solo con su propio contexto.
+- **Re-triaje solo por API.** `?force=true` (ver "Resuelta") no tiene botón en
+  el dashboard a propósito: son cientos de llamadas en un escaneo grande y un
+  clic accidental en la demo las dispararía.
 - **API: sin paginación ni borrado.** `list_scans` acepta `limit` (50 por
   defecto) pero no `offset`; no existen rutas `PUT`/`DELETE`.
 - **Dashboard sin triaje selectivo.** El triaje se lanza sobre el escaneo
@@ -734,6 +735,12 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**No se podía forzar un re-triaje**~~ (re-triar tras cambiar de modelo
+  exigía devolver `severity` a `unknown` a mano en BD) → `POST /scans/{id}/
+  triage?force=true` incluye los ya triados. Sin `force` sigue siendo
+  idempotente. Un re-triaje fallido **conserva el triaje anterior**
+  (`triage_finding` no toca el hallazgo si el proveedor falla): verificado en
+  real con la demo en `replay` — 204 fallos, cero severidades perdidas.
 - ~~**Cookies sin evaluar**~~ → `headers.py::evaluate_cookies()`:
   `cookie_sin_secure` (solo en sitios HTTPS), `cookie_sin_httponly` y
   `cookie_sin_samesite`, **uno por tipo y host** con los nombres afectados
@@ -894,7 +901,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 416)
+pytest -q                            # tests (deben pasar los 418)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

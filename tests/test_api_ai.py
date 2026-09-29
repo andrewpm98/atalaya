@@ -161,6 +161,44 @@ async def test_triage_scan_degrada_con_gracia_si_falla_el_proveedor(
     assert "rate limit" in body["errors"][0]
 
 
+async def test_triage_scan_force_vuelve_a_triar_los_ya_triados(
+    client: TestClient, monkeypatch
+) -> None:
+    """P. ej. tras cambiar de modelo: sin `force` no hay forma de re-triar."""
+    scan_id = _create_scan_con_finding(client, monkeypatch)
+    primero = _FakeProvider(tool_output={"severity": "low", "impact": "i1", "remediation": "r1"})
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: primero)
+    assert client.post(f"/scans/{scan_id}/triage").json()["triaged"] == 1
+
+    segundo = _FakeProvider(tool_output={"severity": "high", "impact": "i2", "remediation": "r2"})
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: segundo)
+    assert client.post(f"/scans/{scan_id}/triage").json()["triaged"] == 0  # sin force: nada
+    resp = client.post(f"/scans/{scan_id}/triage", params={"force": "true"})
+
+    assert resp.json() == {"scan_id": scan_id, "triaged": 1, "errors": []}
+    finding = client.get("/findings", params={"scan_id": scan_id}).json()[0]
+    assert (finding["severity"], finding["impact"]) == ("high", "i2")
+
+
+async def test_triage_scan_force_con_proveedor_caido_conserva_el_triaje_anterior(
+    client: TestClient, monkeypatch
+) -> None:
+    """Un re-triaje fallido no devuelve el hallazgo a `unknown`: no se pierde
+    el triaje bueno que ya había por un fallo puntual del proveedor."""
+    scan_id = _create_scan_con_finding(client, monkeypatch)
+    bueno = _FakeProvider(tool_output={"severity": "medium", "impact": "i", "remediation": "r"})
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: bueno)
+    client.post(f"/scans/{scan_id}/triage")
+
+    caido = _FakeProvider(error=AIProviderError("503"))
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: caido)
+    body = client.post(f"/scans/{scan_id}/triage", params={"force": "true"}).json()
+
+    assert body["triaged"] == 0 and len(body["errors"]) == 1
+    finding = client.get("/findings", params={"scan_id": scan_id}).json()[0]
+    assert (finding["severity"], finding["impact"]) == ("medium", "i")
+
+
 async def test_triage_scan_inexistente_da_404(client: TestClient) -> None:
     resp = client.post("/scans/999/triage")
     assert resp.status_code == 404
