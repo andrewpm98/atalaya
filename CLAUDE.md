@@ -14,7 +14,7 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 |---|---|---|
 | Base de datos | PostgreSQL + SQLAlchemy async | ✅ Modelos Scan/Asset/Finding + migraciones Alembic. Persiste subdominios, puertos abiertos y hallazgos de cabeceras/TLS/takeover |
 | API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL vía agentes (`POST /findings/ask`), diff entre escaneos (`GET /scans/{id}/diff/{other_id}`) e informe (`GET /scans/{id}/report`) reales, con autenticación opcional por `X-API-Key`. Consume crt.sh, Shodan y (Anthropic o Gemini, configurable) |
-| Aplicación web | Dashboard Streamlit | ✅ Escaneos, triaje IA, consulta NL, descarga de informe — rediseño visual profesional (ver "Dashboard: diseño visual" más abajo) |
+| Aplicación web | Dashboard Streamlit | ✅ Escaneos, comparación entre escaneos (diff), triaje IA, consulta NL, descarga de informe — rediseño visual profesional (ver "Dashboard: diseño visual" más abajo) |
 | GitHub con historial | Commits por unidad lógica | ✅ commits por fase |
 | Reporte con portada | Informe generado por la herramienta | ✅ PDF con portada, resumen ejecutivo en lenguaje natural (IA), `risk_score` y hallazgos (`reporting/generator.py`) |
 
@@ -32,7 +32,8 @@ Recibe un dominio y ejecuta cuatro fases:
    configuración TLS, riesgo de *subdomain takeover* (patrón de CNAME hacia
    hosting de terceros, con verificación HTTP opcional).
 2. **Persistencia** — activos y hallazgos en base de datos, para comparar
-   escaneos en el tiempo (`GET /scans/{id}/diff/{other_id}`).
+   escaneos en el tiempo (`GET /scans/{id}/diff/{other_id}`, y «Comparar
+   con» en el dashboard).
 3. **Triaje por IA** — un LLM prioriza hallazgos, explica impacto real y
    propone remediación. **Es el componente diferencial del proyecto.**
 4. **Consulta e informe** — preguntas en lenguaje natural (a través de un
@@ -149,8 +150,9 @@ src/atalaya/
                                     (vía ai/prompter.py) — reales
 
 migrations/                      Alembic (async); URL desde settings.database_url
-dashboard/app.py                 Dashboard Streamlit — escaneos, triaje IA,
-                                  consulta NL, descarga de informe. Rediseño
+dashboard/app.py                 Dashboard Streamlit — escaneos, «Comparar
+                                  con» (diff), triaje IA, consulta NL,
+                                  descarga de informe. Rediseño
                                   visual profesional (ver sección dedicada)
 .claude/agents/                  Subagentes de proyecto de Claude Code (no
                                   es parte del producto, es tooling de
@@ -302,7 +304,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **394 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **400 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -313,7 +315,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -603,7 +605,9 @@ solo `low`/`medium` (ningún `critical`/`high`), así que el índice es 39
 `github.com`): las cuatro preguntas siguientes, antes **y** después del
 triaje en directo — el orden de los pasos en la defensa no importa —, más el
 informe PDF de los dos escaneos (con resumen ejecutivo), el diff `2`↔`1` y el
-triaje de los 8 pendientes.
+triaje de los 8 pendientes. El diff se enseña desde el dashboard («Comparar
+con» en el detalle de cualquiera de los dos): la API ordena por `started_at`,
+así que `2/diff/1` y `1/diff/2` usan la misma grabación.
 
 1. ¿Algún activo filtra direccionamiento interno? *(placeholder del dashboard)*
 2. ¿Qué debería arreglar primero y por qué?
@@ -717,13 +721,25 @@ capturado con los datos sembrados y una pregunta del guion respondida.
   triaje tampoco ve el histórico del dominio (hallazgos de escaneos previos).
 - **API: sin paginación ni borrado.** `list_scans` acepta `limit` (50 por
   defecto) pero no `offset`; no existen rutas `PUT`/`DELETE`.
-- **Dashboard sin diff ni triaje selectivo.** `GET /scans/{id}/diff/{other_id}`
-  solo es accesible por API; el triaje se lanza sobre el escaneo completo,
-  nunca sobre un hallazgo concreto; la consulta NL no recuerda preguntas
-  anteriores.
+- **Dashboard sin triaje selectivo.** El triaje se lanza sobre el escaneo
+  completo, nunca sobre un hallazgo concreto; la consulta NL no recuerda
+  preguntas anteriores.
+- **El diff del dashboard depende de la IA.** «Comparar con» usa el endpoint
+  de diff tal cual, y ese endpoint devuelve 502 si el proveedor de IA falla
+  (decisión del propio endpoint, ver `scans.py::diff_scan`): sin proveedor no
+  se ven ni siquiera los hostnames nuevos/desaparecidos, que son puro cálculo.
+  «Sin cambios» significa mismo hostname en ambos escaneos: el diff no
+  compara puertos ni hallazgos de los activos comunes.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**Dashboard sin diff**~~ (`GET /scans/{id}/diff/{other_id}` solo por API)
+  → selector «Comparar con» en el detalle de un escaneo cuando hay otro del
+  mismo dominio (`dashboard/app.py::render_comparacion`). Por defecto propone
+  el anterior más reciente; muestra nuevos, desaparecidos y sin cambios, y la
+  valoración del modelo. Se pide con un botón y se guarda en `session_state`
+  por pareja: el endpoint llama al modelo, y pedirlo al renderizar repetiría
+  la llamada en cada reejecución de Streamlit.
 - ~~**API sin autenticación**~~ (bloqueante si se desplegaba con IP pública)
   → `api/security.py::require_api_key()`: con `API_KEY` en `.env`, todo
   endpoint salvo `/health` responde 401 sin `X-API-Key` correcta (comparación
@@ -859,7 +875,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 394)
+pytest -q                            # tests (deben pasar los 400)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

@@ -229,6 +229,16 @@ la toma de `ATALAYA_API_KEY` o, si esa variable no existe, de `API_KEY` en el
 `.env` del directorio de trabajo — la misma que la activa en la API, para que
 en local se configure una sola vez. Sin clave no envía la cabecera.
 
+**Comparar con otro escaneo.** Si hay más de un escaneo del mismo dominio, el
+detalle ofrece un selector «Comparar con» (por defecto, el anterior más
+reciente) y, al pulsar «Comparar», pinta `GET /scans/{id}/diff/{other_id}`:
+recuentos de nuevos, desaparecidos y sin cambios (mismo hostname en ambos),
+los hostnames de cada grupo y la valoración de `ai/diff_analyst.py`. Va
+después del score y antes de los activos. Se pide con botón, no al cambiar el
+selector, y se guarda en `session_state` por pareja de escaneos: el endpoint
+llama al modelo y Streamlit reejecuta el script en cada interacción. Un 502
+del proveedor se muestra como error sin tumbar el resto del detalle.
+
 Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
 `st.markdown(..., unsafe_allow_html=True)` — ver "Decisiones de diseño")
 para parecer una herramienta comercial de seguridad (referentes: Shodan,
@@ -293,7 +303,7 @@ dominio
 [Capa IA]  triaje: severidad + impacto + remediación
    │       (+ prompter/analyst/takeover_detective/report_writer/diff_analyst)
    │
-   ├──▶ [Dashboard]  visualización, consulta NL, risk_score, diff
+   ├──▶ [Dashboard]  visualización, consulta NL, risk_score, «Comparar con» (diff)
    └──▶ [Informes]   PDF con portada + risk_score + resumen ejecutivo IA
 ```
 

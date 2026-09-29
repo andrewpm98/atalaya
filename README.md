@@ -18,7 +18,8 @@ consultar la superficie de exposición **en lenguaje natural**.
    riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de
    terceros).
 2. **Evalúa** — asigna riesgo a cada activo y hallazgo; compara escaneos
-   en el tiempo (diff) para detectar expansión de superficie.
+   en el tiempo (diff) para detectar expansión de superficie, por API o con
+   «Comparar con» en el dashboard.
 3. **Prioriza con IA** — un sistema de **agentes especializados** (no un
    único prompt genérico) ordena los hallazgos por severidad real, explica
    el impacto, prioriza candidatos de takeover y propone cómo corregirlos.
@@ -205,7 +206,7 @@ curl -X POST http://localhost:8000/findings/ask \
   -d '{"domain": "scanme.nmap.org", "question": "¿qué activos son más peligrosos?"}'
 
 # Compara dos escaneos del mismo dominio, con valoración de IA
-# (requiere haber lanzado dos escaneos)
+# (requiere haber lanzado dos escaneos; en el dashboard: «Comparar con»)
 curl http://localhost:8000/scans/1/diff/2
 ```
 

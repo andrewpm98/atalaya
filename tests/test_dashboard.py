@@ -590,3 +590,157 @@ def test_un_401_de_la_api_se_muestra_como_error(monkeypatch: pytest.MonkeyPatch)
     )
     assert not at.exception
     assert any("401" in e.value and "X-API-Key" in e.value for e in at.tabs[1].error)
+
+
+# ─── Comparar con otro escaneo (diff) ───────────────────────────────────────
+
+
+def _resumen(scan_id: int, domain: str, started_at: str) -> dict[str, Any]:
+    return {**_scan_summary(scan_id), "domain": domain, "started_at": started_at}
+
+
+#: Tres escaneos, del más reciente al más antiguo (como los da `GET /scans`):
+#: dos de `ejemplo.com` y uno de otro dominio, que nunca debe ofrecerse.
+_ESCANEOS = [
+    _resumen(3, "otro.com", "2026-01-03T00:00:00"),
+    _resumen(2, "ejemplo.com", "2026-01-02T00:00:00"),
+    _resumen(1, "ejemplo.com", "2026-01-01T00:00:00"),
+]
+
+_DIFF = {
+    "previous_scan_id": 1,
+    "current_scan_id": 2,
+    "nuevos": ["nuevo.ejemplo.com"],
+    "desaparecidos": [],
+    "comunes": ["interno.ejemplo.com"],
+    "analysis": "Aparece **un** activo nuevo sin hallazgos graves.",
+}
+
+
+def _app_con_registro(
+    get_map: dict[str, Any], llamadas: list[str], elegir: int = 2
+) -> AppTest:
+    """Arranca el dashboard, elige el escaneo `#elegir` en «Ver detalle de» y
+    anota en `llamadas` cada GET que hace. Devuelve el `AppTest` abierto dentro
+    del parche para poder seguir interactuando."""
+    base = _fake_client(get_map)
+
+    class _Registrador(base):  # type: ignore[misc, valid-type]
+        def get(self, path: str, params: dict[str, object] | None = None) -> _Resp:
+            llamadas.append(path)
+            return super().get(path, params)
+
+    at = AppTest.from_file(_APP_PATH, default_timeout=15)
+    with patch("httpx.Client", _Registrador):
+        at.run()
+        detalle = at.tabs[1].selectbox[0]
+        detalle.select(next(o for o in detalle.options if o.startswith(f"#{elegir} "))).run()
+    return at
+
+
+def _boton(at: AppTest, etiqueta: str) -> Any:
+    return next(b for b in at.button if b.label == etiqueta)
+
+
+def _get_map_diff(diff: _Resp) -> dict[str, Any]:
+    return {
+        "/scans": _Resp(200, _ESCANEOS),
+        "/scans/1": _Resp(200, _scan_detail(scan_id=1)),
+        "/scans/2": _Resp(200, _scan_detail(scan_id=2)),
+        "/scans/3": _Resp(200, {**_scan_detail(scan_id=3), "domain": "otro.com"}),
+        "/scans/2/diff/1": diff,
+    }
+
+
+def test_sin_otro_escaneo_del_dominio_no_se_ofrece_comparar() -> None:
+    llamadas: list[str] = []
+    at = _app_con_registro(_get_map_diff(_Resp(200, _DIFF)), llamadas, elegir=3)
+
+    assert not at.exception
+    assert [s.label for s in at.tabs[1].selectbox] == ["Ver detalle de"]
+    assert not any(b.label == "Comparar" for b in at.button)
+
+
+def test_selector_ofrece_solo_el_mismo_dominio_y_no_llama_hasta_pulsar() -> None:
+    """El diff llama al modelo de IA: no se pide al renderizar, solo al pulsar."""
+    llamadas: list[str] = []
+    at = _app_con_registro(_get_map_diff(_Resp(200, _DIFF)), llamadas)
+
+    assert not at.exception
+    selector = at.tabs[1].selectbox[1]
+    assert selector.label == "Comparar con"
+    assert [o.split(" ")[0] for o in selector.options] == ["#1"]
+    assert not any("/diff/" in path for path in llamadas)
+
+
+def test_por_defecto_compara_con_el_anterior_mas_reciente() -> None:
+    escaneos = [
+        _resumen(4, "ejemplo.com", "2026-01-04T00:00:00"),
+        _resumen(3, "ejemplo.com", "2026-01-03T00:00:00"),
+        _resumen(2, "ejemplo.com", "2026-01-02T00:00:00"),
+        _resumen(1, "ejemplo.com", "2026-01-01T00:00:00"),
+    ]
+    # El detalle lleva la misma fecha que su resumen: es la del escaneo que se
+    # está viendo la que decide cuáles son «anteriores».
+    get_map = {"/scans": _Resp(200, escaneos)} | {
+        f"/scans/{r['id']}": _Resp(200, {**_scan_detail(scan_id=r["id"]), **r})
+        for r in escaneos
+    }
+    at = _app_con_registro(get_map, [], elegir=3)
+
+    assert at.tabs[1].selectbox[1].value.startswith("#2 ")
+
+
+def test_comparar_muestra_nuevos_desaparecidos_y_sin_cambios() -> None:
+    llamadas: list[str] = []
+    get_map = _get_map_diff(_Resp(200, _DIFF))
+    at = _app_con_registro(get_map, llamadas)
+    with patch("httpx.Client", _fake_client(get_map)):
+        _boton(at, "Comparar").click().run()
+
+    assert not at.exception
+    metricas = {m.label: m.value for m in at.tabs[1].metric}
+    assert metricas["Nuevos"] == "1"
+    assert metricas["Desaparecidos"] == "0"
+    assert metricas["Sin cambios"] == "1"
+    textos = " ".join(m.value for m in at.tabs[1].markdown)
+    assert "atl-chip-new" in textos and "nuevo.ejemplo.com" in textos
+    assert "#1</b> → <b>#2" in textos
+    assert "Aparece **un** activo nuevo" in textos  # la valoración del modelo
+    assert any(e.label.startswith("Sin cambios · 1") for e in at.tabs[1].expander)
+
+
+def test_diff_que_falla_muestra_el_error_sin_romper_el_detalle() -> None:
+    """Sin proveedor de IA el endpoint responde 502: se ve el motivo y el resto
+    del detalle (score, activos) sigue en pie."""
+    get_map = _get_map_diff(_Resp(502, {"detail": "no hay respuesta grabada"}))
+    at = _app_con_registro(get_map, [])
+    with patch("httpx.Client", _fake_client(get_map)):
+        _boton(at, "Comparar").click().run()
+
+    assert not at.exception
+    assert any("502" in e.value and "no hay respuesta grabada" in e.value for e in at.error)
+    assert not any(m.label == "Nuevos" for m in at.tabs[1].metric)
+    assert _score_mostrado(at) is not None
+
+
+def test_el_diff_se_conserva_sin_volver_a_pedirlo() -> None:
+    """Otra interacción (aquí, pedir el informe) reejecuta el script entero:
+    el diff ya pedido se sigue viendo y no se vuelve a llamar al modelo."""
+    llamadas: list[str] = []
+    get_map = _get_map_diff(_Resp(200, _DIFF))
+    at = _app_con_registro(get_map, llamadas)
+    base = _fake_client(get_map | {"/scans/2/report": _Resp(200, b"%PDF-1.4")})
+
+    class _Registrador(base):  # type: ignore[misc, valid-type]
+        def get(self, path: str, params: dict[str, object] | None = None) -> _Resp:
+            llamadas.append(path)
+            return super().get(path, params)
+
+    with patch("httpx.Client", _Registrador):
+        _boton(at, "Comparar").click().run()
+        _boton(at, "Generar informe PDF").click().run()
+
+    assert not at.exception
+    assert llamadas.count("/scans/2/diff/1") == 1
+    assert any(m.label == "Nuevos" for m in at.tabs[1].metric)

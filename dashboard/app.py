@@ -6,8 +6,9 @@ directamente — porque es, precisamente, un cliente más de la API, igual que
 la CLI o cualquier integración externa (ver `docs/ARQUITECTURA.md`, 2.6).
 
 Permite: lanzar un escaneo, listar los realizados, explorar activos y
-hallazgos de cada uno, triar con IA un escaneo, y preguntar en lenguaje
-natural sobre un dominio ya escaneado.
+hallazgos de cada uno, compararlo con otro escaneo del mismo dominio, triar
+con IA un escaneo, y preguntar en lenguaje natural sobre un dominio ya
+escaneado.
 
 **Nota sobre `async`:** el resto del proyecto es asíncrono porque el
 descubrimiento lanza decenas de operaciones de red en paralelo (Paso 2).
@@ -745,6 +746,16 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
 }
 .atl-chip-empty { color: var(--fg-faint); border-style: dashed; }
 .atl-chip-port { color: var(--accent); border-color: var(--accent-line); }
+/* Comparación entre escaneos: lo nuevo lleva el acento (es lo que hay que
+   mirar); lo desaparecido va apagado y tachado, sin rojo, porque que un host
+   deje de aparecer no es una severidad (puede ser solo variabilidad DNS). */
+.atl-chip-new { color: var(--accent); border-color: var(--accent-line); }
+.atl-chip-gone { color: var(--fg-faint); text-decoration: line-through; }
+.atl-diff-head {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em;
+  color: var(--fg-dim); margin: 0.2rem 0 0.4rem 0;
+}
+.atl-diff-head b { color: var(--accent); font-weight: 700; }
 .atl-subsec {
   font-family: var(--mono); font-size: 0.55rem; letter-spacing: 0.2em;
   color: var(--fg-faint); text-transform: uppercase; margin: 0.55rem 0 0.32rem 0;
@@ -792,6 +803,16 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
   color: var(--fg); font-weight: 600;
 }
 [class*="st-key-atl-answer"] [data-testid="stMarkdownContainer"] ul { margin: 0.2rem 0; }
+/* El modelo a veces estructura la respuesta con títulos Markdown (la
+   valoración del diff lo hace siempre): sin esto salían al tamaño de título
+   de página, más grandes que el propio score. Aquí son rótulos de apartado. */
+[class*="st-key-atl-answer"] [data-testid="stMarkdownContainer"] :is(h1, h2, h3, h4) {
+  font-family: var(--sans); color: var(--fg); font-weight: 600;
+  font-size: 0.92rem; line-height: 1.4; letter-spacing: 0;
+  padding: 0; margin: 0.9rem 0 0.25rem 0;
+}
+[class*="st-key-atl-answer"] [data-testid="stMarkdownContainer"] h1 { font-size: 1rem; }
+[class*="st-key-atl-answer"] [data-testid="stHeaderActionElements"] { display: none; }
 [class*="st-key-atl-answer"] .atl-answer-head {
   font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.1em;
   color: var(--fg-faint); text-transform: none;
@@ -1111,7 +1132,106 @@ def _marca_de_tiempo(valor: object) -> str:
     return texto[:19].replace("T", " ")
 
 
-def render_scan_detail(scan: dict[str, Any]) -> None:
+def _comparacion_por_defecto(scan: dict[str, Any], otros: list[dict[str, Any]]) -> int:
+    """Índice, dentro de `otros`, del escaneo con el que comparar de entrada.
+
+    El anterior más reciente: «qué ha cambiado desde la última vez» es la
+    pregunta natural. Si no hay ninguno anterior (se está viendo el más
+    antiguo), el primero de la lista, que la API ya da del más reciente al
+    más antiguo.
+    """
+    anteriores = [
+        (o["started_at"], i) for i, o in enumerate(otros) if o["started_at"] < scan["started_at"]
+    ]
+    return max(anteriores)[1] if anteriores else 0
+
+
+def render_diff(diff: dict[str, Any]) -> None:
+    """Resultado de `GET /scans/{id}/diff/{other_id}`: recuentos, valoración
+    del modelo y hostnames por grupo.
+
+    `comunes` se rotula «sin cambios» y la leyenda aclara qué significa: el
+    diff compara hostnames (`core/repository.py::diff_scans`), así que un
+    activo presente en los dos escaneos cuenta aquí aunque sus puertos o
+    hallazgos hayan variado.
+    """
+    nuevos, desaparecidos, comunes = diff["nuevos"], diff["desaparecidos"], diff["comunes"]
+    _html(
+        '<div class="atl-diff-head">'
+        f"<b>#{escape(str(diff['previous_scan_id']))}</b> → "
+        f"<b>#{escape(str(diff['current_scan_id']))}</b>"
+        " · del anterior al posterior por fecha de inicio</div>"
+    )
+    cifras = st.container(horizontal=True, key="atl-cifras-diff")
+    cifras.metric("Nuevos", len(nuevos))
+    cifras.metric("Desaparecidos", len(desaparecidos))
+    cifras.metric("Sin cambios", len(comunes))
+
+    _html(
+        '<div class="atl-chips">'
+        + _chipset("Nuevos", nuevos, "atl-chip-new")
+        + _chipset("Desaparecidos", desaparecidos, "atl-chip-gone")
+        + "</div>"
+    )
+    with st.expander(f"Sin cambios · {len(comunes)}"):
+        _html('<div class="atl-chips">' + _chipset("Hosts", comunes) + "</div>")
+    st.caption(
+        "Sin cambios = mismo hostname en ambos escaneos; sus puertos o hallazgos pueden "
+        "haber variado. Un host desaparecido puede ser solo variabilidad DNS."
+    )
+
+    # Prosa del modelo con su propio markdown: mismo panel que «Preguntar»
+    # (la regla de `_CSS` casa con cualquier clave que empiece por
+    # `atl-answer`; la clave tiene que ser distinta porque ambas conviven en
+    # la misma ejecución del script).
+    with st.container(key="atl-answer-diff"):
+        _html('<div class="atl-answer-head"><b>Valoración IA</b> · cambios entre escaneos</div>')
+        st.write(diff["analysis"])
+
+
+def render_comparacion(scan: dict[str, Any], otros: list[dict[str, Any]]) -> None:
+    """Selector «Comparar con» y, al pulsar, el diff contra el escaneo elegido.
+
+    Solo aparece si hay otro escaneo del mismo dominio. La comparación se pide
+    con un botón, no al cambiar el selector: el endpoint llama al modelo de IA
+    (coste y segundos de espera), y Streamlit reejecuta el script entero en
+    cada interacción, así que pedirlo al renderizar repetiría la llamada al
+    triar, al pedir el informe o al cambiar de pestaña. El resultado se guarda
+    en `session_state` por pareja de escaneos, mismo patrón que el PDF.
+    """
+    if not otros:
+        return
+    _seccion("Comparación", f"{len(otros)} escaneo(s) más de {scan['domain']}")
+    opciones = {
+        f"#{o['id']} — {_marca_de_tiempo(o['started_at'])} ({o['status']})": o["id"]
+        for o in otros
+    }
+    # Ancho fijo del selector: con el del contenedor, la fila horizontal
+    # repartía el sobrante y el botón quedaba en el extremo opuesto, lejos
+    # del selector al que pertenece.
+    fila = st.container(horizontal=True, vertical_alignment="bottom")
+    elegido = fila.selectbox(
+        "Comparar con",
+        options=list(opciones),
+        index=_comparacion_por_defecto(scan, otros),
+        key=f"diff-sel-{scan['id']}",
+        width=470,
+    )
+    otro_id = opciones[elegido]
+    diff_key = f"diff_{scan['id']}_{otro_id}"
+    if fila.button("Comparar", key=f"diff-btn-{scan['id']}"):
+        with st.spinner("Comparando escaneos y valorando los cambios con IA..."):
+            diff = api_get(f"/scans/{scan['id']}/diff/{otro_id}")
+        if diff is not None:
+            st.session_state[diff_key] = diff
+
+    if st.session_state.get(diff_key) is not None:
+        render_diff(st.session_state[diff_key])
+
+
+def render_scan_detail(scan: dict[str, Any], otros: list[dict[str, Any]] | None = None) -> None:
+    """Detalle de un escaneo. `otros`: el resto de escaneos del mismo dominio,
+    con los que se ofrece compararlo (ver `render_comparacion`)."""
     _html(
         f'<div class="atl-scanhead">'
         f'<span class="atl-scanhead-id">SCAN #{escape(str(scan["id"]))}</span>'
@@ -1186,6 +1306,11 @@ def render_scan_detail(scan: dict[str, Any]) -> None:
         cifras.metric("Activos", len(scan["assets"]))
         cifras.metric("Hallazgos", total_findings)
         cifras.metric("Sin triar", _sin_triar(scan))
+
+    # Después del score y antes de los activos: el score sigue siendo lo
+    # primero que se ve, y la comparación no queda enterrada bajo cien
+    # activos plegados.
+    render_comparacion(scan, otros or [])
 
     _seccion("Activos", f"{len(scan['assets'])}")
     if not scan["assets"]:
@@ -1317,7 +1442,10 @@ with tab_escaneos:
 
         detalle = api_get(f"/scans/{scan_id}")
         if detalle is not None:
-            render_scan_detail(detalle)
+            otros = [
+                s for s in scans if s["domain"] == detalle["domain"] and s["id"] != detalle["id"]
+            ]
+            render_scan_detail(detalle, otros)
 
 with tab_preguntar:
     _seccion("Consulta en lenguaje natural")
