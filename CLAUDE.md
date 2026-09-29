@@ -558,8 +558,8 @@ salen de la paleta de Streamlit y no de la escala de severidad propia.
 **Verificación visual.** El aspecto no se da por bueno sin mirarlo: `_shot.py`
 (raíz del repo, fuera del paquete) levanta un navegador real contra el
 dashboard en marcha y captura inicio, listado, detalle, activo desplegado,
-escaneo grande, triaje con IA, respuesta en lenguaje natural y el estado con
-la API caída, en `.claude/shots/`. Las capturas en verde no sustituyen a la
+escaneo grande, triaje con IA, comparación entre escaneos, respuesta en
+lenguaje natural y el estado con la API caída, en `.claude/shots/`. Las capturas en verde no sustituyen a la
 suite: `tests/test_dashboard.py` sigue comprobando el comportamiento con
 `AppTest`, nunca el estilo.
 
@@ -931,7 +931,8 @@ paquete — Playwright; `playwright` no está en las dependencias declaradas)
 abre un
 navegador real contra el dashboard en marcha y captura pantallas en
 `.claude/shots/`, reutilizando los escaneos que ya hay en BD; `--scan` lanza
-además uno real contra `scanme.nmap.org` y `--triage` lo tría. Puerto por
+además uno real contra `scanme.nmap.org`, `--triage` lo tría y `--diff` pulsa
+«Comparar» sobre el escaneo grande (con la demo sembrada, github.com). Puerto por
 defecto 8502: con `streamlit run` (8501) hay que pasar `--port 8501`.
 Requiere la API y el dashboard ya arrancados y `playwright install` hecho
 una vez.

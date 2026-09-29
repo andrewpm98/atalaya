@@ -6,7 +6,7 @@ defecto (tardan minutos y hacen red): reutiliza los que ya hay en la base de
 datos. Con `--scan` sí lanza uno real contra `scanme.nmap.org`.
 
 Uso:
-    python _shot.py [--port 8502] [--out .claude/shots] [--scan] [--triage]
+    python _shot.py [--port 8502] [--out .claude/shots] [--scan] [--triage] [--ask] [--diff]
 """
 
 from __future__ import annotations
@@ -57,6 +57,9 @@ def main() -> None:
     ap.add_argument("--scan", action="store_true", help="lanza un escaneo real (lento)")
     ap.add_argument("--triage", action="store_true", help="pulsa el botón de triaje con IA")
     ap.add_argument("--ask", action="store_true", help="lanza una pregunta real a la IA")
+    ap.add_argument(
+        "--diff", action="store_true", help="pulsa «Comparar» (llama a la IA; sin ella, respaldo)"
+    )
     args = ap.parse_args()
 
     out = pathlib.Path(args.out).resolve()
@@ -127,6 +130,22 @@ def main() -> None:
             _snap(page, out, "07b_escaneo_grande_activo")
         except Exception as exc:  # noqa: BLE001 - script de usar y tirar
             print("  !! no se pudo abrir github.com:", exc)
+
+        # 10 — «Comparar con» sobre el escaneo abierto (en la demo, github.com
+        # tiene dos). Con `--diff` porque la valoración llama al modelo.
+        if args.diff:
+            boton = page.get_by_role("button", name="Comparar", exact=True)
+            if boton.count():
+                boton.click()
+                page.wait_for_selector(
+                    "text=Valoración IA", timeout=180000
+                )  # panel del modelo, o el aviso del respaldo sin IA
+                page.wait_for_timeout(1200)
+                page.locator('[class*="st-key-atl-cifras-diff"]').scroll_into_view_if_needed()
+                _snap(page, out, "10_comparacion_viewport", full=False)
+                _snap(page, out, "10b_comparacion_full")
+            else:
+                print("  !! no hay «Comparar» (un solo escaneo de ese dominio)")
 
         # 08 — pestaña Preguntar (con `--ask`, con una respuesta real de la IA).
         page.get_by_role("tab", name="Preguntar").click()
