@@ -166,7 +166,9 @@ automáticamente cada uno con:
   `Secure`, `HttpOnly` y `SameSite` (se registra su nombre, nunca su valor).
 - **TLS** — versión de protocolo, emisor y caducidad del certificado;
   marca como hallazgo un certificado caducado o a menos de 30 días de
-  caducar, y versiones obsoletas (TLS 1.0/1.1).
+  caducar, versiones obsoletas (TLS 1.0/1.1), un certificado que no cubre el
+  hostname y una cadena que no lleva a una CA de confianza (autofirmado,
+  raíz desconocida o intermedio no enviado).
 
 No hace falta invocar nada aparte: es parte del mismo escaneo. Los hallazgos
 resultantes entran al mismo flujo que el resto — triaje por IA

@@ -23,6 +23,9 @@ dependencies = [
     "httpx>=0.27",
     "dnspython>=2.6",
     "cryptography>=42.0",
+    # Almacén de CA de Mozilla para validar cadenas TLS (discovery/tls.py).
+    # Llega con httpx; se declara porque se importa directamente.
+    "certifi>=2024.2.2",
     # IA
     "anthropic>=0.34",
     "google-genai>=1.0",
@@ -68,6 +71,10 @@ extend-immutable-calls = ["fastapi.Depends"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    # Levanta un servidor TLS en 127.0.0.1 (no sale de la maquina): tests/test_tls.py.
+    "tls_local: prueba de integracion TLS contra un servidor local",
+]
 
 [[tool.mypy.overrides]]
 # Sin stubs de tipos ni marcador py.typed — no es algo que se pueda

@@ -100,7 +100,8 @@ src/atalaya/
 │   │                             Referrer-Policy/Permissions-Policy,
 │   │                             redirección HTTP→HTTPS (sonda en paralelo)
 │   │                             y cookies (Secure/HttpOnly/SameSite)
-│   ├── tls.py                     inspect_tls() — versión, emisor, caducidad
+│   ├── tls.py                     inspect_tls() — versión, emisor, caducidad,
+│   │                             hostname (SAN) y cadena de confianza (certifi)
 │   ├── takeover.py                find_takeover_candidates() — riesgo de
 │   │                             subdomain takeover vía patrón de CNAME
 │   │                             (reconocimiento pasivo puro, nunca HTTP)
@@ -306,7 +307,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **421 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **441 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -317,7 +318,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -703,12 +704,10 @@ capturado con los datos sembrados y una pregunta del guion respondida.
   detrás (eso exigiría enviar payloads específicos por protocolo, más
   intrusivo). Un barrido completo de los 65535 puertos tampoco está
   contemplado, por la misma razón de intrusividad acotada.
-- **TLS: sin validar cadena de confianza ni hostname del certificado.**
-  `discovery/tls.py` inspecciona el certificado que presenta el servidor
-  (versión, emisor, caducidad) con `verify_mode=CERT_NONE` a propósito —
-  necesita poder reportar un certificado autofirmado o caducado, no
-  rechazarlo antes de verlo — pero no comprueba si la cadena es válida ni si
-  el certificado corresponde al hostname consultado (mismatch de SAN/CN).
+- **TLS: solo el puerto 443 y un error de cadena por host.** OpenSSL
+  reporta el primer fallo de verificación que encuentra: si un certificado
+  tiene varios problemas de cadena, sale uno. Tampoco se inspecciona TLS en
+  otros puertos abiertos (p. ej. 8443) ni la configuración de cifrados.
 - **Cabeceras: sin CORS, y solo la portada.** `discovery/headers.py`
   evalúa la raíz (`/`) de cada host: las seis cabeceras del enunciado sobre
   la respuesta **final**, las cookies de toda la cadena de redirecciones y
@@ -737,6 +736,21 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**TLS: sin validar cadena de confianza ni hostname**~~ → dos hallazgos
+  nuevos en `discovery/tls.py`. `tls_hostname_no_coincide`: comprobación sin
+  red sobre los SAN del certificado, con las reglas de un navegador (RFC 6125:
+  comodín solo como etiqueta izquierda completa, sin recurrir al CN).
+  `tls_cadena_no_confiable`: segunda negociación **con** verificación, en
+  paralelo con la de inspección, contra el almacén de Mozilla (`certifi`) y
+  no el del sistema, que cambia entre Windows y Debian. Se desactiva
+  `VERIFY_X509_STRICT`: Python 3.13+ lo activa por defecto y rechaza
+  certificados que los navegadores aceptan, así que el mismo certificado
+  salía válido en Docker (3.11) y no confiable en desarrollo (3.14). La
+  caducidad no se duplica. Verificado en real contra `badssl.com` (autofirmado,
+  nombre equivocado, raíz no confiable, caducado, cadena incompleta) y
+  `github.com` como control, en Python 3.14 local y 3.11 en Docker, con el
+  mismo resultado. Tests con un servidor TLS real en `127.0.0.1` y
+  certificados generados en memoria (marcador `tls_local`).
 - ~~**El diff del dashboard dependía de la IA**~~ (el endpoint da 502 si falla
   el proveedor, y con él se perdían los hostnames, que son puro cálculo) →
   `GET /scans/{id}/diff/{other_id}?analysis=false` devuelve solo el cálculo,
@@ -911,7 +925,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 421)
+pytest -q                            # tests (deben pasar los 441)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
