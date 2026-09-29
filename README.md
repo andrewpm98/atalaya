@@ -162,7 +162,8 @@ automáticamente cada uno con:
   correo, bases de datos, gestión remota), concurrencia limitada por host.
 - **Cabeceras de seguridad HTTP** — HSTS, CSP, X-Frame-Options,
   X-Content-Type-Options, Referrer-Policy y Permissions-Policy; además,
-  que el acceso por HTTP redirija a HTTPS.
+  que el acceso por HTTP redirija a HTTPS y que las cookies lleven
+  `Secure`, `HttpOnly` y `SameSite` (se registra su nombre, nunca su valor).
 - **TLS** — versión de protocolo, emisor y caducidad del certificado;
   marca como hallazgo un certificado caducado o a menos de 30 días de
   caducar, y versiones obsoletas (TLS 1.0/1.1).

@@ -97,8 +97,9 @@ src/atalaya/
 │   │                             opcional (SHODAN_API_KEY vacía = se omite)
 │   ├── ports.py                  scan_ports() — TCP asíncrono, puertos comunes
 │   ├── headers.py                 analyze_headers() — HSTS/CSP/XFO/XCTO/
-│   │                             Referrer-Policy/Permissions-Policy y
+│   │                             Referrer-Policy/Permissions-Policy,
 │   │                             redirección HTTP→HTTPS (sonda en paralelo)
+│   │                             y cookies (Secure/HttpOnly/SameSite)
 │   ├── tls.py                     inspect_tls() — versión, emisor, caducidad
 │   ├── takeover.py                find_takeover_candidates() — riesgo de
 │   │                             subdomain takeover vía patrón de CNAME
@@ -305,7 +306,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **406 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **416 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -316,7 +317,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -702,12 +703,12 @@ capturado con los datos sembrados y una pregunta del guion respondida.
   necesita poder reportar un certificado autofirmado o caducado, no
   rechazarlo antes de verlo — pero no comprueba si la cadena es válida ni si
   el certificado corresponde al hostname consultado (mismatch de SAN/CN).
-- **Cabeceras: solo la respuesta final, sin CORS ni cookies.**
-  `discovery/headers.py` sigue redirecciones (`follow_redirects=True`) y
-  evalúa las seis cabeceras que pide el enunciado sobre la respuesta
-  **final**; no evalúa `Access-Control-Allow-Origin` ni cookies
-  (`Set-Cookie` con `Secure`/`HttpOnly`/`SameSite`). La redirección
-  HTTP → HTTPS sí se comprueba (ver "Resuelta").
+- **Cabeceras: sin CORS, y solo la portada.** `discovery/headers.py`
+  evalúa la raíz (`/`) de cada host: las seis cabeceras del enunciado sobre
+  la respuesta **final**, las cookies de toda la cadena de redirecciones y
+  la redirección HTTP → HTTPS (ver "Resuelta"). No evalúa
+  `Access-Control-Allow-Origin` (tendría sentido en rutas de API, no en la
+  portada) ni cookies que solo se fijen en otras rutas (login, etc.).
 - **Enumeración limitada a lo certificado o indexado.** Un subdominio que
   nunca tuvo certificado (crt.sh) ni aparece en Shodan no se descubre:
   contrapartida inherente al enfoque pasivo (sin fuerza bruta de nombres).
@@ -733,6 +734,15 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**Cookies sin evaluar**~~ → `headers.py::evaluate_cookies()`:
+  `cookie_sin_secure` (solo en sitios HTTPS), `cookie_sin_httponly` y
+  `cookie_sin_samesite`, **uno por tipo y host** con los nombres afectados
+  (veinte cookies mal configuradas son un problema, no veinte que inflen el
+  score). Mira también las `Set-Cookie` de las redirecciones intermedias
+  (`response.history`). **Nunca guarda el valor** de una cookie: puede ser un
+  token de sesión, y la evidencia va a BD, al proveedor de IA y al PDF (hay un
+  test). Verificado en real: en `github.com` solo sale `_octo` sin `HttpOnly`
+  (analítica); `_gh_sess` y `logged_in` están bien configuradas.
 - ~~**No se comprobaba que HTTP redirigiera a HTTPS**~~ (solo se caía a HTTP
   si HTTPS no respondía, lo que genera `sin_https`) → `analyze_headers()` pide
   HTTP en paralelo con HTTPS: si HTTPS responde y el acceso por HTTP no acaba
@@ -884,7 +894,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 406)
+pytest -q                            # tests (deben pasar los 416)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

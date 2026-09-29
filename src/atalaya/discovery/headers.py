@@ -2,7 +2,8 @@
 
 Evalúa las cabeceras que más influyen en el riesgo real de un sitio web:
 HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy y
-Permissions-Policy. Degradación controlada, igual criterio que
+Permissions-Policy; además, que HTTP redirija a HTTPS y los atributos de
+seguridad de las cookies que fija el sitio (`Secure`/`HttpOnly`/`SameSite`). Degradación controlada, igual criterio que
 `discovery/subdomains.py`: un host que no responde no aborta el análisis del
 resto del escaneo — se refleja en `HeaderScanResult.error`, nunca lanzando
 excepción.
@@ -144,6 +145,114 @@ def evaluate_headers(headers: httpx.Headers) -> list[DiscoveryFinding]:
     return [finding for check in _CHECKS if (finding := check(headers)) is not None]
 
 
+#: Nombres de cookie que se citan en la evidencia, como mucho. Un sitio grande
+#: puede fijar decenas; el resto se resume con un recuento.
+_MAX_COOKIES_EN_EVIDENCIA = 8
+
+
+def _set_cookie_headers(response: httpx.Response) -> list[str]:
+    """Todas las `Set-Cookie` de la respuesta final **y de las redirecciones**
+    que llevaron a ella: una cookie de sesión fijada en el 302 del login se
+    perdería mirando solo la respuesta final (httpx guarda las intermedias en
+    `response.history`)."""
+    return [
+        value
+        for step in (*response.history, response)
+        for value in step.headers.get_list("set-cookie")
+    ]
+
+
+def _parse_set_cookie(value: str) -> tuple[str, dict[str, str]]:
+    """(nombre, atributos en minúsculas) de una cabecera `Set-Cookie`.
+
+    El valor de la cookie se descarta aquí mismo y nunca sale de esta
+    función: puede ser un token de sesión, y la evidencia de un hallazgo se
+    persiste en BD, se envía al proveedor de IA y acaba en el informe PDF.
+    """
+    first, *attributes = value.split(";")
+    name = first.partition("=")[0].strip()
+    parsed: dict[str, str] = {}
+    for attribute in attributes:
+        key, _, raw = attribute.strip().partition("=")
+        if key:
+            parsed[key.strip().lower()] = raw.strip()
+    return name, parsed
+
+
+def _lista_de_cookies(names: list[str]) -> str:
+    shown = names[:_MAX_COOKIES_EN_EVIDENCIA]
+    rest = len(names) - len(shown)
+    return ", ".join(shown) + (f" y {rest} más" if rest else "")
+
+
+def evaluate_cookies(set_cookies: list[str], *, https: bool) -> list[DiscoveryFinding]:
+    """Hallazgos por atributos de seguridad ausentes en las cookies fijadas.
+
+    Uno por tipo de problema y host, con la lista de cookies afectadas — no
+    uno por cookie: un sitio con veinte cookies sin `SameSite` es un único
+    problema de configuración, no veinte hallazgos que inflarían el
+    `risk_score` por volumen (ver `core/scoring.py`).
+
+    - ``cookie_sin_secure``: solo si el sitio se sirvió por HTTPS. Sin
+      `Secure`, el navegador la envía también por HTTP en claro. En un sitio
+      que solo habla HTTP el problema de fondo ya es ``sin_https``.
+    - ``cookie_sin_httponly``: legible desde JavaScript, así que un XSS
+      puede robarla. No toda cookie la necesita (preferencias, token CSRF de
+      doble envío): la severidad la decide el triaje con el nombre delante.
+    - ``cookie_sin_samesite``: sin atributo explícito, la protección frente a
+      CSRF depende del valor por defecto de cada navegador.
+
+    Pura y sin red, como `evaluate_headers`.
+    """
+    sin_secure: list[str] = []
+    sin_httponly: list[str] = []
+    sin_samesite: list[str] = []
+    for value in set_cookies:
+        name, attributes = _parse_set_cookie(value)
+        if not name:
+            continue
+        if https and "secure" not in attributes and name not in sin_secure:
+            sin_secure.append(name)
+        if "httponly" not in attributes and name not in sin_httponly:
+            sin_httponly.append(name)
+        if "samesite" not in attributes and name not in sin_samesite:
+            sin_samesite.append(name)
+
+    findings = []
+    if sin_secure:
+        findings.append(
+            DiscoveryFinding(
+                finding_type="cookie_sin_secure",
+                evidence=(
+                    f"Cookies sin atributo Secure en un sitio HTTPS: {_lista_de_cookies(sin_secure)}. "
+                    "El navegador también las enviaría en una petición HTTP en claro."
+                ),
+            )
+        )
+    if sin_httponly:
+        findings.append(
+            DiscoveryFinding(
+                finding_type="cookie_sin_httponly",
+                evidence=(
+                    f"Cookies sin atributo HttpOnly: {_lista_de_cookies(sin_httponly)}. "
+                    "Son legibles desde JavaScript: un XSS podría leerlas."
+                ),
+            )
+        )
+    if sin_samesite:
+        findings.append(
+            DiscoveryFinding(
+                finding_type="cookie_sin_samesite",
+                evidence=(
+                    f"Cookies sin atributo SameSite: {_lista_de_cookies(sin_samesite)}. "
+                    "Su envío en peticiones entre sitios (CSRF) queda al criterio "
+                    "por defecto de cada navegador."
+                ),
+            )
+        )
+    return findings
+
+
 def _http_sin_redireccion(
     hostname: str | None, http_url: str, response: httpx.Response
 ) -> DiscoveryFinding | None:
@@ -184,7 +293,7 @@ async def _fetch(client: httpx.AsyncClient, url: str) -> httpx.Response | httpx.
 async def analyze_headers(
     url: str, *, client: httpx.AsyncClient | None = None
 ) -> HeaderScanResult:
-    """Evalúa las cabeceras de seguridad de *url*.
+    """Evalúa las cabeceras de seguridad y las cookies de *url*.
 
     Si *url* es HTTPS se pide también su equivalente HTTP, en paralelo, que
     sirve para dos cosas:
@@ -221,6 +330,9 @@ async def analyze_headers(
 
         if isinstance(primary, httpx.Response):
             findings = evaluate_headers(primary.headers)
+            findings += evaluate_cookies(
+                _set_cookie_headers(primary), https=primary.url.scheme == "https"
+            )
             if http_url is not None and isinstance(fallback, httpx.Response):
                 redirect = _http_sin_redireccion(hostname, http_url, fallback)
                 if redirect is not None:
@@ -230,6 +342,7 @@ async def analyze_headers(
         if http_url is not None and isinstance(fallback, httpx.Response):
             # Solo respondió por HTTP, no por HTTPS.
             findings = evaluate_headers(fallback.headers)
+            findings += evaluate_cookies(_set_cookie_headers(fallback), https=False)
             findings.append(
                 DiscoveryFinding(
                     finding_type="sin_https",

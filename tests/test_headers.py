@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import httpx
 
-from atalaya.discovery.headers import analyze_headers, evaluate_headers
+from atalaya.discovery.headers import analyze_headers, evaluate_cookies, evaluate_headers
 
 _SECURE_HEADERS = {
     "strict-transport-security": "max-age=31536000; includeSubDomains",
@@ -246,3 +246,105 @@ async def test_https_y_http_se_piden_en_paralelo() -> None:
         return httpx.Response(301, headers={"location": "https://ejemplo.com/"})
 
     assert await _analiza(handler) == []
+
+
+# ─── Cookies ─────────────────────────────────────────────────────────────
+
+
+def _tipos(findings: list) -> dict[str, str]:
+    return {f.finding_type: f.evidence for f in findings}
+
+
+def test_cookie_con_todos_los_atributos_no_da_hallazgos() -> None:
+    cookie = "sesion=abc; Path=/; Secure; HttpOnly; SameSite=Lax"
+    assert evaluate_cookies([cookie], https=True) == []
+
+
+def test_cada_atributo_ausente_es_un_hallazgo_distinto() -> None:
+    hallazgos = _tipos(evaluate_cookies(["sesion=abc; Path=/"], https=True))
+    assert set(hallazgos) == {"cookie_sin_secure", "cookie_sin_httponly", "cookie_sin_samesite"}
+    assert all("sesion" in evidencia for evidencia in hallazgos.values())
+
+
+def test_atributos_sin_distinguir_mayusculas_ni_espacios() -> None:
+    cookie = "sesion=abc;secure ;  HTTPONLY;samesite=strict"
+    assert evaluate_cookies([cookie], https=True) == []
+
+
+def test_secure_solo_se_exige_en_sitios_https() -> None:
+    """En un sitio solo HTTP el problema de fondo ya es `sin_https`."""
+    tipos = _tipos(evaluate_cookies(["sesion=abc; HttpOnly; SameSite=Lax"], https=False))
+    assert tipos == {}
+
+
+def test_un_hallazgo_por_tipo_con_todas_las_cookies_afectadas() -> None:
+    """Veinte cookies sin SameSite son un problema de configuración, no veinte
+    hallazgos que inflen el score por volumen."""
+    cookies = [f"c{i}=v; Secure; HttpOnly" for i in range(20)]
+    hallazgos = evaluate_cookies(cookies, https=True)
+
+    assert [f.finding_type for f in hallazgos] == ["cookie_sin_samesite"]
+    evidencia = hallazgos[0].evidence
+    assert "c0, c1" in evidencia and "y 12 más" in evidencia
+
+
+def test_una_cookie_repetida_se_cita_una_vez() -> None:
+    hallazgos = evaluate_cookies(["a=1", "a=2"], https=False)
+    assert all(f.evidence.count("a") >= 1 and ": a." in f.evidence for f in hallazgos)
+
+
+def test_el_valor_de_la_cookie_nunca_llega_a_la_evidencia() -> None:
+    """Puede ser un token de sesión, y la evidencia se guarda en BD, se manda
+    al proveedor de IA y sale en el PDF."""
+    secreto = "eyJhbGciOiJIUzI1NiJ9.TOKEN-DE-SESION"
+    hallazgos = evaluate_cookies([f"_session={secreto}; Path=/; Domain=ejemplo.com"], https=True)
+
+    assert hallazgos
+    for hallazgo in hallazgos:
+        assert "_session" in hallazgo.evidence
+        assert secreto not in hallazgo.evidence
+        assert "TOKEN" not in hallazgo.evidence
+
+
+def test_cabecera_malformada_sin_nombre_se_ignora() -> None:
+    assert evaluate_cookies(["", "; Secure", "=valor"], https=True) == []
+
+
+async def test_analyze_headers_incluye_cookies_fijadas_en_redirecciones() -> None:
+    """Una cookie de sesión fijada en un 302 intermedio se perdería mirando
+    solo la respuesta final."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "http":
+            return httpx.Response(301, headers={"location": "https://ejemplo.com/"})
+        if request.url.path == "/":
+            return httpx.Response(
+                302,
+                headers=[("location", "https://ejemplo.com/inicio"), ("set-cookie", "tmp=1")],
+            )
+        return httpx.Response(
+            200,
+            headers=[
+                *_SECURE_HEADERS.items(),
+                ("set-cookie", "final=2; Secure; HttpOnly; SameSite=Lax"),
+            ],
+        )
+
+    tipos = _tipos((await _analisis_completo(handler)).findings)
+    assert set(tipos) == {"cookie_sin_secure", "cookie_sin_httponly", "cookie_sin_samesite"}
+    assert all("tmp" in evidencia and "final" not in evidencia for evidencia in tipos.values())
+
+
+async def test_analyze_headers_solo_http_evalua_cookies_sin_exigir_secure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "https":
+            raise httpx.ConnectError("conexión rechazada", request=request)
+        return httpx.Response(200, headers=[*_SECURE_HEADERS.items(), ("set-cookie", "s=1")])
+
+    tipos = set(_tipos((await _analisis_completo(handler)).findings))
+    assert tipos == {"sin_https", "cookie_sin_httponly", "cookie_sin_samesite"}
+
+
+async def _analisis_completo(handler):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        return await analyze_headers("https://ejemplo.com/", client=client)
