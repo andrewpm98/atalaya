@@ -63,7 +63,7 @@ Cada técnica es un módulo independiente con salida normalizada:
 | `subdomains`   | Subdominios, verificados por DNS y filtrados de wildcards DNS (§7.6) | crt.sh (CT logs) + `shodan` (opcional), concurrentes, fusionados por hostname |
 | `shodan`       | Segunda fuente de subdominios                  | API DNS de Shodan (`SHODAN_API_KEY` opcional — sin ella, se omite sin incidencia) |
 | `ports`        | Puertos TCP abiertos (`COMMON_PORTS` por defecto) | Conexión asíncrona, concurrencia acotada |
-| `headers`      | HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy | Petición HTTP(S) |
+| `headers`      | HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy; redirección HTTP → HTTPS (`http_sin_redireccion_https`) | Petición HTTPS y, en paralelo, HTTP (que además sirve de respaldo para `sin_https`) |
 | `tls`          | Versión de protocolo, emisor, caducidad del certificado | `cryptography` sobre el `ssl_object` de la conexión |
 | `takeover`     | Riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de terceros) | Resolución DNS de CNAME sobre hosts **sin** A/AAAA — reconocimiento pasivo puro (la verificación, opcional, vive en `takeover_verify`) |
 | `takeover_verify` | Verificación HTTP **opt-in** (`TAKEOVER_VERIFY`) de un candidato: huella de "recurso no reclamado" en la página de error del proveedor | `GET` al destino del CNAME — off por defecto, gated por `SCAN_ALLOWLIST`, con auditoría (ver §8.3) |

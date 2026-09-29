@@ -98,10 +98,16 @@ def _client_con_respuesta(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+def _redirige_http_a_https(request: httpx.Request) -> httpx.Response | None:
+    """Comportamiento correcto de un servidor: HTTP → 301 a la misma ruta en HTTPS."""
+    if request.url.scheme == "http":
+        return httpx.Response(301, headers={"location": str(request.url.copy_with(scheme="https"))})
+    return None
+
+
 async def test_analyze_headers_https_ok_sin_hallazgos() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.scheme == "https"
-        return httpx.Response(200, headers=_SECURE_HEADERS)
+        return _redirige_http_a_https(request) or httpx.Response(200, headers=_SECURE_HEADERS)
 
     async with _client_con_respuesta(handler) as client:
         resultado = await analyze_headers("https://ejemplo.com/", client=client)
@@ -147,3 +153,96 @@ async def test_analyze_headers_host_totalmente_inalcanzable_degrada_con_gracia()
 
     assert resultado.findings == []
     assert resultado.error is not None
+
+
+# ─── Redirección HTTP → HTTPS ────────────────────────────────────────────
+
+
+async def _analiza(handler) -> list[str]:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=True
+    ) as client:
+        resultado = await analyze_headers("https://ejemplo.com/", client=client)
+    assert resultado.error is None
+    return [f.finding_type for f in resultado.findings]
+
+
+async def test_http_que_sirve_contenido_sin_redirigir_es_hallazgo() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers=_SECURE_HEADERS)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=True
+    ) as client:
+        resultado = await analyze_headers("https://ejemplo.com/", client=client)
+
+    assert [f.finding_type for f in resultado.findings] == ["http_sin_redireccion_https"]
+    evidencia = resultado.findings[0].evidence
+    assert "http://ejemplo.com/" in evidencia and "200" in evidencia
+    # El resultado sigue siendo el del análisis por HTTPS, no el de la sonda.
+    assert resultado.checked_url == "https://ejemplo.com/"
+
+
+async def test_redireccion_en_cadena_que_acaba_en_https_no_es_hallazgo() -> None:
+    """http://ejemplo.com → http://www.ejemplo.com → https://www.ejemplo.com."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "http" and request.url.host == "ejemplo.com":
+            return httpx.Response(302, headers={"location": "http://www.ejemplo.com/"})
+        if request.url.scheme == "http":
+            return httpx.Response(301, headers={"location": "https://www.ejemplo.com/"})
+        return httpx.Response(200, headers=_SECURE_HEADERS)
+
+    assert await _analiza(handler) == []
+
+
+async def test_redireccion_a_https_de_otro_host_no_es_hallazgo() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "http":
+            return httpx.Response(301, headers={"location": "https://ejemplo.net/"})
+        return httpx.Response(200, headers=_SECURE_HEADERS)
+
+    assert await _analiza(handler) == []
+
+
+async def test_http_que_no_responde_no_es_hallazgo() -> None:
+    """Puerto 80 cerrado o filtrado: no se sirve nada en claro."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "http":
+            raise httpx.ConnectError("conexión rechazada", request=request)
+        return httpx.Response(200, headers=_SECURE_HEADERS)
+
+    assert await _analiza(handler) == []
+
+
+async def test_solo_http_da_sin_https_y_no_duplica_con_la_redireccion() -> None:
+    """Si HTTPS no responde, el hallazgo es `sin_https`: que tampoco redirija
+    es la misma causa y no se cuenta dos veces."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "https":
+            raise httpx.ConnectError("conexión rechazada", request=request)
+        return httpx.Response(200, headers=_SECURE_HEADERS)
+
+    assert await _analiza(handler) == ["sin_https"]
+
+
+async def test_https_y_http_se_piden_en_paralelo() -> None:
+    """En serie, un puerto 80 filtrado sumaría un timeout entero por host: la
+    sonda HTTP arranca sin esperar a que HTTPS termine."""
+    import asyncio
+
+    https_empezada = asyncio.Event()
+    http_empezada = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.scheme == "https":
+            https_empezada.set()
+            await asyncio.wait_for(http_empezada.wait(), timeout=2)
+            return httpx.Response(200, headers=_SECURE_HEADERS)
+        http_empezada.set()
+        await asyncio.wait_for(https_empezada.wait(), timeout=2)
+        return httpx.Response(301, headers={"location": "https://ejemplo.com/"})
+
+    assert await _analiza(handler) == []

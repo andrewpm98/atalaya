@@ -15,6 +15,7 @@ sin red, mismo criterio que `parse_crtsh_payload`/`fetch_crtsh` en
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -143,15 +144,60 @@ def evaluate_headers(headers: httpx.Headers) -> list[DiscoveryFinding]:
     return [finding for check in _CHECKS if (finding := check(headers)) is not None]
 
 
+def _http_sin_redireccion(
+    hostname: str | None, http_url: str, response: httpx.Response
+) -> DiscoveryFinding | None:
+    """Hallazgo si el acceso por HTTP no acaba en HTTPS.
+
+    `response` es la de `http_url` siguiendo redirecciones: si la URL final es
+    HTTPS, el servidor redirige (directamente o en cadena) y no hay hallazgo.
+    Si no, sirve contenido en claro. HSTS no lo compensa del todo: solo protege
+    a partir de la primera visita por HTTPS (salvo que el dominio esté en la
+    lista de precarga), y esa primera petición en claro es justo la que un
+    atacante en ruta puede interceptar (SSL stripping).
+    """
+    if response.url.scheme == "https":
+        return None
+    return DiscoveryFinding(
+        finding_type="http_sin_redireccion_https",
+        evidence=(
+            f"{http_url} responde {response.status_code} por HTTP sin redirigir a HTTPS "
+            f"(URL final: {response.url}): el acceso sin cifrar no se eleva a TLS."
+        ),
+    )
+
+
+async def _fetch(client: httpx.AsyncClient, url: str) -> httpx.Response | httpx.HTTPError:
+    """GET que devuelve el error en vez de lanzarlo, para poder lanzar las dos
+    peticiones (HTTPS y HTTP) a la vez con `asyncio.gather` y decidir después.
+
+    Sigue redirecciones por petición, no por configuración del cliente: la
+    comprobación HTTP → HTTPS mira la URL final y no puede depender de cómo
+    se haya construido el cliente que se le pasa.
+    """
+    try:
+        return await client.get(url, follow_redirects=True)
+    except httpx.HTTPError as exc:
+        return exc
+
+
 async def analyze_headers(
     url: str, *, client: httpx.AsyncClient | None = None
 ) -> HeaderScanResult:
     """Evalúa las cabeceras de seguridad de *url*.
 
-    Si *url* es HTTPS y no responde, se reintenta por HTTP antes de darse
-    por vencido: así se distingue "el host no tiene servicio HTTP" de "el
-    servicio solo se ofrece sin cifrar", que es un hallazgo en sí mismo
-    (``sin_https``).
+    Si *url* es HTTPS se pide también su equivalente HTTP, en paralelo, que
+    sirve para dos cosas:
+
+    - si HTTPS responde, comprobar que HTTP redirige a HTTPS
+      (``http_sin_redireccion_https`` si no). Que HTTP no responda (p. ej.
+      puerto 80 cerrado) no es un hallazgo: no se sirve nada en claro;
+    - si HTTPS no responde, distinguir "el host no tiene servicio HTTP" de
+      "el servicio solo se ofrece sin cifrar", que es un hallazgo en sí
+      mismo (``sin_https``).
+
+    En paralelo y no en secuencia porque un puerto 80 filtrado no contesta
+    nunca: en serie, cada host así sumaría un timeout completo al escaneo.
     """
     hostname = httpx.URL(url).host
     owns_client = client is None
@@ -163,31 +209,37 @@ async def analyze_headers(
             headers={"User-Agent": "Atalaya-ASM/0.1"},
         )
 
-    targets = [url]
-    if url.startswith("https://"):
-        targets.append("http://" + url.removeprefix("https://"))
+    http_url = "http://" + url.removeprefix("https://") if url.startswith("https://") else None
 
     try:
-        last_error: Exception | None = None
-        for index, target in enumerate(targets):
-            try:
-                response = await client.get(target)
-            except httpx.HTTPError as exc:
-                last_error = exc
-                continue
+        if http_url is None:
+            primary, fallback = await _fetch(client, url), None
+        else:
+            primary, fallback = await asyncio.gather(
+                _fetch(client, url), _fetch(client, http_url)
+            )
 
-            findings = evaluate_headers(response.headers)
-            if index > 0:  # solo respondió por HTTP, no por HTTPS
-                findings.append(
-                    DiscoveryFinding(
-                        finding_type="sin_https",
-                        evidence=f"{hostname} solo respondió por HTTP ({target}), sin TLS.",
-                    )
+        if isinstance(primary, httpx.Response):
+            findings = evaluate_headers(primary.headers)
+            if http_url is not None and isinstance(fallback, httpx.Response):
+                redirect = _http_sin_redireccion(hostname, http_url, fallback)
+                if redirect is not None:
+                    findings.append(redirect)
+            return HeaderScanResult(hostname=hostname, checked_url=url, findings=findings)
+
+        if http_url is not None and isinstance(fallback, httpx.Response):
+            # Solo respondió por HTTP, no por HTTPS.
+            findings = evaluate_headers(fallback.headers)
+            findings.append(
+                DiscoveryFinding(
+                    finding_type="sin_https",
+                    evidence=f"{hostname} solo respondió por HTTP ({http_url}), sin TLS.",
                 )
-            return HeaderScanResult(hostname=hostname, checked_url=target, findings=findings)
+            )
+            return HeaderScanResult(hostname=hostname, checked_url=http_url, findings=findings)
 
-        logger.warning("Análisis de cabeceras de %s falló: %s", hostname, last_error)
-        return HeaderScanResult(hostname=hostname, error=str(last_error))
+        logger.warning("Análisis de cabeceras de %s falló: %s", hostname, primary)
+        return HeaderScanResult(hostname=hostname, error=str(primary))
     finally:
         if owns_client:
             await client.aclose()
