@@ -26,9 +26,13 @@ diseño visual", con su tabla de trampas de Streamlit** — y después
 - **Cliente HTTP puro de la API.** El dashboard no importa `atalaya.core`,
   `atalaya.ai` ni `atalaya.reporting`. Si necesita un dato, lo pide a la API;
   si la API no lo ofrece, se reporta, no se esquiva.
-- **`risk_score` con los mismos pesos que `reporting/generator.py::
-  _RISK_WEIGHTS`.** Si divergen, el dashboard y el PDF del mismo escaneo
-  muestran números distintos.
+- **`risk_score`: el de la API, nunca recalculado.** Sale de
+  `core/scoring.py` (única fuente para el PDF y la API); replicar pesos aquí
+  volvería a dar números distintos a los del PDF.
+- **Campos añadidos a la API con `.get()`** (`cambiados` del diff,
+  `reused`/`model_calls` del triaje): el dashboard debe seguir pintándose
+  contra una API anterior. Todo dato que venga del objetivo (hostnames,
+  evidencia) se escapa con `escape()` antes de entrar en HTML.
 - **Piel visual:** fondo oscuro, un solo acento (`#00c8e8`), rojo exclusivo
   de la severidad crítica y de la API caída; monoespaciada para el dato
   técnico, Inter para la prosa; tablas compactas; cero decoración sin

@@ -22,7 +22,7 @@ vayas a cambiar, `api/schemas.py`, `core/repository.py` y su test.
 | `api/schemas.py` | Frontera Pydantic BD ↔ API: nunca se expone un modelo ORM |
 | `api/main.py` | `exception_handler`: `InvalidTargetError` → 400, `UnauthorizedTargetError` → 403, `AIProviderError` → 502 |
 | `core/repository.py` | Toda la lectura de BD. Ninguna ruta ni el dashboard construyen su propio `select()` |
-| `reporting/generator.py` + `templates/report.html` | PDF con portada, `risk_score` (`_RISK_WEIGHTS`), resumen ejecutivo opcional |
+| `reporting/generator.py` + `templates/report.html` | PDF con portada, `risk_score` (de `core/scoring.py`), resumen ejecutivo opcional |
 
 ## Reglas que no se negocian
 
@@ -35,10 +35,19 @@ vayas a cambiar, `api/schemas.py`, `core/repository.py` y su test.
     proveedor se genera igual, sin resumen. Era requisito obligatorio antes
     de que existiera la capa IA.
 - **`previous`/`current` del diff se deciden por `started_at`**, no por el
-  orden de la URL; dominios distintos → 400.
-- **`risk_score`: una sola fuente de verdad** (`_RISK_WEIGHTS`). El
-  dashboard replica esos pesos; si los cambias, el dashboard debe cambiar en
-  el mismo commit o mostrará un número distinto al del PDF.
+  orden de la URL; dominios distintos → 400. `diff_scans()` es puro cálculo
+  (sin sesión): `comunes` sigue completo y `cambiados` es el subconjunto con
+  cambios de estado, puertos o hallazgos. Hallazgos por `finding_type`, no
+  por evidencia; IPs no se comparan. Ambas cosas, y la reutilización del
+  triaje, asumen **como mucho un hallazgo por tipo y host**.
+- **Triaje:** sin `force`, la ruta reutiliza el triaje de otros escaneos del
+  dominio ante el mismo prompt exacto (`ai/triage_reuse.py`, alimentado por
+  `repository.list_triaged_findings()`); con `force`, nunca. Si todo se
+  reutiliza, no se instancia el proveedor. La lógica de comparación no se
+  duplica en la ruta.
+- **`risk_score`: una sola fuente de verdad**,
+  `core/scoring.py::compute_risk_score()`, para el PDF y la API. El
+  dashboard pinta el de la API; no replica pesos.
 - **Toda ruta que dispara descubrimiento** lo hace a través de
   `discovery/subdomains.py::enumerate_subdomains()`, que es quien llama a
   `ensure_authorized()` (restricción #1 de CLAUDE.md): no lo esquives
@@ -46,7 +55,14 @@ vayas a cambiar, `api/schemas.py`, `core/repository.py` y su test.
 - **`xhtml2pdf`, no WeasyPrint** (sin dependencias nativas en Windows);
   la conversión va en `asyncio.to_thread`.
 - Endpoint nuevo aún sin implementar: 501, no ausente (decisión de CLAUDE.md).
-  La API no tiene autenticación: no la despliegues con IP pública.
+  Autenticación opcional por `X-API-Key` (`api/security.py`), aplicada en
+  `api/main.py` a cada router: un router nuevo sin `require_api_key` hace
+  fallar `tests/test_api_auth.py`, que recorre el esquema OpenAPI.
+- **Grabaciones de la demo.** Si un cambio altera lo que recibe un agente
+  (p. ej. el contexto del diff), `tests/test_demo_data.py` avisa de que
+  `demo/ai_recordings.json` quedó obsoleta. Regrabar cuesta llamadas reales y
+  el crédito de Anthropic está agotado desde el 06/10/2026: **para y
+  pregunta** antes de un cambio así.
 
 ## Pruebas
 

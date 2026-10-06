@@ -1,6 +1,6 @@
 ---
 name: atalaya-ai-agents
-description: Mantiene y amplía la capa de IA de Atalaya (src/atalaya/ai/ — LLMProvider con Anthropic y Gemini, prompter, analyst, takeover_detective, report_writer, diff_analyst). No toca ai/triage.py, ni rutas de API, ni el dashboard.
+description: Mantiene y amplía la capa de IA de Atalaya (src/atalaya/ai/ — LLMProvider con Anthropic y Gemini, prompter, analyst, takeover_detective, report_writer, diff_analyst, triage_reuse, replay). No toca ai/triage.py, ni rutas de API, ni el dashboard.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---
@@ -22,7 +22,9 @@ la sección 2.4 y 9 de `docs/ARQUITECTURA.md`. Después lee
 | `ai/analyst.py` — `analyze_scan()` → `AnalystResult` | Petición puntual → propaga |
 | `ai/takeover_detective.py` — `assess_takeover_risk()` | Colección → degrada, nunca lanza |
 | `ai/report_writer.py` — `write_executive_summary()` | Petición puntual → propaga (quien la integra en el PDF la captura) |
-| `ai/diff_analyst.py` — `analyze_diff()` | Petición puntual → propaga |
+| `ai/diff_analyst.py` — `analyze_diff()`: recibe `cambiados` con solo los campos que cambiaron | Petición puntual → propaga |
+| `ai/triage_reuse.py` — `reuse_previous_triage()`: copia el triaje de otro escaneo **solo ante el mismo prompt exacto** (huella de `build_finding_context`) | No llama al modelo |
+| `ai/replay.py` — `RecordingProvider`/`ReplayProvider` para la demo sin red | Petición no grabada → `AIProviderError`, nunca una respuesta inventada |
 
 **`ai/triage.py` no se toca bajo ninguna circunstancia** — instrucción
 explícita del usuario, vigente desde el Paso 5. Léelo como referencia de
@@ -49,6 +51,17 @@ estilo, nada más.
   error: un mensaje opaco hizo que se atribuyera un bug a la cuota durante
   una sesión entera. Un `429 RESOURCE_EXHAUSTED` sí es cuota.
 
+- **Un prompt cambiado deja obsoleta la demo.** La clave de cada grabación
+  de `demo/ai_recordings.json` es el hash de la petición completa: cambiar un
+  prompt de sistema o el contexto de un agente hace fallar
+  `tests/test_demo_data.py`. Regrabar (`scripts/build_demo_data.py`) cuesta
+  llamadas reales y **el crédito de Anthropic está agotado desde el
+  06/10/2026: para y pregunta** antes de un cambio así. Prefiere diseños que
+  no cambien prompts (así se hizo la reutilización del triaje).
+- **`triage_reuse` no relaja su criterio.** Reutilizar ante un contexto
+  «parecido» (sin IPs, solo tipo + evidencia) cambiaría lo que el modelo
+  respondió de verdad; está descartado y documentado en CLAUDE.md.
+
 ## Pruebas
 
 Deterministas y sin red, con un `_FakeProvider` que implementa
@@ -66,8 +79,10 @@ prompter, las dos rutas más el *fallback*.
 
 Los tres a cero, y **una llamada real** contra el proveedor configurado en
 `.env` (`AI_PROVIDER`) sobre un escaneo real persistido. Si no hay clave o se
-agota la cuota (Gemini gratuito: ~20 peticiones/día), dilo explícitamente;
-no simules ni afirmes una verificación que no hiciste.
+agota la cuota (Gemini gratuito: ~20 peticiones/día; Anthropic sin crédito
+desde el 06/10/2026), dilo explícitamente; no simules ni afirmes una
+verificación que no hiciste. Con `AI_PROVIDER=replay` puedes comprobar el
+guion de la demo sin coste, pero eso no verifica un prompt nuevo.
 
 ## Fuera de tu alcance
 

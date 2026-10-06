@@ -44,6 +44,15 @@ de seguridad" y "Deuda técnica conocida") y las secciones 2.2, 7 y 8 de
   fallo en `error`/`errors`.
 - **El descubrimiento no conoce la persistencia.** Devuelve modelos de
   `discovery/models.py`, nunca un `Finding` de SQLAlchemy.
+- **Como mucho un hallazgo por tipo y host.** El diff entre escaneos
+  (`core/repository.py::diff_scans`) y la reutilización del triaje
+  (`ai/triage_reuse.py`) identifican un hallazgo por su `finding_type` dentro
+  de su activo. Una técnica que pueda dar varios del mismo tipo en un host
+  (p. ej. TLS en varios puertos) debe distinguirlos en el `finding_type` o
+  agruparlos en uno (como las cookies). Ten en cuenta que la evidencia forma
+  parte del prompt de triaje: un dato que varía solo entre escaneos (los días
+  hasta la caducidad) impide reutilizar ese triaje, y cambiar el texto de una
+  evidencia existente deja obsoleta la grabación de la demo.
 - **Un estado nuevo de `ResolutionStatus`** debe revisarse contra
   `is_active`, `scan_targets()`, `active_records` y el filtro de estados de
   `takeover.py` antes de darlo por bueno (así se validó `wildcard`).
