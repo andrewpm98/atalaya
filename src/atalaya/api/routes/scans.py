@@ -16,13 +16,16 @@ escaneos solo sería posible desde tests o desde el dashboard importando
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atalaya.ai.diff_analyst import analyze_diff
 from atalaya.ai.provider import get_provider
-from atalaya.ai.triage import triage_findings
+from atalaya.ai.triage import TriageBatchResult, triage_findings
+from atalaya.ai.triage_reuse import reuse_previous_triage
 from atalaya.api.schemas import (
     AssetChangeOut,
     ScanDetail,
@@ -40,6 +43,8 @@ from atalaya.core.repository import diff_scans
 from atalaya.discovery.enrichment import enrich_scan
 from atalaya.discovery.subdomains import enumerate_subdomains
 from atalaya.reporting.generator import generate_report
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/scans", tags=["escaneos"])
 
@@ -212,6 +217,13 @@ async def triage_scan(
     hallazgo falla, conserva el triaje anterior en vez de quedar `unknown`:
     `ai/triage.py::triage_finding` no toca el hallazgo si el proveedor falla o
     la respuesta no valida, así que un proveedor caído a mitad no borra nada.
+
+    Sin `force`, antes de llamar al modelo se reutiliza el triaje de los
+    hallazgos de otros escaneos del dominio con el mismo contexto exacto
+    (`ai/triage_reuse.py`): mismo prompt, misma respuesta, sin pagarla otra
+    vez. Si todos se resuelven así, no se instancia el proveedor (funciona
+    sin clave). Con `force` no se reutiliza nada: forzar significa volver a
+    preguntar al modelo actual, no copiar lo que dijo otro.
     """
     scan = await repository.get_scan(session, scan_id)
     if scan is None:
@@ -228,10 +240,36 @@ async def triage_scan(
     if not pendientes:
         return TriageResponse(scan_id=scan.id, triaged=0, errors=[])
 
-    provider = get_provider()
-    result = await triage_findings(provider, pendientes)
+    total = len(pendientes)
+    reutilizados = 0
+    if not force:
+        previos = await repository.list_triaged_findings(
+            session, scan.domain, exclude_scan_id=scan.id
+        )
+        pendientes, reutilizados = reuse_previous_triage(pendientes, previos)
+
+    result = TriageBatchResult()
+    if pendientes:
+        result = await triage_findings(get_provider(), pendientes)
     await session.commit()
-    return TriageResponse(scan_id=scan.id, triaged=result.triaged, errors=result.errors)
+
+    logger.info(
+        "Triaje del escaneo #%s: %d hallazgos triados con %d llamadas al modelo "
+        "(%d reutilizados de escaneos anteriores, ahorro del %.0f%%, %d fallos)",
+        scan.id,
+        result.triaged + reutilizados,
+        len(pendientes),
+        reutilizados,
+        100 * reutilizados / total,
+        len(result.errors),
+    )
+    return TriageResponse(
+        scan_id=scan.id,
+        triaged=result.triaged + reutilizados,
+        reused=reutilizados,
+        model_calls=len(pendientes),
+        errors=result.errors,
+    )
 
 
 @router.get("/{scan_id}/report")

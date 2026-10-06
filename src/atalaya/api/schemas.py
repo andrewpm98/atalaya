@@ -84,10 +84,19 @@ class ScanDetail(ScanSummary):
 
 
 class TriageResponse(BaseModel):
-    """Resultado de `POST /scans/{id}/triage`: cuántos hallazgos se triaron."""
+    """Resultado de `POST /scans/{id}/triage`: cuántos hallazgos se triaron.
+
+    `triaged` cuenta todos los hallazgos que quedaron triados, llamando al
+    modelo o no; `reused` es la parte que copió el triaje de un hallazgo con
+    el mismo contexto exacto de otro escaneo del dominio
+    (`ai/triage_reuse.py`), y `model_calls`, las llamadas que sí se hicieron
+    (incluidas las que fallaron).
+    """
 
     scan_id: int
     triaged: int
+    reused: int = 0
+    model_calls: int = 0
     errors: list[str] = Field(default_factory=list)
 
 

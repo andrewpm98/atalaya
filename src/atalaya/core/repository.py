@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from atalaya.core.models import Asset, Finding, Scan, ScanStatus
+from atalaya.core.models import Asset, Finding, FindingSeverity, Scan, ScanStatus
 
 
 async def get_scan(session: AsyncSession, scan_id: int) -> Scan | None:
@@ -88,6 +88,33 @@ async def list_findings(
         stmt = stmt.where(Finding.asset_id == asset_id)
     if scan_id is not None:
         stmt = stmt.join(Asset).where(Asset.scan_id == scan_id)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def list_triaged_findings(
+    session: AsyncSession, domain: str, *, exclude_scan_id: int
+) -> list[Finding]:
+    """Hallazgos ya triados de los demás escaneos de `domain`, con su activo.
+
+    Fuente de `ai/triage_reuse.py`: un hallazgo nuevo cuyo contexto coincide
+    exactamente con uno ya triado reutiliza ese triaje en vez de pagar otra
+    llamada al modelo. Del más reciente al más antiguo, para que, si el mismo
+    contexto tiene varios triajes (p. ej. tras un `force` con otro modelo),
+    gane el triaje más nuevo. `selectinload(Finding.asset)`: el contexto del
+    triaje incluye el activo, y en sesión async no se puede cargar perezosamente.
+    """
+    stmt = (
+        select(Finding)
+        .join(Asset)
+        .join(Scan)
+        .where(
+            Scan.domain == domain,
+            Scan.id != exclude_scan_id,
+            Finding.severity != FindingSeverity.UNKNOWN,
+        )
+        .order_by(Scan.started_at.desc(), Finding.id.desc())
+        .options(selectinload(Finding.asset))
+    )
     return list((await session.execute(stmt)).scalars().all())
 
 

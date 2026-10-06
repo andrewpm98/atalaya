@@ -21,6 +21,7 @@ from atalaya.core.repository import (
     list_assets,
     list_findings,
     list_scans,
+    list_triaged_findings,
 )
 from atalaya.discovery.models import (
     DiscoverySource,
@@ -143,6 +144,33 @@ async def test_diff_scans_detecta_nuevos_y_desaparecidos(db_session: AsyncSessio
     assert diff.nuevos == ["c.ejemplo.com"]
     assert diff.desaparecidos == ["a.ejemplo.com"]
     assert diff.comunes == ["b.ejemplo.com"]
+
+
+async def test_list_triaged_findings_filtra_dominio_excluye_el_escaneo_y_ordena(
+    db_session: AsyncSession,
+) -> None:
+    """Fuente de la reutilización del triaje: solo triados, solo del mismo
+    dominio, nunca del propio escaneo, y del más reciente al más antiguo."""
+    antiguo = await save_subdomain_scan(db_session, _result())
+    reciente = await save_subdomain_scan(db_session, _result())
+    otro_dominio = await save_subdomain_scan(
+        db_session, _result(domain="otro.com", hostnames=["interno.otro.com"])
+    )
+    actual = await save_subdomain_scan(db_session, _result())
+    antiguo.started_at = datetime(2026, 1, 1, tzinfo=UTC)
+    reciente.started_at = datetime(2026, 2, 1, tzinfo=UTC)
+    for scan in (antiguo, reciente, otro_dominio, actual):
+        for asset in scan.assets:
+            for finding in asset.findings:
+                finding.severity = FindingSeverity.MEDIUM
+    sin_triar = Finding(finding_type="x", evidence="y", severity=FindingSeverity.UNKNOWN)
+    next(a for a in reciente.assets if a.findings).findings.append(sin_triar)
+    await db_session.commit()
+
+    triados = await list_triaged_findings(db_session, "ejemplo.com", exclude_scan_id=actual.id)
+
+    assert [f.asset.scan_id for f in triados] == [reciente.id, antiguo.id]
+    assert all(f.asset.hostname == "interno.ejemplo.com" for f in triados)
 
 
 # ─── diff_scans: cambios en los activos comunes ─────────────────────────────

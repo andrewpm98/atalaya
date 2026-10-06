@@ -121,7 +121,9 @@ async def test_triage_scan_actualiza_findings_y_persiste(
     resp = client.post(f"/scans/{scan_id}/triage")
 
     assert resp.status_code == 200
-    assert resp.json() == {"scan_id": scan_id, "triaged": 1, "errors": []}
+    assert resp.json() == {
+        "scan_id": scan_id, "triaged": 1, "reused": 0, "model_calls": 1, "errors": []
+    }
 
     findings = client.get("/findings", params={"scan_id": scan_id}).json()
     assert len(findings) == 1
@@ -142,7 +144,9 @@ async def test_triage_scan_es_idempotente_con_findings_ya_triados(
     assert primera["triaged"] == 1
 
     segunda = client.post(f"/scans/{scan_id}/triage").json()
-    assert segunda == {"scan_id": scan_id, "triaged": 0, "errors": []}
+    assert segunda == {
+        "scan_id": scan_id, "triaged": 0, "reused": 0, "model_calls": 0, "errors": []
+    }
 
 
 async def test_triage_scan_degrada_con_gracia_si_falla_el_proveedor(
@@ -175,7 +179,9 @@ async def test_triage_scan_force_vuelve_a_triar_los_ya_triados(
     assert client.post(f"/scans/{scan_id}/triage").json()["triaged"] == 0  # sin force: nada
     resp = client.post(f"/scans/{scan_id}/triage", params={"force": "true"})
 
-    assert resp.json() == {"scan_id": scan_id, "triaged": 1, "errors": []}
+    assert resp.json() == {
+        "scan_id": scan_id, "triaged": 1, "reused": 0, "model_calls": 1, "errors": []
+    }
     finding = client.get("/findings", params={"scan_id": scan_id}).json()[0]
     assert (finding["severity"], finding["impact"]) == ("high", "i2")
 
@@ -197,6 +203,130 @@ async def test_triage_scan_force_con_proveedor_caido_conserva_el_triaje_anterior
     assert body["triaged"] == 0 and len(body["errors"]) == 1
     finding = client.get("/findings", params={"scan_id": scan_id}).json()[0]
     assert (finding["severity"], finding["impact"]) == ("medium", "i")
+
+
+class _CountingProvider(_FakeProvider):
+    """`_FakeProvider` que cuenta las llamadas a `complete_tool`."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.calls = 0
+
+    async def complete_tool(
+        self, prompt: str, *, tool_name: str, tool_schema: dict[str, Any], system: str | None = None
+    ) -> dict[str, Any]:
+        self.calls += 1
+        return await super().complete_tool(
+            prompt, tool_name=tool_name, tool_schema=tool_schema, system=system
+        )
+
+
+def _sin_proveedor() -> LLMProvider:
+    raise AssertionError("con todo reutilizado no debe instanciarse el proveedor")
+
+
+def _escaneo_triado(client: TestClient, monkeypatch) -> int:
+    """Primer escaneo de `ejemplo.com`, ya triado como `high`."""
+    scan_id = _create_scan_con_finding(client, monkeypatch)
+    previo = _FakeProvider(
+        tool_output={"severity": "high", "impact": "impacto previo", "remediation": "r previa"}
+    )
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: previo)
+    assert client.post(f"/scans/{scan_id}/triage").json()["triaged"] == 1
+    return scan_id
+
+
+async def test_triage_reutiliza_el_triaje_de_otro_escaneo_con_el_mismo_contexto(
+    client: TestClient, monkeypatch, caplog
+) -> None:
+    """Re-escaneo sin cambios: mismo prompt exacto, así que se copia el triaje
+    sin llamar al modelo (ni instanciarlo: funciona sin clave)."""
+    _escaneo_triado(client, monkeypatch)
+    nuevo_id = _create_scan_con_finding(client, monkeypatch)
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", _sin_proveedor)
+
+    with caplog.at_level("INFO", logger="atalaya.api.routes.scans"):
+        resp = client.post(f"/scans/{nuevo_id}/triage")
+
+    assert resp.json() == {
+        "scan_id": nuevo_id, "triaged": 1, "reused": 1, "model_calls": 0, "errors": []
+    }
+    finding = client.get("/findings", params={"scan_id": nuevo_id}).json()[0]
+    assert (finding["severity"], finding["impact"], finding["remediation"]) == (
+        "high", "impacto previo", "r previa"
+    )
+    assert "1 hallazgos triados con 0 llamadas al modelo" in caplog.text
+    assert "ahorro del 100%" in caplog.text
+
+
+async def test_triage_no_reutiliza_si_cambia_el_contexto(
+    client: TestClient, monkeypatch
+) -> None:
+    """Mismo host y mismo hallazgo, pero otra IP: el prompt ya no es el mismo
+    y el modelo podría responder otra cosa, así que se le pregunta."""
+    _escaneo_triado(client, monkeypatch)
+
+    async def otra_ip(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
+        result = _fake_result(domain)
+        result.records[0].ip_addresses = ["10.0.0.6"]
+        return result
+
+    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", otra_ip)
+    nuevo_id = client.post("/scans", json={"domain": "ejemplo.com"}).json()["id"]
+    actual = _CountingProvider(tool_output={"severity": "low", "impact": "i", "remediation": "r"})
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: actual)
+
+    body = client.post(f"/scans/{nuevo_id}/triage").json()
+
+    assert (body["triaged"], body["reused"], body["model_calls"], actual.calls) == (1, 0, 1, 1)
+    assert client.get("/findings", params={"scan_id": nuevo_id}).json()[0]["severity"] == "low"
+
+
+async def test_triage_force_no_reutiliza(client: TestClient, monkeypatch) -> None:
+    """Forzar es volver a preguntar al modelo actual, no copiar a otro."""
+    _escaneo_triado(client, monkeypatch)
+    nuevo_id = _create_scan_con_finding(client, monkeypatch)
+    actual = _CountingProvider(tool_output={"severity": "low", "impact": "i", "remediation": "r"})
+    monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: actual)
+
+    body = client.post(f"/scans/{nuevo_id}/triage", params={"force": "true"}).json()
+
+    assert (body["reused"], body["model_calls"], actual.calls) == (0, 1, 1)
+    assert client.get("/findings", params={"scan_id": nuevo_id}).json()[0]["severity"] == "low"
+
+
+async def test_triage_reutiliza_aunque_el_proveedor_falle_para_el_resto(
+    client: TestClient, monkeypatch
+) -> None:
+    """Lo reutilizado no depende del proveedor: si cae, solo quedan sin
+    triar los hallazgos que de verdad necesitaban una llamada."""
+    _escaneo_triado(client, monkeypatch)
+
+    async def con_host_extra(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
+        result = _fake_result(domain)
+        result.records.append(
+            SubdomainRecord(
+                hostname=f"dev.{domain}",
+                status=ResolutionStatus.UNROUTABLE,
+                ip_addresses=["10.0.0.9"],
+                sources=[DiscoverySource.CRTSH],
+            )
+        )
+        return result
+
+    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", con_host_extra)
+    nuevo_id = client.post("/scans", json={"domain": "ejemplo.com"}).json()["id"]
+    monkeypatch.setattr(
+        "atalaya.api.routes.scans.get_provider",
+        lambda: _FakeProvider(error=AIProviderError("503")),
+    )
+
+    body = client.post(f"/scans/{nuevo_id}/triage").json()
+
+    assert (body["triaged"], body["reused"], body["model_calls"]) == (1, 1, 1)
+    assert len(body["errors"]) == 1 and "503" in body["errors"][0]
+    findings = client.get("/findings", params={"scan_id": nuevo_id}).json()
+    assert sorted(f["severity"] for f in findings) == ["high", "unknown"]
 
 
 async def test_triage_scan_inexistente_da_404(client: TestClient) -> None:
