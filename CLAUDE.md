@@ -77,7 +77,9 @@ src/atalaya/
 │   │                             apply_discovery_findings() — descubrimiento → BD
 │   ├── repository.py            Lectura: get_scan, list_scans, get_latest_scan,
 │   │                             list_assets, list_findings, diff_scans() —
-│   │                             hostnames y cambios de los activos comunes
+│   │                             hostnames y cambios de los activos comunes —,
+│   │                             list_triaged_findings() (fuente de la
+│   │                             reutilización del triaje)
 │   ├── exceptions.py            AtalayaError, UnauthorizedTargetError, ...
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
 │   ├── audit.py                 get_audit_logger() — traza de auditoría
@@ -116,6 +118,8 @@ src/atalaya/
 │   ├── provider.py               LLMProvider (ABC) + AnthropicProvider + GeminiProvider
 │   ├── triage.py                 triage_finding/triage_findings — contexto
 │   │                             estructurado, nunca un dump de la fila de BD
+│   ├── triage_reuse.py           reuse_previous_triage() — copia el triaje de
+│   │                             otro escaneo ante el mismo prompt exacto
 │   ├── prompter.py               route_and_answer() — enruta una pregunta en
 │   │                             lenguaje natural a analyst o takeover_detective
 │   ├── analyst.py                analyze_scan() — visión global de un escaneo
@@ -308,7 +312,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **452 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **472 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -319,7 +323,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -509,6 +513,7 @@ cómo trata esto.
 | Streamlit, no React | El plazo no permite invertirlo en frontend |
 | Capa IA tras interfaz `LLMProvider` | El modelo es configuración, no dependencia rígida — probado sumando `GeminiProvider` sin tocar `triage.py` ni los agentes |
 | Triaje IA **después** de persistir | La IA clasifica y explica sobre evidencia verificada; no descubre |
+| Reutilizar triaje solo ante el prompt exacto, entre escaneos; no agrupar por tipo | Copiar una respuesta del modelo solo es honesto si la pregunta fue idéntica (mismo criterio que `replay`). Agrupar por tipo + evidencia ahorraría más, pero el modelo dejaría de ver el host, que sí cambia la severidad |
 | Endpoints en 501, no ausentes | El contrato de la API se fijó en diseño y se rellenó por fases. **Cumplido**: hoy ningún endpoint devuelve 501; si se añade uno nuevo por fases, se aplica el mismo criterio |
 | Fechas: UTC *naive* en BD vía `UtcDateTime`, no `TIMESTAMPTZ` | Arreglo del bug de PostgreSQL sin migración y con la misma salida de lectura en SQLite y PostgreSQL; toda columna de fecha nueva debe usar `UtcDateTime` (hay un test que lo exige) |
 | Wildcards DNS: reclasificar, no borrar | Un host que solo resuelve a la IP del comodín pasa a `wildcard` y sale del inventario activo, pero se conserva en `records`: descartar en silencio impediría auditar el filtro |
@@ -724,8 +729,14 @@ capturado con los datos sembrados y una pregunta del guion respondida.
   contrapartida inherente al enfoque pasivo (sin fuerza bruta de nombres).
 - **Sin límite global de coste ni de concurrencia de IA.** Cada llamada acota
   su propia concurrencia (`AI_CONCURRENCY` en el triaje), pero no hay un
-  tope agregado entre peticiones simultáneas ni entre los seis agentes, ni
-  caché de respuestas.
+  tope agregado entre peticiones simultáneas ni entre los seis agentes. Solo
+  el triaje evita llamadas repetidas, y solo entre escaneos (ver «Resuelta»).
+- **La reutilización del triaje se pierde con CDN.** La clave es el prompt
+  exacto, y el prompt lleva las IPs: un host tras un balanceador que cambia
+  de IP entre escaneos vuelve a pagar su triaje. En la demo, de los 203
+  hallazgos del #2 que ya existían en el #1 (mismo host y tipo), solo 57
+  tienen el prompt idéntico. Quitar las IPs del prompt ahorraría más, pero
+  cambia lo que ve el modelo y obliga a regrabar la demo.
 - **El triaje no ve el histórico del dominio** (hallazgos de escaneos
   previos): cada hallazgo se valora solo con su propio contexto.
 - **Re-triaje solo por API.** `?force=true` (ver "Resuelta") no tiene botón en
@@ -739,6 +750,22 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**Cada re-escaneo pagaba otra vez el triaje de lo que no había
+  cambiado**~~ → `ai/triage_reuse.py`: antes de llamar al modelo,
+  `POST /scans/{id}/triage` copia el triaje de un hallazgo de otro escaneo
+  del dominio con **el mismo contexto exacto** (`build_finding_context`;
+  el resto del prompt es constante, así que mismo contexto = mismo prompt).
+  Medido en la demo: triar el #2 desde cero con el #1 triado pasa de 211 a
+  154 llamadas (**27 %**). No se deduplica dentro de un escaneo porque no
+  hay nada que deduplicar (el contexto lleva el host: 211/211 prompts
+  únicos), ni se agrupa por tipo + evidencia (211 → 11 llamadas, pero el
+  modelo perdería el contexto del host y habría que regrabar la demo).
+  `?force=true` no reutiliza (forzar es volver a preguntar al modelo
+  actual); con todo reutilizado no se instancia el proveedor. La respuesta
+  añade `reused` y `model_calls`, y la API registra «N hallazgos triados con
+  M llamadas (ahorro del X %)». `ai/triage.py` no se toca. La demo no cambia:
+  los 8 pendientes no tienen equivalente en el #1 (verificado por HTTP en
+  `replay`: 8 llamadas, 0 grabaciones faltantes).
 - ~~**El diff solo comparaba hostnames**~~ (un activo existente que abría un
   puerto o perdía HSTS salía «sin cambios») → `diff_scans()` añade
   `cambiados`: de los comunes, cambio de estado, puertos nuevos/desaparecidos
@@ -940,7 +967,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 452)
+pytest -q                            # tests (deben pasar los 472)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

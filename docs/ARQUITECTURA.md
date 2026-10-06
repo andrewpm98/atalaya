@@ -23,7 +23,10 @@ orquesta el resto de módulos. Endpoints principales:
 - `POST /scans/{id}/triage` ✅ — triaja con IA los hallazgos `unknown` de un
   escaneo ya persistido. Idempotente: no repite los ya triados, salvo con
   `?force=true` (p. ej. tras cambiar de modelo); un re-triaje que falla
-  conserva el triaje anterior.
+  conserva el triaje anterior. Sin `force`, antes de llamar al modelo copia
+  el triaje de los hallazgos de otros escaneos del dominio con el mismo
+  contexto exacto (`ai/triage_reuse.py`); la respuesta dice cuántos
+  (`reused`) y cuántas llamadas hizo (`model_calls`).
 - `POST /findings/ask` ✅ — consulta en lenguaje natural, enrutada por
   `ai/prompter.py` al agente adecuado (visión global o riesgo de takeover)
   sobre el último escaneo completado de un dominio (o uno concreto vía
@@ -140,6 +143,13 @@ por aquí, no construyen `select()` propios.
   **dar a la IA contexto estructurado** (`build_finding_context`, campos
   seleccionados a propósito), **no un dump de la fila de BD**. Degradación
   controlada: un fallo de un hallazgo no aborta el resto (`TriageBatchResult`).
+- `triage_reuse` — `reuse_previous_triage`: antes de triar, copia el triaje de
+  un hallazgo ya triado de otro escaneo del dominio cuyo contexto
+  (`build_finding_context`) es idéntico; como el resto del prompt es
+  constante, es reutilizar la respuesta a la misma pregunta exacta. No
+  deduplica dentro de un escaneo (el contexto lleva el host, así que no hay
+  prompts repetidos) ni agrupa por tipo (el modelo perdería el host). En la
+  demo ahorra un 27 % al triar el segundo escaneo; `force` no reutiliza.
   **Sin tocar desde el Paso 5**, por decisión explícita.
 
 Sobre esa misma interfaz, un sistema de **cinco agentes especializados**

@@ -200,7 +200,9 @@ la API levantada y un escaneo ya persistido (`POST /scans`, ver "Puesta en
 marcha", o `atalaya subdomains scanme.nmap.org --save`):
 
 ```bash
-# Triaja los hallazgos sin triar del escaneo #1 (idempotente)
+# Triaja los hallazgos sin triar del escaneo #1 (idempotente). Los ya triados
+# en otro escaneo del dominio con el mismo contexto exacto se reutilizan sin
+# llamar al modelo (la respuesta dice cuántos: `reused`, `model_calls`)
 curl -X POST http://localhost:8000/scans/1/triage
 # ...y re-triar también los ya triados (p. ej. tras cambiar de modelo; una
 # llamada al proveedor por hallazgo). Si alguno falla, conserva su triaje.
