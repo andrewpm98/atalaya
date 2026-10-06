@@ -29,7 +29,9 @@ orquesta el resto de módulos. Endpoints principales:
   sobre el último escaneo completado de un dominio (o uno concreto vía
   `scan_id`).
 - `GET /scans/{id}/diff/{other_id}` ✅ — compara dos escaneos del mismo
-  dominio (`core/repository.py::diff_scans()`) y valora los cambios con
+  dominio (`core/repository.py::diff_scans()`: hostnames nuevos,
+  desaparecidos y comunes, y en `cambiados` los comunes que cambiaron de
+  estado, puertos o hallazgos) y valora los cambios con
   `ai/diff_analyst.py`. `previous`/`current` se deciden por `started_at`,
   no por el orden en la URL. `?analysis=false` devuelve solo el cálculo, sin
   llamar al modelo (`analysis: null`), y por tanto sin posible 502.
@@ -109,8 +111,14 @@ resultados de descubrimiento a estas filas: `save_subdomain_scan()` (un
 
 `core/repository.py` es la contraparte de lectura: `get_scan`, `list_scans`,
 `get_latest_scan`, `list_assets`, `list_findings` y `diff_scans()` (compara
-los hostnames de dos escaneos del mismo dominio — la razón de ser de
-persistir escaneos en el tiempo). La API (2.1) y el dashboard (2.6) consultan
+dos escaneos del mismo dominio — la razón de ser de persistir escaneos en el
+tiempo). Además de los hostnames nuevos y desaparecidos, recorre los comunes
+y devuelve en `cambiados` los que cambiaron de estado, de puertos abiertos o
+de hallazgos, estos con su severidad. Los hallazgos se comparan por
+`finding_type` y no por evidencia, que varía sin que cambie el problema
+(días hasta la caducidad), y las IPs no se comparan (CDN, balanceo). Lo que
+falta se llama «desaparecido», no «cerrado» ni «resuelto»: un timeout de la
+sonda deja el mismo rastro que una corrección. La API (2.1) y el dashboard (2.6) consultan
 por aquí, no construyen `select()` propios.
 
 ### 2.4 Capa IA — `src/atalaya/ai` (Paso 5 ✅ + sistema de agentes)
@@ -144,7 +152,7 @@ propia, y sin solape entre ellos:
 | Analista | `analyst.py` | Dominio, distribución de severidades, hallazgos `critical`/`high` (con impacto ya triado si existe) | `AnalystResult`: respuesta, patrones, combinaciones preocupantes, prioridades |
 | Detective de takeover | `takeover_detective.py` | Los `TakeoverCandidate`/`Finding(finding_type="subdomain_takeover_risk")` ya detectados | Lista de `TakeoverAssessment` (prioridad + razonamiento, sin confirmar explotabilidad) |
 | Redactor de informes | `report_writer.py` | `risk_score`, hallazgos `critical`/`high` | 2-3 párrafos en prosa, sin jerga técnica |
-| Comparador de escaneos | `diff_analyst.py` | `ScanDiff` (nuevos/desaparecidos/comunes) + los dos `Scan` completos | Valoración en prosa: expansión de superficie, riesgo de lo desaparecido |
+| Comparador de escaneos | `diff_analyst.py` | `ScanDiff` (nuevos/desaparecidos/comunes/cambiados) + los dos `Scan` completos | Valoración en prosa: expansión de superficie, cambios en activos existentes, riesgo de lo desaparecido |
 
 Dos asimetrías deliberadas, consistentes con el criterio ya establecido en
 el Paso 5 (`ask()` propaga, `triage_finding()` degrada):
@@ -235,8 +243,9 @@ en local se configure una sola vez. Sin clave no envía la cabecera.
 **Comparar con otro escaneo.** Si hay más de un escaneo del mismo dominio, el
 detalle ofrece un selector «Comparar con» (por defecto, el anterior más
 reciente) y, al pulsar «Comparar», pinta `GET /scans/{id}/diff/{other_id}`:
-recuentos de nuevos, desaparecidos y sin cambios (mismo hostname en ambos),
-los hostnames de cada grupo y la valoración de `ai/diff_analyst.py`. Va
+recuentos de nuevos, desaparecidos, cambiados y sin cambios, los hostnames
+de cada grupo, una fila por activo cambiado (estado, puertos y hallazgos `+`/`−`,
+con el filo de la severidad) y la valoración de `ai/diff_analyst.py`. Va
 después del score y antes de los activos. Se pide con botón, no al cambiar el
 selector, y se guarda en `session_state` por pareja de escaneos: el endpoint
 llama al modelo y Streamlit reejecuta el script en cada interacción. Si la

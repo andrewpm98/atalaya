@@ -76,7 +76,8 @@ src/atalaya/
 │   ├── persistence.py           save_subdomain_scan(), apply_port_scan(),
 │   │                             apply_discovery_findings() — descubrimiento → BD
 │   ├── repository.py            Lectura: get_scan, list_scans, get_latest_scan,
-│   │                             list_assets, list_findings, diff_scans()
+│   │                             list_assets, list_findings, diff_scans() —
+│   │                             hostnames y cambios de los activos comunes
 │   ├── exceptions.py            AtalayaError, UnauthorizedTargetError, ...
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
 │   ├── audit.py                 get_audit_logger() — traza de auditoría
@@ -307,7 +308,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **441 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **452 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -318,7 +319,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -605,16 +606,19 @@ existían en el #1** (los 6 de `skills.github.com`, activo nuevo; un
 `hsts_max_age_bajo` nuevo en `maintainers.github.com`; y un certificado de
 `vpn-ca.iad.github.com` que caduca en ~27 días): quedan `unknown` para pulsar
 «Triar con IA» en directo. El diff real es modesto — 1 activo nuevo
-(`skills.github.com`), 0 desaparecidos, 117 comunes —, que es lo creíble en
-una semana para una superficie como la de GitHub. El triaje del modelo da
+(`skills.github.com`), 0 desaparecidos, 117 comunes, de los que 3 cambian
+(los dos hallazgos nuevos citados y un `csp_missing` que desaparece en
+`copilot-billing-preview.github.com`) —, que es lo creíble en una semana para
+una superficie como la de GitHub. El triaje del modelo da
 solo `low`/`medium` (ningún `critical`/`high`), así que el índice es 39
 «medio» antes del triaje en directo y 40 después.
 
-**Guion grabado** (`demo/ai_recordings.json`, 25 respuestas, dominio
+**Guion grabado** (`demo/ai_recordings.json`, 26 respuestas, dominio
 `github.com`): las cuatro preguntas siguientes, antes **y** después del
 triaje en directo — el orden de los pasos en la defensa no importa —, más el
-informe PDF de los dos escaneos (con resumen ejecutivo), el diff `2`↔`1` y el
-triaje de los 8 pendientes. El diff se enseña desde el dashboard («Comparar
+informe PDF de los dos escaneos (con resumen ejecutivo), el diff `2`↔`1`
+(dos grabaciones: su contexto lleva la severidad de los hallazgos cambiados,
+que pasa de `unknown` a triada) y el triaje de los 8 pendientes. El diff se enseña desde el dashboard («Comparar
 con» en el detalle de cualquiera de los dos): la API ordena por `started_at`,
 así que `2/diff/1` y `1/diff/2` usan la misma grabación.
 
@@ -638,7 +642,8 @@ escribe el fixture, recorre el guion por la API en una BD temporal (antes y
 después del triaje) grabando solo lo usado, y lo verifica en `replay`. Costó
 358 llamadas de triaje (los prompts idénticos entre escaneos se reutilizan
 desde la caché `demo/.ai_cache.json`, no versionada) + 16 del guion, y 2 más
-al regrabar los resúmenes ejecutivos tras el cambio de `risk_score`.
+al regrabar los resúmenes ejecutivos tras el cambio de `risk_score`, y 2 al
+ampliar el diff a los activos comunes (06/10/2026).
 
 **Si la suite dice que la grabación está obsoleta**
 (`tests/test_demo_data.py::test_la_demo_completa_se_reproduce_sin_red`): un
@@ -731,10 +736,20 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 - **Dashboard sin triaje selectivo.** El triaje se lanza sobre el escaneo
   completo, nunca sobre un hallazgo concreto; la consulta NL no recuerda
   preguntas anteriores.
-- **El diff solo compara hostnames.** «Sin cambios» significa mismo hostname
-  en ambos escaneos: no compara puertos ni hallazgos de los activos comunes.
 
 ### Resuelta (se deja constancia para la defensa)
+
+- ~~**El diff solo comparaba hostnames**~~ (un activo existente que abría un
+  puerto o perdía HSTS salía «sin cambios») → `diff_scans()` añade
+  `cambiados`: de los comunes, cambio de estado, puertos nuevos/desaparecidos
+  y hallazgos nuevos/desaparecidos con su severidad (la del escaneo donde
+  están). Hallazgos comparados por `finding_type`, no por evidencia (los días
+  hasta la caducidad cambian sin que cambie el problema); IPs **no**
+  comparadas (CDN y balanceo). «Desaparecido», no «cerrado» ni «resuelto»:
+  un timeout de la sonda produce lo mismo, y el prompt de `diff_analyst` lo
+  advierte. `comunes` sigue completo (contrato de la API intacto). El
+  dashboard muestra «Cambiados» con chips por activo. Verificado en real con
+  la demo en `replay`: 3 cambiados de 117 comunes, valoración regrabada.
 
 - ~~**TLS: sin validar cadena de confianza ni hostname**~~ → dos hallazgos
   nuevos en `discovery/tls.py`. `tls_hostname_no_coincide`: comprobación sin
@@ -925,7 +940,7 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 441)
+pytest -q                            # tests (deben pasar los 452)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

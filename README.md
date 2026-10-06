@@ -212,8 +212,9 @@ curl -X POST http://localhost:8000/findings/ask \
   -H "Content-Type: application/json" \
   -d '{"domain": "scanme.nmap.org", "question": "¿qué activos son más peligrosos?"}'
 
-# Compara dos escaneos del mismo dominio, con valoración de IA
-# (requiere haber lanzado dos escaneos; en el dashboard: «Comparar con»)
+# Compara dos escaneos del mismo dominio, con valoración de IA: hosts nuevos y
+# desaparecidos, y en `cambiados` los comunes que cambiaron de estado, puertos
+# o hallazgos (requiere dos escaneos; en el dashboard: «Comparar con»)
 curl http://localhost:8000/scans/1/diff/2
 # ...o solo el cálculo, sin IA (no necesita clave del proveedor)
 curl "http://localhost:8000/scans/1/diff/2?analysis=false"

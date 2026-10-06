@@ -153,6 +153,11 @@ defecto propone el **anterior más reciente**, que responde a «qué ha cambiado
 desde la última vez». Muestra nuevos, desaparecidos y sin cambios, los
 hostnames de cada grupo y la valoración de la IA.
 
+> **Estado posterior (06/10/2026):** el diff compara también los activos
+> comunes (estado, puertos y hallazgos) y el dashboard añade «Cambiados»;
+> «sin cambios» pasa a significar sin cambios de verdad. Ver CLAUDE.md,
+> «Deuda técnica conocida → Resuelta».
+
 La comparación se pide con un **botón** y se guarda en `session_state` por
 pareja de escaneos. Streamlit reejecuta el script entero en cada interacción:
 pedirla al renderizar repetiría una llamada al modelo cada vez que se pulsa
@@ -397,6 +402,16 @@ explícita para quien solo necesita el cálculo. El dashboard la usa como
 respaldo y dice por qué falta la valoración, en vez de ocultar el fallo.
 
 **¿Qué significa exactamente «sin cambios»?**
-Mismo hostname en ambos escaneos. El diff no compara los puertos ni los
-hallazgos de los activos comunes, y la interfaz lo aclara en una nota bajo
-los recuentos.
+Mismo hostname en ambos escaneos y, además, mismo estado, mismos puertos
+abiertos y mismos tipos de hallazgo. Si algo de eso varía, el activo sale en
+«Cambiados» con el detalle. No se comparan las IPs (con CDN y balanceo
+cambian sin que cambie la exposición) ni la evidencia de los hallazgos (los
+días hasta que caduca un certificado varían cada semana sin que cambie el
+problema).
+
+**¿Un hallazgo que desaparece está resuelto?**
+No necesariamente, y por eso se llama «desaparecido». Si la sonda de
+cabeceras no obtiene respuesta en ese escaneo, no hay cabeceras que evaluar
+y el hallazgo tampoco aparece. El cálculo no puede distinguir los dos casos;
+el prompt del comparador le pide al modelo que no lo dé por corregido sin
+evidencia.
