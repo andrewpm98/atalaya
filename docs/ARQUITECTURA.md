@@ -362,6 +362,16 @@ dominio
   error pública del proveedor, eleva a "alta sospecha — no confirmado" (nunca
   "confirmado"), exige `TAKEOVER_VERIFY=true` + hostname en `SCAN_ALLOWLIST` +
   auditoría de cada petición. Detalle y justificación en §8.3.
+- **Diff: comparar lo que cambia la exposición, no lo que varía solo.**
+  Hallazgos por tipo y no por evidencia (los días hasta la caducidad varían
+  cada semana); IPs no comparadas (CDN, balanceo); lo ausente se llama
+  «desaparecido», porque un timeout de la sonda deja el mismo rastro que una
+  corrección — ver 2.3.
+- **Reutilizar el triaje solo ante el prompt exacto**, entre escaneos del
+  mismo dominio: se copia la respuesta que el modelo ya dio a la misma
+  pregunta, nunca a una parecida (mismo criterio que `replay`). No se agrupa
+  por tipo de hallazgo, que ahorraría más, porque el modelo dejaría de ver el
+  host — ver 2.4.
 - **`st.html()`, no `st.markdown(unsafe_allow_html=True)`**, para CSS
   grande en el dashboard: el parser de Markdown de Streamlit no trata de
   forma fiable un bloque `<style>` grande con líneas en blanco dentro — bug
@@ -411,6 +421,10 @@ obligatorios:
     HTTP → HTTPS, cookies y validación TLS (§2.2), re-triaje forzado y
     diff sin IA (§2.1).
     *(`memorias/Memoria_Cierre_Preentrega_Atalaya.md`.)*
+13. **Diff de activos comunes y reutilización del triaje** ✅ — `cambiados`
+    en el diff (estado, puertos y hallazgos de los comunes; §2.1, §2.3,
+    §2.6) y reutilización del triaje ante el mismo prompt exacto (§2.1,
+    §2.4). *(`memorias/Memoria_Ampliacion_Diff_Triaje_Atalaya.md`.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
 CLAUDE.md (que cuenta Shodan, takeover y agentes como una sola ampliación);

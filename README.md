@@ -352,6 +352,8 @@ Ampliación posterior, más allá de los requisitos obligatorios:
       autenticación opcional por `X-API-Key`, «Comparar con» en el
       dashboard, redirección HTTP → HTTPS, cookies, validación TLS
       (hostname y cadena) y re-triaje forzado
+- [x] Diff con cambios de los activos comunes (estado, puertos y hallazgos)
+      y reutilización del triaje entre escaneos ante el mismo prompt exacto
 
 La memoria técnica de cada fase está en [`memorias/`](memorias/).
 

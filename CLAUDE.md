@@ -380,13 +380,61 @@ pide evitar explícitamente ("los stubs no son código muerto").
     opcional (`X-API-Key`), «Comparar con» en el dashboard, redirección
     HTTP → HTTPS, cookies, validación TLS, re-triaje forzado y diff sin IA. Memoria:
     `memorias/Memoria_Cierre_Preentrega_Atalaya.md`.
+12. **Ampliación — Diff de activos comunes y reutilización del triaje** ✅
+    (06/10/2026) — el diff compara estado, puertos y hallazgos de los activos
+    comunes (`cambiados`); el triaje reutiliza el de otro escaneo ante el
+    mismo prompt exacto (27 % menos llamadas en la demo). Incluye la revisión
+    crítica de la herramienta y sus carencias. Memoria:
+    `memorias/Memoria_Ampliacion_Diff_Triaje_Atalaya.md`.
 
-**Plazo:** entrega a finales de septiembre. Los siete pasos de la hoja de
-ruta y los cinco requisitos obligatorios están cerrados desde antes de las
-ampliaciones 8-11 — ninguna era necesaria para aprobar: profundizan el
+**Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
+a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
+la defensa). Los siete pasos de la hoja de ruta y los cinco requisitos
+obligatorios están cerrados desde antes de las ampliaciones 8-12 — ninguna era necesaria para aprobar: profundizan el
 componente diferencial (capa IA), la calidad percibida (dashboard) y la
 fiabilidad de la entrega (robustez y cierre pre-entrega) de cara a la
 defensa oral.
+
+---
+
+## Estado al 06/10/2026 y próxima sesión
+
+**Dónde se quedó:** `main` limpio, con los commits de la fase 12 en local y
+sin `push` al cerrar la sesión (el usuario decide cuándo; al retomar,
+comprobar con `git status -sb` si ya se subieron). 472 tests, `ruff` y `mypy` a cero.
+La demo en `replay` reproduce el guion completo sin grabaciones faltantes.
+
+**Restricción operativa:** el **crédito de la API de Anthropic está
+agotado**. Cualquier cambio de prompt o del contexto que recibe un agente
+deja obsoleta `demo/ai_recordings.json`, y regrabar exige llamadas reales:
+antes de un cambio así, parar y preguntar. Gemini, si hay
+`GEMINI_API_KEY` (cuota gratuita ~20 peticiones/día), sirve para verificar
+en vivo, no para regrabar la demo (grabada con `claude-sonnet-4-6`).
+
+**Por orden de prioridad:**
+
+1. **Confirmar el calendario**: si la entrega ya se hizo y cuándo es la
+   defensa. Decide si queda margen para código o solo para ensayar.
+2. **Preparar la defensa**: ensayar el guion con
+   `scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una BD
+   aparte; repasar los bloques de preguntas de las memorias, sobre todo el de
+   la fase 12 (diff, reutilización del triaje, carencias) y la justificación
+   de los seis agentes.
+3. **Si hay margen de código** (detalle en «Deuda técnica conocida →
+   Pendiente»):
+   - **Escaneos programados con alerta sobre el diff**: la carencia más
+     grande como ASM, y las piezas (persistencia, diff con `cambiados`) ya
+     existen.
+   - **TLS en los puertos abiertos además del 443**: el límite más barato
+     de cerrar (`inspect_tls()` sobre `Asset.open_ports`), con una trampa:
+     no romper la invariante de un hallazgo por tipo y host (ver el punto
+     «TLS» de la deuda pendiente).
+   - **`POST /scans` como tarea en segundo plano** con consulta de estado.
+4. **Cuando vuelva el crédito**: regrabar la valoración del diff posterior al
+   triaje (escribe «`vpn-ca.github.com` (IAD)» en vez de
+   `vpn-ca.iad.github.com`; 1 llamada) y valorar quitar las IPs del prompt
+   de triaje para que la reutilización sobreviva a CDN (cambia todos los
+   prompts: regrabación completa).
 
 ---
 
@@ -663,6 +711,13 @@ PostgreSQL, sin él, el `UPDATE` del triaje cambia el orden de lectura y con
 `replay` sin ninguna clave, en local (SQLite) y en el stack Docker
 (PostgreSQL 16), dos veces seguidas con `--reset` entre medias; dashboard
 capturado con los datos sembrados y una pregunta del guion respondida.
+Re-verificado el 06/10/2026 tras el diff ampliado y la reutilización del
+triaje: guion completo por HTTP en `replay`, cero grabaciones faltantes.
+
+**Defecto conocido de la grabación:** la valoración del diff posterior al
+triaje escribe «`vpn-ca.github.com` (IAD)» en vez de `vpn-ca.iad.github.com`.
+Es un descuido del modelo, no del código; si sale en la defensa, se explica
+así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ---
 
@@ -670,6 +725,21 @@ capturado con los datos sembrados y una pregunta del guion respondida.
 
 ### Pendiente
 
+- **Sin monitorización continua.** Los escaneos se lanzan a mano: no hay
+  escaneos programados ni alertas. Es la carencia más grande como producto
+  de ASM, que se define por vigilar en el tiempo. El diff con `cambiados` es
+  la pieza que permitiría alertar («ayer no tenía el 22 abierto»); falta el
+  disparador (planificador + notificación cuando el diff no está vacío).
+- **`POST /scans` es síncrono.** El escaneo completo corre dentro de la
+  petición HTTP: 19 s para github.com, pero un dominio grande dejaría la
+  conexión abierta minutos. Lo normal sería lanzarlo como tarea en segundo
+  plano y consultar su estado.
+- **Señal/ruido de los hallazgos.** En github.com, 194 de 211 hallazgos son
+  `low`, casi todo higiene de cabeceras. La reutilización del triaje reduce
+  el coste de triarlos, no su volumen ni el ruido para quien lee.
+- **Crédito de Anthropic agotado (06/10/2026).** No es deuda del código, pero
+  condiciona el trabajo: no se puede regrabar la demo ni verificar en vivo
+  con Claude. Ver «Estado al 06/10/2026 y próxima sesión».
 - **`replay` solo cubre el guion grabado.** Por diseño (ver "Datos de
   reserva para la demo"); no sustituye al modelo fuera de esos datos.
 
@@ -678,7 +748,9 @@ capturado con los datos sembrados y una pregunta del guion respondida.
   ("Requires membership or higher to access"), verificado contra la API
   real. El código está completo y probado (con dobles, y en vivo el camino
   de fallo), pero no aporta subdominios reales con la clave actual — solo
-  con un plan de pago.
+  con un plan de pago. **En la práctica, crt.sh es la única fuente
+  efectiva**, frente a las decenas de fuentes de herramientas como subfinder
+  o amass: la calidad del inventario limita todo lo que viene después.
 - **Tabla de patrones de takeover no exhaustiva.** `discovery/takeover.py`
   cubre ~20 proveedores citados habitualmente (GitHub Pages, Heroku, S3,
   Azure...), no una lista cerrada — mismo criterio de honestidad que
@@ -718,6 +790,14 @@ capturado con los datos sembrados y una pregunta del guion respondida.
   reporta el primer fallo de verificación que encuentra: si un certificado
   tiene varios problemas de cadena, sale uno. Tampoco se inspecciona TLS en
   otros puertos abiertos (p. ej. 8443) ni la configuración de cifrados.
+  Lo de otros puertos es el límite más barato de cerrar: los puertos
+  abiertos ya están en `Asset.open_ports` e `inspect_tls()` ya acepta
+  `port`. **Trampa:** daría varios hallazgos del mismo tipo en un mismo host
+  (uno por puerto), y el diff (`diff_scans`) y la reutilización del triaje
+  asumen como mucho uno por tipo y host: habría que distinguir el puerto en
+  el `finding_type` o agruparlos en un solo hallazgo por tipo. Los cifrados
+  no: son terreno de herramientas específicas (testssl.sh), con otra
+  intrusividad.
 - **Cabeceras: sin CORS, y solo la portada.** `discovery/headers.py`
   evalúa la raíz (`/`) de cada host: las seis cabeceras del enunciado sobre
   la respuesta **final**, las cookies de toda la cadena de redirecciones y
