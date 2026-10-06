@@ -751,6 +751,21 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
    deje de aparecer no es una severidad (puede ser solo variabilidad DNS). */
 .atl-chip-new { color: var(--accent); border-color: var(--accent-line); }
 .atl-chip-gone { color: var(--fg-faint); text-decoration: line-through; }
+/* Activo común con cambios: hostname a la izquierda y lo que cambió en
+   chips. Un hallazgo nuevo lleva el filo de su severidad (el rojo sigue
+   siendo solo de `critical`); uno desaparecido, apagado como un host
+   desaparecido, por el mismo motivo. */
+.atl-change {
+  display: flex; align-items: baseline; gap: 0.3rem 0.7rem; flex-wrap: wrap;
+  border-bottom: 1px solid var(--line); padding: 0.32rem 0;
+}
+.atl-change-host {
+  font-family: var(--mono); font-size: 0.76rem; color: var(--fg);
+  min-width: 18rem; word-break: break-all;
+}
+.atl-chip-state { color: var(--fg-dim); border-style: dashed; }
+.atl-chip-find { border-left: 2px solid var(--c); }
+.atl-chip-find i { font-style: normal; color: var(--c); font-weight: 700; margin-left: 0.3rem; }
 .atl-diff-head {
   font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em;
   color: var(--fg-dim); margin: 0.2rem 0 0.4rem 0;
@@ -1174,16 +1189,58 @@ def _comparacion_por_defecto(scan: dict[str, Any], otros: list[dict[str, Any]]) 
     return max(anteriores)[1] if anteriores else 0
 
 
+def _chip_hallazgo(hallazgo: dict[str, Any], signo: str) -> str:
+    sev = hallazgo["severity"] if hallazgo["severity"] in _SEVERITY_RANK else "unknown"
+    clase = "atl-chip-new" if signo == "+" else "atl-chip-gone"
+    return (
+        f'<span class="atl-chip atl-chip-find {clase} atl-sev-{sev}">'
+        f"{signo} {escape(str(hallazgo['finding_type']))}<i>{_SEVERITY_TAG[sev]}</i></span>"
+    )
+
+
+def _fila_cambio(cambio: dict[str, Any]) -> str:
+    """Una fila por activo cambiado: hostname y, en chips, solo lo que cambió.
+
+    Signo `+`/`−` en vez de verbos («abierto», «resuelto»): un puerto o un
+    hallazgo que desaparece puede ser solo una sonda sin respuesta, y la
+    fila no debe afirmar más de lo que el cálculo sabe.
+    """
+    chips = []
+    if cambio["estado_anterior"] != cambio["estado_actual"]:
+        chips.append(
+            f'<span class="atl-chip atl-chip-state">{escape(str(cambio["estado_anterior"]))}'
+            f" → {escape(str(cambio['estado_actual']))}</span>"
+        )
+    chips += [
+        f'<span class="atl-chip atl-chip-new">+ {int(p)}/tcp</span>'
+        for p in cambio.get("puertos_nuevos", [])
+    ]
+    chips += [
+        f'<span class="atl-chip atl-chip-gone">− {int(p)}/tcp</span>'
+        for p in cambio.get("puertos_desaparecidos", [])
+    ]
+    chips += [_chip_hallazgo(h, "+") for h in cambio.get("hallazgos_nuevos", [])]
+    chips += [_chip_hallazgo(h, "−") for h in cambio.get("hallazgos_desaparecidos", [])]
+    return (
+        f'<div class="atl-change"><span class="atl-change-host">'
+        f"{escape(str(cambio['hostname']))}</span>{''.join(chips)}</div>"
+    )
+
+
 def render_diff(diff: dict[str, Any]) -> None:
     """Resultado de `GET /scans/{id}/diff/{other_id}`: recuentos, valoración
     del modelo y hostnames por grupo.
 
-    `comunes` se rotula «sin cambios» y la leyenda aclara qué significa: el
-    diff compara hostnames (`core/repository.py::diff_scans`), así que un
-    activo presente en los dos escaneos cuenta aquí aunque sus puertos o
-    hallazgos hayan variado.
+    `comunes` (todos los hostnames presentes en ambos escaneos) se reparte en
+    «cambiados» — estado, puertos o hallazgos distintos, ver
+    `core/repository.py::diff_scans` — y «sin cambios», el resto. `.get()`
+    sobre `cambiados`: una API anterior a ese campo sigue pintándose, con
+    todos los comunes como sin cambios.
     """
     nuevos, desaparecidos, comunes = diff["nuevos"], diff["desaparecidos"], diff["comunes"]
+    cambiados: list[dict[str, Any]] = diff.get("cambiados") or []
+    hosts_cambiados = {c["hostname"] for c in cambiados}
+    sin_cambios = [h for h in comunes if h not in hosts_cambiados]
     _html(
         '<div class="atl-diff-head">'
         f"<b>#{escape(str(diff['previous_scan_id']))}</b> → "
@@ -1193,7 +1250,8 @@ def render_diff(diff: dict[str, Any]) -> None:
     cifras = st.container(horizontal=True, key="atl-cifras-diff")
     cifras.metric("Nuevos", len(nuevos))
     cifras.metric("Desaparecidos", len(desaparecidos))
-    cifras.metric("Sin cambios", len(comunes))
+    cifras.metric("Cambiados", len(cambiados))
+    cifras.metric("Sin cambios", len(sin_cambios))
 
     _html(
         '<div class="atl-chips">'
@@ -1201,11 +1259,17 @@ def render_diff(diff: dict[str, Any]) -> None:
         + _chipset("Desaparecidos", desaparecidos, "atl-chip-gone")
         + "</div>"
     )
-    with st.expander(f"Sin cambios · {len(comunes)}"):
-        _html('<div class="atl-chips">' + _chipset("Hosts", comunes) + "</div>")
+    if cambiados:
+        _html(
+            f'<div class="atl-subsec">Cambiados · {len(cambiados)}</div>'
+            + "".join(_fila_cambio(c) for c in cambiados)
+        )
+    with st.expander(f"Sin cambios · {len(sin_cambios)}"):
+        _html('<div class="atl-chips">' + _chipset("Hosts", sin_cambios) + "</div>")
     st.caption(
-        "Sin cambios = mismo hostname en ambos escaneos; sus puertos o hallazgos pueden "
-        "haber variado. Un host desaparecido puede ser solo variabilidad DNS."
+        "Cambiados = mismo hostname con otro estado, puertos o hallazgos (las IPs no se "
+        "comparan: con CDN y balanceo varían sin que cambie la exposición). Un host, puerto "
+        "o hallazgo desaparecido puede ser solo variabilidad DNS o una sonda sin respuesta."
     )
 
     if diff.get("analysis") is None:

@@ -710,6 +710,64 @@ def test_comparar_muestra_nuevos_desaparecidos_y_sin_cambios() -> None:
     assert any(e.label.startswith("Sin cambios · 1") for e in at.tabs[1].expander)
 
 
+#: Dos comunes, uno de ellos con cambios: puerto abierto y cerrado, un
+#: hallazgo crítico nuevo, uno desaparecido y una severidad fuera de la escala.
+_DIFF_CAMBIOS = {
+    **_DIFF,
+    "comunes": ["interno.ejemplo.com", "www.ejemplo.com"],
+    "cambiados": [
+        {
+            "hostname": "www.ejemplo.com",
+            "estado_anterior": "active",
+            "estado_actual": "active",
+            "puertos_nuevos": [22],
+            "puertos_desaparecidos": [8080],
+            "hallazgos_nuevos": [
+                {"finding_type": "hsts_missing", "severity": "critical"},
+                {"finding_type": "csp_missing", "severity": "inventada"},
+            ],
+            "hallazgos_desaparecidos": [{"finding_type": "cookie_sin_secure", "severity": "low"}],
+        }
+    ],
+}
+
+
+def test_comparar_separa_cambiados_de_sin_cambios() -> None:
+    get_map = _get_map_diff(_Resp(200, _DIFF_CAMBIOS))
+    at = _app_con_registro(get_map, [])
+    with patch("httpx.Client", _fake_client(get_map)):
+        _boton(at, "Comparar").click().run()
+
+    assert not at.exception
+    metricas = {m.label: m.value for m in at.tabs[1].metric}
+    assert (metricas["Cambiados"], metricas["Sin cambios"]) == ("1", "1")
+    assert any(e.label.startswith("Sin cambios · 1") for e in at.tabs[1].expander)
+    textos = " ".join(m.value for m in at.tabs[1].markdown)
+    assert "Cambiados · 1" in textos
+    assert "+ 22/tcp" in textos and "− 8080/tcp" in textos
+    assert "atl-sev-critical" in textos and "+ hsts_missing" in textos
+    assert "− cookie_sin_secure" in textos
+    # Una severidad que el dashboard no conoce se pinta como sin triar, sin romper.
+    assert "atl-sev-unknown" in textos
+    # El estado no se repite cuando no cambió.
+    assert "active →" not in textos
+
+
+def test_cambiados_escapa_lo_que_viene_de_la_api() -> None:
+    """El hostname sale del DNS/crt.sh: lo controla el objetivo, no nosotros."""
+    malicioso = {
+        **_DIFF_CAMBIOS,
+        "cambiados": [{**_DIFF_CAMBIOS["cambiados"][0], "hostname": "<img src=x>.ejemplo.com"}],
+    }
+    get_map = _get_map_diff(_Resp(200, malicioso))
+    at = _app_con_registro(get_map, [])
+    with patch("httpx.Client", _fake_client(get_map)):
+        _boton(at, "Comparar").click().run()
+
+    textos = " ".join(m.value for m in at.tabs[1].markdown)
+    assert "<img src=x>" not in textos and "&lt;img src=x&gt;" in textos
+
+
 def test_si_la_ia_falla_muestra_los_cambios_sin_valoracion() -> None:
     """502 del proveedor: se repite con `analysis=false` y se ven igual los
     hostnames (puro cálculo), con el motivo de que falte la valoración."""
