@@ -106,6 +106,52 @@ def test_build_diff_context_sin_hallazgos_graves_produce_diccionarios_vacios() -
     assert context["nuevos_con_hallazgos_graves"] == {}
 
 
+def test_build_diff_context_incluye_solo_lo_que_cambio_en_los_comunes() -> None:
+    """Los cambios de un activo común llegan al modelo, pero solo los campos
+    que cambiaron: en un dominio grande, repetir estado igual y listas vacías
+    por cada activo solo añade ruido al prompt."""
+    previous, current = _scans()
+    comun_previo = next(a for a in previous.assets if a.hostname == "comun.ejemplo.com")
+    comun_actual = next(a for a in current.assets if a.hostname == "comun.ejemplo.com")
+    comun_previo.open_ports = [443]
+    comun_actual.open_ports = [22, 443]
+    comun_actual.findings.append(
+        Finding(finding_type="hsts_missing", evidence="sin HSTS", severity=FindingSeverity.UNKNOWN)
+    )
+
+    context = build_diff_context(
+        domain="ejemplo.com",
+        diff=diff_scans(previous, current),
+        previous_scan=previous,
+        current_scan=current,
+    )
+
+    assert context["comunes_count"] == 1
+    assert context["cambiados"] == [
+        {
+            "hostname": "comun.ejemplo.com",
+            "puertos_nuevos": [22],
+            "hallazgos_nuevos": [{"tipo": "hsts_missing", "severidad": "unknown"}],
+        }
+    ]
+
+
+def test_build_diff_context_cambio_de_estado_en_una_sola_cadena() -> None:
+    previous, current = _scans()
+    next(a for a in current.assets if a.hostname == "comun.ejemplo.com").status = "nxdomain"
+
+    context = build_diff_context(
+        domain="ejemplo.com",
+        diff=diff_scans(previous, current),
+        previous_scan=previous,
+        current_scan=current,
+    )
+
+    assert context["cambiados"] == [
+        {"hostname": "comun.ejemplo.com", "estado": "active -> nxdomain"}
+    ]
+
+
 # ─── analyze_diff ────────────────────────────────────────────────────────
 
 

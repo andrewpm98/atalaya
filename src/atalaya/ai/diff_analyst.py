@@ -5,14 +5,14 @@ una colección de elementos independientes sobre la que degradar tenga
 sentido) → propaga `AIProviderError`, igual criterio que
 `ai/query.py::ask()`.
 
-`core/repository.py::ScanDiff` solo trae listas de hostnames (nuevos/
-desaparecidos/comunes) — deliberadamente, según su propio docstring: es
-"puro cálculo" sin unir con hallazgos, para poder probarse sin sesión de
-BD. Este módulo añade el contexto que le falta para ser útil: de los
-hostnames nuevos y desaparecidos, cuáles tenían hallazgos `critical`/`high`
-en el escaneo correspondiente, usando `current_scan.assets`/
-`previous_scan.assets`, ya precargados por quien llama (vía
-`repository.get_scan()`).
+`core/repository.py::ScanDiff` trae los hostnames nuevos/desaparecidos/
+comunes y, de los comunes, qué cambió en cada uno (`cambiados`: estado,
+puertos y hallazgos, con su severidad). Es "puro cálculo", sin
+interpretación, para poder probarse sin sesión de BD. Este módulo añade el
+contexto que le falta para ser útil: de los hostnames nuevos y
+desaparecidos, cuáles tenían hallazgos `critical`/`high` en el escaneo
+correspondiente, usando `current_scan.assets`/`previous_scan.assets`, ya
+precargados por quien llama (vía `repository.get_scan()`).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import logging
 from atalaya.ai.provider import LLMProvider
 from atalaya.core.exceptions import AIProviderError
 from atalaya.core.models import FindingSeverity, Scan
-from atalaya.core.repository import ScanDiff
+from atalaya.core.repository import AssetChange, ScanDiff
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +32,21 @@ _SYSTEM_PROMPT = (
     "comparando dos escaneos sucesivos del mismo dominio. Se te da qué "
     "hostnames son nuevos, cuáles desaparecieron y cuáles se mantienen, "
     "junto con los hallazgos `critical`/`high` que tenían los hostnames "
-    "nuevos o desaparecidos. Escribe un análisis breve en prosa, en "
-    "español, valorando:\n"
+    "nuevos o desaparecidos, y, de los que se mantienen, los que cambiaron "
+    "(`cambiados`): estado de resolución, puertos abiertos y hallazgos "
+    "aparecidos o desaparecidos, con su severidad. Escribe un análisis breve "
+    "en prosa, en español, valorando:\n"
     "- Si los cambios son preocupantes (p. ej. aparece un activo nuevo con "
-    "un hallazgo grave, o desaparece uno que lo tenía).\n"
+    "un hallazgo grave, un activo existente abre un puerto o gana un "
+    "hallazgo, o desaparece uno que lo tenía).\n"
     "- Si hay un patrón de expansión de la superficie de exposición.\n"
     "- Si algo desaparecido podría 'volver' — recuerda que la variabilidad "
     "de DNS (timeouts, balanceo, caché) no siempre significa un cambio "
     "real; no lo presentes como un hecho consumado si la evidencia no lo "
-    "sostiene.\n"
+    "sostiene. Lo mismo para un puerto o un hallazgo desaparecido: puede "
+    "ser una corrección o solo que la sonda no obtuvo respuesta esta vez.\n"
+    "- Un hallazgo con severidad `unknown` aún no se ha triado: no "
+    "infieras su gravedad más allá de lo que indica su tipo.\n"
     "No confirmes ni describas cómo explotar ningún hallazgo: describe lo "
     "que cambió, no verifiques explotabilidad."
 )
@@ -69,6 +75,31 @@ def _priority_findings_by_hostname(scan: Scan, hostnames: set[str]) -> dict[str,
     return result
 
 
+def _change_context(change: AssetChange) -> dict[str, object]:
+    """Un activo cambiado, solo con lo que cambió.
+
+    Las listas vacías y el estado sin variar se omiten: son la mayoría de los
+    campos de cada cambio, y repetirlos solo añade ruido al prompt.
+    """
+    context: dict[str, object] = {"hostname": change.hostname}
+    if change.estado_anterior != change.estado_actual:
+        context["estado"] = f"{change.estado_anterior} -> {change.estado_actual}"
+    if change.puertos_nuevos:
+        context["puertos_nuevos"] = change.puertos_nuevos
+    if change.puertos_desaparecidos:
+        context["puertos_desaparecidos"] = change.puertos_desaparecidos
+    if change.hallazgos_nuevos:
+        context["hallazgos_nuevos"] = [
+            {"tipo": h.finding_type, "severidad": h.severity} for h in change.hallazgos_nuevos
+        ]
+    if change.hallazgos_desaparecidos:
+        context["hallazgos_desaparecidos"] = [
+            {"tipo": h.finding_type, "severidad": h.severity}
+            for h in change.hallazgos_desaparecidos
+        ]
+    return context
+
+
 def build_diff_context(
     *,
     domain: str,
@@ -86,6 +117,7 @@ def build_diff_context(
         "nuevos": diff.nuevos,
         "desaparecidos": diff.desaparecidos,
         "comunes_count": len(diff.comunes),
+        "cambiados": [_change_context(change) for change in diff.cambiados],
         "nuevos_con_hallazgos_graves": _priority_findings_by_hostname(current_scan, nuevos),
         "desaparecidos_con_hallazgos_graves": _priority_findings_by_hostname(
             previous_scan, desaparecidos

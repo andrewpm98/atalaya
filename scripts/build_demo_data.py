@@ -114,7 +114,7 @@ async def run_demo_flow(
         ).json()
         if not diff["analysis"].strip():
             raise DemoFlowError(f"[{label}] diff sin análisis")
-        return {k: len(diff[k]) for k in ("nuevos", "desaparecidos", "comunes")}
+        return {k: len(diff[k]) for k in ("nuevos", "desaparecidos", "comunes", "cambiados")}
 
     await one_pass("antes del triaje")
     triage = check(await client.post(f"/scans/{current_id}/triage"), "triaje en directo").json()
