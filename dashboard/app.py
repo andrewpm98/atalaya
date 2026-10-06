@@ -1363,7 +1363,15 @@ def render_scan_detail(scan: dict[str, Any], otros: list[dict[str, Any]] | None 
         with st.spinner("Consultando al modelo de IA..."):
             resultado = api_post(f"/scans/{scan['id']}/triage")
         if resultado is not None:
-            st.success(f"{resultado['triaged']} hallazgo(s) triado(s).")
+            # `reused`/`model_calls` con `.get()`: una API anterior a la
+            # reutilización del triaje no los envía, y el mensaje base basta.
+            mensaje = f"{resultado['triaged']} hallazgo(s) triado(s)."
+            if resultado.get("reused"):
+                mensaje += (
+                    f" {resultado['reused']} reutilizado(s) de escaneos anteriores con el mismo "
+                    f"contexto; {resultado.get('model_calls', 0)} llamada(s) al modelo."
+                )
+            st.success(mensaje)
             if resultado["errors"]:
                 st.warning("Fallos durante el triaje: " + "; ".join(resultado["errors"]))
             # Se relee el escaneo para reflejar las nuevas severidades en esta

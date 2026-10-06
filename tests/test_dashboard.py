@@ -305,6 +305,28 @@ def test_triage_refresca_sin_rerun() -> None:
     assert [m.value for m in at.tabs[1].metric] == ["1", "1", "0"]
 
 
+def test_triage_con_reutilizacion_lo_dice() -> None:
+    """Si parte del triaje se copió de escaneos anteriores, el mensaje lo dice:
+    que un clic no llame al modelo no debe parecer un fallo silencioso."""
+    detalle = _scan_detail()
+    get_map = {
+        "/scans": _Resp(200, [_scan_summary()]),
+        "/scans/1": [_Resp(200, detalle), _Resp(200, detalle), _Resp(200, detalle)],
+    }
+    respuesta = {"scan_id": 1, "triaged": 3, "reused": 2, "model_calls": 1, "errors": []}
+    post_map = {"/scans/1/triage": _Resp(200, respuesta)}
+
+    with patch("httpx.Client", _fake_client(get_map, post_map)):
+        at = AppTest.from_file(_APP_PATH, default_timeout=15)
+        at.run()
+        at.tabs[1].button[0].click().run()
+
+    assert not at.exception
+    [exito] = [s.value for s in at.success]
+    assert "3 hallazgo(s) triado(s)" in exito
+    assert "2 reutilizado(s)" in exito and "1 llamada(s) al modelo" in exito
+
+
 def test_triage_con_fallos_muestra_los_errores() -> None:
     detalle = _scan_detail()
     get_map = {
