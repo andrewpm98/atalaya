@@ -23,7 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from atalaya.ai.diff_analyst import analyze_diff
 from atalaya.ai.provider import get_provider
 from atalaya.ai.triage import triage_findings
-from atalaya.api.schemas import ScanDetail, ScanDiffOut, ScanRequest, ScanSummary, TriageResponse
+from atalaya.api.schemas import (
+    AssetChangeOut,
+    ScanDetail,
+    ScanDiffOut,
+    ScanRequest,
+    ScanSummary,
+    TriageResponse,
+)
 from atalaya.core import repository
 from atalaya.core.database import get_session
 from atalaya.core.exceptions import AIProviderError
@@ -104,6 +111,10 @@ async def diff_scan(
 ) -> ScanDiffOut:
     """Compara dos escaneos del mismo dominio y valora los cambios con IA.
 
+    Compara hostnames (nuevos/desaparecidos/comunes) y, de los comunes,
+    estado, puertos y hallazgos (`cambiados`); ver
+    `core/repository.py::diff_scans`.
+
     Cuál de los dos ids es "previo" y cuál "actual" se decide por
     `started_at`, no por el orden en que se piden en la URL: pedir
     `/scans/5/diff/3` y `/scans/3/diff/5` debe dar la misma comparación
@@ -173,6 +184,7 @@ async def diff_scan(
         nuevos=diff.nuevos,
         desaparecidos=diff.desaparecidos,
         comunes=diff.comunes,
+        cambiados=[AssetChangeOut.model_validate(change) for change in diff.cambiados],
         analysis=valoracion,
     )
 

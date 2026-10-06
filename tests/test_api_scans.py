@@ -327,8 +327,45 @@ async def test_diff_scan_sin_analisis_no_llama_al_modelo(
         "nuevos": ["new.ejemplo.com"],
         "desaparecidos": ["old.ejemplo.com"],
         "comunes": ["www.ejemplo.com"],
+        "cambiados": [],
         "analysis": None,
     }
+
+
+async def test_diff_scan_detecta_cambios_en_activos_comunes(
+    client: TestClient, monkeypatch
+) -> None:
+    """De extremo a extremo, por la persistencia real: `www` existe en los dos
+    escaneos, pero en el segundo su IP tiene el 22 abierto. Antes salía como
+    «común» sin más; ahora aparece en `cambiados` con el puerto nuevo."""
+    scan_id_1, _ = _crear_dos_escaneos(client, monkeypatch)
+
+    async def fake_enrich(result: SubdomainScanResult) -> EnrichmentResult:
+        return EnrichmentResult(ports_by_ip={"93.184.216.34": [22, 443]})
+
+    async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
+        return _fake_result_con_hosts(domain, "www.ejemplo.com", "new.ejemplo.com")
+
+    monkeypatch.setattr("atalaya.api.routes.scans.enrich_scan", fake_enrich)
+    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
+    tercero = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+
+    resp = client.get(f"/scans/{scan_id_1}/diff/{tercero['id']}", params={"analysis": "false"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["comunes"] == ["www.ejemplo.com"]
+    assert body["cambiados"] == [
+        {
+            "hostname": "www.ejemplo.com",
+            "estado_anterior": "active",
+            "estado_actual": "active",
+            "puertos_nuevos": [22, 443],
+            "puertos_desaparecidos": [],
+            "hallazgos_nuevos": [],
+            "hallazgos_desaparecidos": [],
+        }
+    ]
 
 
 async def test_diff_scan_sin_analisis_mantiene_404_y_400(client: TestClient, monkeypatch) -> None:

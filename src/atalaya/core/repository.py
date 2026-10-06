@@ -92,31 +92,127 @@ async def list_findings(
 
 
 @dataclass
+class FindingRef:
+    """Un hallazgo dentro de un cambio: su tipo y la severidad que tenía.
+
+    La severidad sale del escaneo donde el hallazgo está presente (el actual
+    para los nuevos, el previo para los desaparecidos): un hallazgo que
+    desaparece se valora por lo grave que era, no por lo que hay ahora.
+    """
+
+    finding_type: str
+    severity: str
+
+
+@dataclass
+class AssetChange:
+    """Qué cambió en un activo presente en los dos escaneos."""
+
+    hostname: str
+    estado_anterior: str
+    estado_actual: str
+    puertos_nuevos: list[int] = field(default_factory=list)
+    puertos_desaparecidos: list[int] = field(default_factory=list)
+    hallazgos_nuevos: list[FindingRef] = field(default_factory=list)
+    hallazgos_desaparecidos: list[FindingRef] = field(default_factory=list)
+
+
+@dataclass
 class ScanDiff:
-    """Diferencia de activos entre dos escaneos del mismo dominio."""
+    """Diferencia de activos entre dos escaneos del mismo dominio.
+
+    `comunes` son todos los hostnames presentes en ambos; `cambiados`, el
+    subconjunto de esos que cambió de estado, puertos o hallazgos. Se conserva
+    `comunes` completo (y no solo «sin cambios») porque es el contrato que ya
+    exponía la API: un cliente existente sigue recibiendo lo mismo.
+    """
 
     nuevos: list[str] = field(default_factory=list)
     desaparecidos: list[str] = field(default_factory=list)
     comunes: list[str] = field(default_factory=list)
+    cambiados: list[AssetChange] = field(default_factory=list)
+
+
+def _findings_by_type(asset: Asset) -> dict[str, FindingRef]:
+    """Hallazgos de un activo indexados por tipo.
+
+    Se compara por `finding_type` y no por evidencia: la evidencia cambia
+    entre escaneos sin que cambie el problema (los días que faltan para que
+    caduque un certificado, el `max-age` exacto). Cada técnica de
+    descubrimiento emite como mucho un hallazgo por tipo y host (las cookies
+    se agrupan a propósito, ver `discovery/headers.py`), así que el tipo
+    identifica el hallazgo dentro de su activo.
+    """
+    return {
+        f.finding_type: FindingRef(finding_type=f.finding_type, severity=f.severity.value)
+        for f in asset.findings
+    }
+
+
+def _asset_change(previous: Asset, current: Asset) -> AssetChange | None:
+    """Cambios entre dos versiones del mismo activo, o `None` si no hay.
+
+    No se comparan las IPs: con CDN y balanceo, cambian entre dos escaneos
+    sin que cambie nada de la exposición, y marcarían como «cambiado» casi
+    todo activo detrás de un balanceador.
+    """
+    puertos_previos, puertos_actuales = set(previous.open_ports), set(current.open_ports)
+    hallazgos_previos, hallazgos_actuales = _findings_by_type(previous), _findings_by_type(current)
+    change = AssetChange(
+        hostname=current.hostname,
+        estado_anterior=previous.status,
+        estado_actual=current.status,
+        puertos_nuevos=sorted(puertos_actuales - puertos_previos),
+        puertos_desaparecidos=sorted(puertos_previos - puertos_actuales),
+        hallazgos_nuevos=[
+            hallazgos_actuales[t] for t in sorted(hallazgos_actuales.keys() - hallazgos_previos)
+        ],
+        hallazgos_desaparecidos=[
+            hallazgos_previos[t] for t in sorted(hallazgos_previos.keys() - hallazgos_actuales)
+        ],
+    )
+    changed = (
+        change.estado_anterior != change.estado_actual
+        or change.puertos_nuevos
+        or change.puertos_desaparecidos
+        or change.hallazgos_nuevos
+        or change.hallazgos_desaparecidos
+    )
+    return change if changed else None
 
 
 def diff_scans(previous: Scan, current: Scan) -> ScanDiff:
-    """Compara los hostnames de dos escaneos del mismo dominio.
+    """Compara dos escaneos del mismo dominio: hostnames y, de los comunes,
+    estado, puertos abiertos y hallazgos.
 
-    Requiere que `previous.assets` y `current.assets` ya estén cargados
-    (p. ej. obtenidos con `get_scan()` o `get_latest_scan()`), no los carga
-    aquí: esta función es síncrona y de puro cálculo a propósito, para poder
-    probarla sin sesión de base de datos.
+    Requiere que `previous.assets` y `current.assets` (y sus `findings`) ya
+    estén cargados (p. ej. obtenidos con `get_scan()` o `get_latest_scan()`),
+    no los carga aquí: esta función es síncrona y de puro cálculo a propósito,
+    para poder probarla sin sesión de base de datos.
 
-    Un hostname ausente en `current` no implica necesariamente que el activo
-    dejó de existir: la variabilidad de DNS (ver CLAUDE.md) puede causar
-    ausencias puntuales. Esta función reporta presencia/ausencia sin intentar
-    distinguir señal de ruido; eso corresponde a la capa IA (Paso 5).
+    Solo comparar hostnames dejaba fuera lo que más interesa vigilar en el
+    tiempo: un activo que ya existía y abre un puerto nuevo, o que deja de
+    enviar HSTS, salía como «sin cambios».
+
+    Una ausencia en `current` no implica necesariamente un cambio real: la
+    variabilidad de DNS (ver CLAUDE.md) puede hacer desaparecer un hostname,
+    y un timeout puede hacer desaparecer un puerto o un hallazgo (si la sonda
+    de cabeceras no obtuvo respuesta, no hay cabeceras que evaluar). Por eso
+    se llaman «desaparecidos» y no «cerrados» ni «resueltos». Esta función
+    reporta presencia/ausencia sin intentar distinguir señal de ruido; eso
+    corresponde a la capa IA (`ai/diff_analyst.py`).
     """
-    previos = {asset.hostname for asset in previous.assets}
-    actuales = {asset.hostname for asset in current.assets}
+    previos = {asset.hostname: asset for asset in previous.assets}
+    actuales = {asset.hostname: asset for asset in current.assets}
+    comunes = sorted(actuales.keys() & previos.keys())
+    cambiados = [
+        change
+        for hostname in comunes
+        if (change := _asset_change(previos[hostname], actuales[hostname])) is not None
+    ]
     return ScanDiff(
-        nuevos=sorted(actuales - previos),
-        desaparecidos=sorted(previos - actuales),
-        comunes=sorted(actuales & previos),
+        nuevos=sorted(actuales.keys() - previos.keys()),
+        desaparecidos=sorted(previos.keys() - actuales.keys()),
+        comunes=comunes,
+        cambiados=cambiados,
     )

@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atalaya.core.models import ScanStatus
+from atalaya.core.models import Asset, Finding, FindingSeverity, Scan, ScanStatus
 from atalaya.core.persistence import save_subdomain_scan
 from atalaya.core.repository import (
+    FindingRef,
     diff_scans,
     get_latest_scan,
     get_scan,
@@ -142,3 +143,129 @@ async def test_diff_scans_detecta_nuevos_y_desaparecidos(db_session: AsyncSessio
     assert diff.nuevos == ["c.ejemplo.com"]
     assert diff.desaparecidos == ["a.ejemplo.com"]
     assert diff.comunes == ["b.ejemplo.com"]
+
+
+# ─── diff_scans: cambios en los activos comunes ─────────────────────────────
+#
+# Puro cálculo sobre objetos ORM en memoria, sin sesión: es lo que promete
+# el docstring de `diff_scans`.
+
+
+def _activo(
+    hostname: str,
+    *,
+    status: str = "active",
+    ips: list[str] | None = None,
+    puertos: list[int] | None = None,
+    hallazgos: list[tuple[str, str, FindingSeverity]] | None = None,
+) -> Asset:
+    asset = Asset(
+        hostname=hostname,
+        status=status,
+        ip_addresses=ips or ["140.82.121.3"],
+        sources=["crt.sh"],
+        is_active=status == "active",
+        leaks_internal_addressing=False,
+        open_ports=puertos or [],
+    )
+    for finding_type, evidence, severity in hallazgos or []:
+        asset.findings.append(
+            Finding(finding_type=finding_type, evidence=evidence, severity=severity)
+        )
+    return asset
+
+
+def _escaneo(*assets: Asset) -> Scan:
+    scan = Scan(domain="ejemplo.com", status=ScanStatus.COMPLETED, errors=[])
+    scan.assets.extend(assets)
+    return scan
+
+
+def test_diff_scans_detecta_puertos_nuevos_y_desaparecidos_en_un_activo_comun() -> None:
+    diff = diff_scans(
+        _escaneo(_activo("www.ejemplo.com", puertos=[80, 443, 8080])),
+        _escaneo(_activo("www.ejemplo.com", puertos=[22, 80, 443])),
+    )
+
+    assert diff.comunes == ["www.ejemplo.com"]
+    [cambio] = diff.cambiados
+    assert cambio.puertos_nuevos == [22]
+    assert cambio.puertos_desaparecidos == [8080]
+    assert cambio.hallazgos_nuevos == cambio.hallazgos_desaparecidos == []
+
+
+def test_diff_scans_hallazgos_con_la_severidad_del_escaneo_donde_estan() -> None:
+    """Un hallazgo nuevo lleva la severidad del actual; uno desaparecido, la
+    que tenía en el previo (lo grave que era, no lo que hay ahora)."""
+    previo = _activo(
+        "www.ejemplo.com", hallazgos=[("csp_missing", "sin CSP", FindingSeverity.MEDIUM)]
+    )
+    actual = _activo(
+        "www.ejemplo.com", hallazgos=[("hsts_missing", "sin HSTS", FindingSeverity.UNKNOWN)]
+    )
+
+    [cambio] = diff_scans(_escaneo(previo), _escaneo(actual)).cambiados
+
+    assert cambio.hallazgos_nuevos == [FindingRef("hsts_missing", "unknown")]
+    assert cambio.hallazgos_desaparecidos == [FindingRef("csp_missing", "medium")]
+
+
+def test_diff_scans_compara_hallazgos_por_tipo_no_por_evidencia() -> None:
+    """La evidencia cambia sin que cambie el problema (días hasta la
+    caducidad): si contara, todo certificado saldría «cambiado» cada semana."""
+    previo = _activo(
+        "vpn.ejemplo.com",
+        hallazgos=[("certificado_proximo_a_caducar", "caduca en 27 días", FindingSeverity.LOW)],
+    )
+    actual = _activo(
+        "vpn.ejemplo.com",
+        hallazgos=[("certificado_proximo_a_caducar", "caduca en 20 días", FindingSeverity.LOW)],
+    )
+
+    diff = diff_scans(_escaneo(previo), _escaneo(actual))
+
+    assert diff.comunes == ["vpn.ejemplo.com"]
+    assert diff.cambiados == []
+
+
+def test_diff_scans_ignora_el_cambio_de_ip() -> None:
+    """Con CDN y balanceo la IP varía entre escaneos sin cambiar la exposición."""
+    diff = diff_scans(
+        _escaneo(_activo("www.ejemplo.com", ips=["140.82.121.3"])),
+        _escaneo(_activo("www.ejemplo.com", ips=["140.82.121.4"])),
+    )
+
+    assert diff.cambiados == []
+
+
+def test_diff_scans_detecta_el_cambio_de_estado() -> None:
+    """Un activo que deja de resolver es justo donde vive la señal de takeover."""
+    diff = diff_scans(
+        _escaneo(_activo("blog.ejemplo.com", puertos=[443])),
+        _escaneo(_activo("blog.ejemplo.com", status="nxdomain")),
+    )
+
+    [cambio] = diff.cambiados
+    assert (cambio.estado_anterior, cambio.estado_actual) == ("active", "nxdomain")
+    assert cambio.puertos_desaparecidos == [443]
+
+
+def test_diff_scans_cambiados_solo_contiene_comunes_y_en_orden() -> None:
+    """Un activo nuevo o desaparecido no se repite en `cambiados`, y los
+    cambiados salen ordenados por hostname, como el resto de listas."""
+    diff = diff_scans(
+        _escaneo(
+            _activo("z.ejemplo.com", puertos=[80]),
+            _activo("a.ejemplo.com", puertos=[80]),
+            _activo("viejo.ejemplo.com", puertos=[22]),
+        ),
+        _escaneo(
+            _activo("a.ejemplo.com", puertos=[80, 443]),
+            _activo("z.ejemplo.com", puertos=[443]),
+            _activo("nuevo.ejemplo.com", puertos=[22]),
+        ),
+    )
+
+    assert diff.nuevos == ["nuevo.ejemplo.com"]
+    assert diff.desaparecidos == ["viejo.ejemplo.com"]
+    assert [c.hostname for c in diff.cambiados] == ["a.ejemplo.com", "z.ejemplo.com"]

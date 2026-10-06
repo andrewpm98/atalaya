@@ -128,6 +128,36 @@ class AskResponse(BaseModel):
     priorities: list[str] = Field(default_factory=list)
 
 
+class FindingRefOut(BaseModel):
+    """Hallazgo aparecido o desaparecido en un activo común (ver `AssetChangeOut`)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    finding_type: str
+    #: Del escaneo donde el hallazgo está presente: el actual si es nuevo,
+    #: el previo si desapareció.
+    severity: FindingSeverity
+
+
+class AssetChangeOut(BaseModel):
+    """Cambios de un activo presente en los dos escaneos.
+
+    «Desaparecido» no significa «cerrado» ni «resuelto»: un timeout de la
+    sonda también hace desaparecer un puerto o un hallazgo (ver
+    `core/repository.py::diff_scans`).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    hostname: str
+    estado_anterior: str
+    estado_actual: str
+    puertos_nuevos: list[int] = Field(default_factory=list)
+    puertos_desaparecidos: list[int] = Field(default_factory=list)
+    hallazgos_nuevos: list[FindingRefOut] = Field(default_factory=list)
+    hallazgos_desaparecidos: list[FindingRefOut] = Field(default_factory=list)
+
+
 class ScanDiffOut(BaseModel):
     """Respuesta de `GET /scans/{scan_id}/diff/{other_scan_id}`.
 
@@ -136,6 +166,10 @@ class ScanDiffOut(BaseModel):
     mismo orden en que se pidieron en la URL (ver `scans.py::diff_scan`),
     así que el cliente no debe asumir que `previous_scan_id == scan_id` de
     la ruta.
+
+    `comunes` lista todos los hostnames presentes en ambos escaneos, como
+    antes de existir `cambiados`; los «sin cambios» son `comunes` menos los
+    hostnames de `cambiados`.
     """
 
     previous_scan_id: int
@@ -143,6 +177,7 @@ class ScanDiffOut(BaseModel):
     nuevos: list[str] = Field(default_factory=list)
     desaparecidos: list[str] = Field(default_factory=list)
     comunes: list[str] = Field(default_factory=list)
+    cambiados: list[AssetChangeOut] = Field(default_factory=list)
     #: Valoración de `ai/diff_analyst.py`. `None` solo si se pidió
     #: `analysis=false`; por defecto, si el modelo falla, el endpoint da 502.
     analysis: str | None = None
