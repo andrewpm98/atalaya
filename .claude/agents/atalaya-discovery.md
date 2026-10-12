@@ -21,7 +21,7 @@ de seguridad" y "Deuda técnica conocida") y las secciones 2.2, 7 y 8 de
 | `discovery/shodan.py` | Segunda fuente opcional; sin clave se omite sin incidencia; 401/403 no se reintentan |
 | `discovery/ports.py` | TCP asíncrono sobre `COMMON_PORTS`, concurrencia acotada |
 | `discovery/headers.py` | Seis cabeceras de seguridad sobre la respuesta final (sigue redirecciones) |
-| `discovery/tls.py` | Versión, emisor, caducidad (`CERT_NONE` a propósito); `CertificateInfo` es un `TypedDict` |
+| `discovery/tls.py` | Versión, emisor, caducidad (`CERT_NONE` a propósito); `CertificateInfo` es un `TypedDict`; `IMPLICIT_TLS_PORTS` (443 siempre, 465/993/995/8443 si están abiertos) |
 | `discovery/takeover.py` | Patrón de CNAME sobre hosts **sin** A/AAAA. **Pasivo puro: ni `httpx` ni HTTP** — hay un test estático que lo garantiza |
 | `discovery/takeover_verify.py` | Verificación HTTP **opt-in** (`TAKEOVER_VERIFY`), eleva a "alta sospecha — no confirmado" |
 | `discovery/enrichment.py` | Orquesta: puertos/cabeceras/TLS sobre `active_records`, takeover sobre **todos** los `records`, verificación encadenada después |
@@ -48,14 +48,18 @@ de seguridad" y "Deuda técnica conocida") y las secciones 2.2, 7 y 8 de
   (`core/repository.py::diff_scans`) y la reutilización del triaje
   (`ai/triage_reuse.py`) identifican un hallazgo por su `finding_type` dentro
   de su activo. Una técnica que pueda dar varios del mismo tipo en un host
-  (p. ej. TLS en varios puertos) debe distinguirlos en el `finding_type` o
-  agruparlos en uno (como las cookies). Ten en cuenta que la evidencia forma
+  debe distinguirlos en el `finding_type` o agruparlos en uno (como las
+  cookies, o TLS en varios puertos: `models.py::_merge_tls_findings`, que
+  deja idéntica la evidencia cuando solo aparece en el 443). Ten en cuenta que la evidencia forma
   parte del prompt de triaje: un dato que varía solo entre escaneos (los días
   hasta la caducidad) impide reutilizar ese triaje, y cambiar el texto de una
   evidencia existente deja obsoleta la grabación de la demo.
 - **Un estado nuevo de `ResolutionStatus`** debe revisarse contra
-  `is_active`, `scan_targets()`, `active_records` y el filtro de estados de
-  `takeover.py` antes de darlo por bueno (así se validó `wildcard`).
+  `is_active`, `scan_targets()`, `active_records`,
+  `persistence.py::apply_port_scan()` y el filtro de estados de `takeover.py`
+  antes de darlo por bueno, **con un test por cada uno**: al validar
+  `wildcard` se dio por bueno leyendo el código y `scan_targets()` seguía
+  incluyéndolo (no filtraba por `is_active`), corregido en `e581fa3`.
   `Asset.status` es texto libre en BD: no requiere migración.
 - **Módulos independientes.** No importes de `subdomains.py` desde un módulo
   hermano (riesgo de import circular); mismo criterio que `shodan.py` y
