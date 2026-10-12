@@ -474,7 +474,35 @@ diga qué está configurado y oriente a quien llega de fuera.
   (sección de la fase B, estado «completa», commits y preguntas de defensa),
   CLAUDE.md, ARQUITECTURA (§2.1, §2.6, §2.9) y README.
 
-**2. `POST /scans` en segundo plano** — hoy el escaneo corre dentro de la
+**2. Dossier de defensa** — acordado el 12/10/2026: hoy el material está
+disperso (unas 120 preguntas en los bloques de defensa de 11 memorias; la de
+robustez no tiene bloque) y no hay un documento único desde el que estudiar.
+
+- **Formato:** documento vivo en **Claude Docs** (el conector está
+  disponible; cargar antes el skill `anthropic-skills:docs`) que el usuario
+  edita y comenta mientras prepara la defensa, y que **se exporta a PDF**
+  cuando lo quiera imprimir. Se hace después de la fase B para que incluya
+  `init`/`doctor` y el dashboard nuevo, y se actualiza con cada bloque
+  siguiente.
+- **Contenido:** (1) presentación de 2 minutos: qué es, qué problema
+  resuelve, por qué la IA es lo diferencial; (2) arquitectura en una página,
+  con diagrama; (3) los 5 requisitos obligatorios y dónde se ve cada uno en
+  la demo; (4) guion de la demo paso a paso (`seed_demo_data.py --reset`,
+  `AI_PROVIDER=replay`, las 4 preguntas grabadas, diff, informe) con plan B
+  sin red (ver «Datos de reserva para la demo»); (5) cifras para memorizar
+  (tests, 117 subdominios en 19 s, 27 % menos llamadas de triaje,
+  `risk_score` 39 → 40, 6 agentes…), sacadas del estado real del día; (6)
+  decisiones clave y su porqué; (7) las 6 restricciones de seguridad y cómo
+  se cumple cada una; (8) límites dichos con honestidad antes de que los
+  pregunten; (9) banco de preguntas consolidado por tema y sin repetidas;
+  (10) checklist del día de la defensa.
+- **Regla:** cada respuesta del banco se **comprueba contra el código
+  actual**: hay respuestas superadas en memorias antiguas (p. ej.
+  `ai/query.py` ya no existe y la fórmula del `risk_score` cambió). Si una
+  contradice el código, se corrige también el bloque de esa memoria: es la
+  excepción a «las memorias son fotos fechadas» (ver «Documentación»).
+
+**3. `POST /scans` en segundo plano** — hoy el escaneo corre dentro de la
 petición (19 s para github.com; minutos para un dominio grande).
 
 - Devuelve **`202`** con el escaneo en `running` (`ScanStatus.RUNNING` ya
@@ -491,8 +519,8 @@ petición (19 s para github.com; minutos para un dominio grande).
   `scripts/build_demo_data.py`, los `curl` del README ni los tests.
 - Commits separados: API y dashboard (consulta periódica del estado).
 
-**3. Monitorización: escaneos programados con aviso por webhook** — la
-carencia más grande como ASM. Depende del bloque 2 (reutiliza la función de
+**4. Monitorización: escaneos programados con aviso por webhook** — la
+carencia más grande como ASM. Depende del bloque 3 (reutiliza la función de
 escaneo en segundo plano).
 
 - Tabla nueva **`monitors`** (dominio, intervalo, `webhook_url`, último
@@ -510,14 +538,14 @@ escaneo en segundo plano).
   varios workers de uvicorn, cada escaneo se lanzaría varias veces.
 - Cumple de forma literal el requisito «API o webhook».
 
-**4. Cierre de la fase** — docs de cada bloque (CLAUDE.md, ARQUITECTURA,
+**5. Cierre de la fase** — docs de cada bloque (CLAUDE.md, ARQUITECTURA,
 README, `.env.example` si hay campos nuevos), memoria de la fase con su bloque
 de preguntas de defensa, guion de la demo recorrido en `replay` por HTTP sin
 grabaciones faltantes, y `push` cuando el usuario lo diga.
 
-**Después, o si el calendario aprieta:** preparar la defensa (ensayar el
-guion con `scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una
-BD aparte; repasar los bloques de preguntas de las memorias). **Cuando vuelva
+**Después, o si el calendario aprieta:** ensayar la defensa con el dossier
+(guion con `scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una
+BD aparte). **Cuando vuelva
 el crédito:** regrabar la valoración del diff posterior al triaje (escribe
 «`vpn-ca.github.com` (IAD)» en vez de `vpn-ca.iad.github.com`; 1 llamada) y
 valorar quitar las IPs del prompt de triaje para que la reutilización
@@ -839,12 +867,12 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   de ASM, que se define por vigilar en el tiempo. El diff con `cambiados` es
   la pieza que permitiría alertar («ayer no tenía el 22 abierto»); falta el
   disparador (planificador + notificación cuando el diff no está vacío).
-  **Planificado** como bloque 3 (diseño en «Plan acordado para las próximas
+  **Planificado** como bloque 4 (diseño en «Plan acordado para las próximas
   sesiones»).
 - **`POST /scans` es síncrono.** El escaneo completo corre dentro de la
   petición HTTP: 19 s para github.com, pero un dominio grande dejaría la
   conexión abierta minutos. Lo normal sería lanzarlo como tarea en segundo
-  plano y consultar su estado. **Planificado** como bloque 2 (diseño en
+  plano y consultar su estado. **Planificado** como bloque 3 (diseño en
   «Plan acordado para las próximas sesiones»).
 - **Señal/ruido de los hallazgos.** En github.com, 194 de 211 hallazgos son
   `low`, casi todo higiene de cabeceras. La reutilización del triaje reduce

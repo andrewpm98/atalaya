@@ -318,6 +318,10 @@ acordado para las próximas sesiones»):
 3. **Monitorización** con aviso por webhook, protegido contra SSRF.
 4. **Cierre**: documentación, preguntas de defensa y guion de la demo.
 
+Entre la fase B y el bloque 2 se acordó además un **dossier de defensa**
+(documento vivo exportable a PDF) que reúna el material hoy repartido entre
+las memorias; no es parte de esta fase, pero fija el orden de trabajo.
+
 Esta memoria se completará con la fase B antes de darla por cerrada.
 
 ---
