@@ -69,7 +69,8 @@ trabajar" al final de este documento.
 ```
 src/atalaya/
 ├── config.py                    Configuración desde entorno (.env)
-├── cli.py                       CLI con subcomando `subdomains`
+├── cli.py                       CLI: `subdomains`, `doctor` (diagnóstico) e
+│                                 `init` (configuración guiada)
 ├── core/
 │   ├── database.py              Engine async + Base declarativa + get_session
 │   ├── models.py                Scan, Asset, Finding (SQLAlchemy 2.0)
@@ -137,6 +138,18 @@ src/atalaya/
 │   `ai/query.py::ask()` (consulta NL original) se retiró: `POST /findings/ask`
 │   pasa por `prompter.py`, que reemplaza su función y devuelve más señal
 │   (patrones, combinaciones preocupantes, prioridades), no solo prosa libre.
+├── onboarding/                  Puesta en marcha guiada (fase 13)
+│   ├── ui.py                     Identidad visual en la terminal: logo de la
+│   │                             torre, paleta del dashboard, modo ASCII si la
+│   │                             salida no es UTF-8
+│   ├── checks.py                 Comprobaciones (`CheckResult`): config, alcance,
+│   │                             BD y migraciones, claves de IA/Shodan sin coste,
+│   │                             crt.sh, API, `.env` fuera de git
+│   ├── doctor.py                 `atalaya doctor` — diagnóstico y cómo resolverlo
+│   ├── envfile.py                `.env`: escritura atómica con copia, verificada
+│   │                             con el parser de la app; enmascarado de secretos
+│   └── wizard.py                 `atalaya init` — asistente de 5 pasos y
+│                                 `--non-interactive` (secretos del entorno)
 ├── reporting/
 │   ├── generator.py               generate_report()/render_html() — informe PDF
 │   │                               con portada (Jinja2 + xhtml2pdf)
@@ -314,7 +327,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **480 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **558 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -325,7 +338,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -390,10 +403,11 @@ pide evitar explícitamente ("los stubs no son código muerto").
     `memorias/Memoria_Ampliacion_Diff_Triaje_Atalaya.md`.
 13. **Ampliación — Puesta en marcha guiada** 🚧 (desde el 12/10/2026) —
     TLS en los puertos con TLS implícito y hosts `wildcard` fuera del escaneo
-    de puertos (✅); `atalaya doctor` (diagnóstico) y `atalaya init`
-    (asistente de configuración) con identidad visual propia en la terminal
-    (fase A); después, `GET /config/status` y bienvenida en el dashboard
-    (fase B). Maqueta aprobada antes de implementar.
+    de puertos ✅; **fase A** ✅: `atalaya doctor` (diagnóstico) y `atalaya
+    init` (asistente de configuración) con identidad visual propia en la
+    terminal, maqueta aprobada antes de implementar; **fase B** pendiente:
+    `GET /config/status` y bienvenida en el dashboard con el logo. Memoria
+    (en curso): `memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -405,12 +419,13 @@ defensa oral.
 
 ---
 
-## Estado al 06/10/2026 y próxima sesión
+## Estado al 12/10/2026 y próxima sesión
 
-**Dónde se quedó:** `main` limpio, con los commits de la fase 12 en local y
-sin `push` al cerrar la sesión (el usuario decide cuándo; al retomar,
-comprobar con `git status -sb` si ya se subieron). 480 tests, `ruff` y `mypy` a cero.
-La demo en `replay` reproduce el guion completo sin grabaciones faltantes.
+**Dónde se quedó:** `main` con los commits de la fase 13 (TLS multipuerto,
+hosts `wildcard`, clave de Shodan fuera del log, `doctor` e `init`) en local
+y sin `push` (el usuario decide cuándo; al retomar, comprobar con
+`git status -sb`). 558 tests, `ruff` y `mypy` a cero. Ningún prompt ha
+cambiado: la demo en `replay` sigue intacta (`tests/test_demo_data.py`).
 
 **Restricción operativa:** el **crédito de la API de Anthropic está
 agotado**. Cualquier cambio de prompt o del contexto que recibe un agente
@@ -421,8 +436,11 @@ en vivo, no para regrabar la demo (grabada con `claude-sonnet-4-6`).
 
 **Por orden de prioridad:**
 
-1. **Confirmar el calendario**: si la entrega ya se hizo y cuándo es la
-   defensa. Decide si queda margen para código o solo para ensayar.
+1. **Fase B de la puesta en marcha**: `GET /config/status` (las
+   comprobaciones de `onboarding/checks.py` sin salir a la red, solo sí/no,
+   con `X-API-Key`), pantalla de bienvenida del dashboard cuando no hay
+   escaneos y el logo de la torre en su cabecera. Calendario a 12/10/2026:
+   «hay algo de margen», sin fecha de defensa concreta.
 2. **Preparar la defensa**: ensayar el guion con
    `scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una BD
    aparte; repasar los bloques de preguntas de las memorias, sobre todo el de
@@ -435,7 +453,8 @@ en vivo, no para regrabar la demo (grabada con `claude-sonnet-4-6`).
      existen.
    - ~~**TLS en los puertos abiertos además del 443**~~ ✅ 12/10/2026 (ver
      «Deuda técnica conocida → Resuelta»).
-   - **`POST /scans` como tarea en segundo plano** con consulta de estado.
+   - **`POST /scans` como tarea en segundo plano** con consulta de estado
+     (siguiente bloque acordado tras la fase B; después, la monitorización).
 4. **Cuando vuelva el crédito**: regrabar la valoración del diff posterior al
    triaje (escribe «`vpn-ca.github.com` (IAD)» en vez de
    `vpn-ca.iad.github.com`; 1 llamada) y valorar quitar las IPs del prompt
@@ -737,6 +756,17 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ### Pendiente
 
+- **Fase B de la puesta en marcha** (ver «Estado y próxima sesión»): el
+  dashboard aún no dice qué está configurado ni sugiere `atalaya init`.
+- **`init` interactivo en Git Bash (mintty) exige `winpty atalaya init`**:
+  mintty no ofrece a Python una consola de Windows y `getpass` no puede leer
+  el teclado. `init` lo detecta (`MSYSTEM`) y lo explica en vez de colgarse;
+  en PowerShell y Windows Terminal funciona sin más.
+- **Un valor con `${` no se puede guardar en `.env`**: `python-dotenv` lo
+  expande incluso entre comillas simples, y no hay escape (comprobado).
+  `init` verifica el texto antes de escribirlo y se niega, en vez de guardar
+  un valor que la aplicación leería distinto.
+
 - **Sin monitorización continua.** Los escaneos se lanzan a mano: no hay
   escaneos programados ni alertas. Es la carencia más grande como producto
   de ASM, que se define por vigilar en el tiempo. El diff con `cambiados` es
@@ -836,6 +866,27 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   preguntas anteriores.
 
 ### Resuelta (se deja constancia para la defensa)
+
+- ~~**Configurar exigía editar `.env` a mano, y el alcance quedaba abierto
+  por defecto**~~ → `atalaya init` (fase 13): cinco pasos validados al
+  momento, alcance obligatorio con confirmación de autorización, `.env`
+  escrito de forma atómica y con copia. Y `atalaya doctor` diagnostica en
+  cualquier momento. Verificado en real en una pseudoconsola de Windows
+  (ConPTY), con las claves de desarrollo tecleadas y validadas contra
+  Anthropic y Shodan, sin ningún secreto en pantalla.
+- ~~**Claves desconocidas en `.env` ignoradas sin avisar**~~ → pydantic
+  (`extra="ignore"`) descarta en silencio una errata como `ANTHROPIC_APIKEY`.
+  `doctor` las señala. En el `.env` de desarrollo encontró `API_HOST`,
+  `API_PORT` y `ENVIRONMENT`, retirados del código en `521019e`.
+- ~~**Un `.env` con un valor inválido impedía arrancar cualquier comando**~~
+  (p. ej. `AI_MAX_TOKENS=mil`: traza de pydantic al importar) → `cli.py`
+  carga la configuración dentro de cada comando, y `doctor` lo diagnostica
+  («valor no válido en .env: AI_MAX_TOKENS»). Verificado en un proceso nuevo.
+- ~~**`atalaya -v` imprimía la clave de Shodan**~~ → con el log raíz en INFO,
+  `httpx` registraba la URL completa, y Shodan solo acepta la clave en la URL
+  (`?key=...`). `httpx`/`httpcore` quedan en WARNING (`c58a746`). Verificado
+  contra Shodan real: sin el arreglo la clave sale, con él no. La API no
+  estaba afectada (solo configura el logger `atalaya`).
 
 - ~~**TLS solo en el puerto 443**~~ → `enrich_scan()` repite la inspección
   en 465, 993, 995 y 8443 (`tls.py::IMPLICIT_TLS_PORTS`) cuando el escaneo
@@ -1077,7 +1128,9 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 480)
+atalaya init                         # configuración guiada: alcance, BD, claves (.env)
+atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
+pytest -q                            # tests (deben pasar los 558)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
@@ -1148,4 +1201,6 @@ que despacharlos como `general-purpose` pegando el contenido completo del
 `.md` correspondiente como instrucciones.
 
 Ninguno de los cuatro toca `ai/triage.py` — instrucción explícita, se
-mantiene igual desde el Paso 5.
+mantiene igual desde el Paso 5. `onboarding/` (fase 13) no tiene subagente
+propio: la fase B la tocarán `atalaya-api` (`GET /config/status`) y
+`atalaya-dashboard` (bienvenida), reutilizando `onboarding/checks.py`.

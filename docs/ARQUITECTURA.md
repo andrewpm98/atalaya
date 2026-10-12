@@ -319,6 +319,27 @@ no importa — graba solo lo usado y verifica la reproducción en `replay`.
 `tests/test_demo_data.py` repite esa verificación en la suite: si un cambio
 de prompt deja obsoleta la grabación, falla la suite, no la defensa.
 
+### 2.9 Puesta en marcha guiada — `src/atalaya/onboarding` (ampliación)
+
+Dos comandos de la CLI para quien llega de fuera: `atalaya init` configura
+(escribe el `.env`) y `atalaya doctor` diagnostica (no escribe nada). Se
+configura en la terminal y no en el dashboard a propósito: los secretos se
+escriben en la máquina del operador, y un formulario web exigiría un endpoint
+que reciba claves, abierto a cualquiera con `API_KEY` vacía (el default).
+
+| Módulo | Papel |
+|---|---|
+| `ui.py` | Identidad visual: logo de la torre (una torre de vigilancia que es también una A), paleta del dashboard, piezas de pantalla. Modo ASCII si la salida no es UTF-8 |
+| `checks.py` | Comprobaciones que devuelven `CheckResult` (datos, no texto): las comparten `doctor`, `init` y, en la fase B, `GET /config/status` |
+| `doctor.py` | Ejecuta las comprobaciones (las de red en paralelo) y pinta el diagnóstico con cómo resolver cada error o aviso |
+| `envfile.py` | Lee y escribe el `.env`: atómico, con copia, verificado con el parser de la aplicación; enmascara secretos |
+| `wizard.py` | `init` interactivo (5 pasos) y `--non-interactive` (mismas respuestas desde opciones y entorno) |
+
+Los módulos reciben los valores explícitamente en vez de leer `settings`, y
+`cli.py` importa la configuración dentro de cada comando: un `.env` con un
+valor inválido no impide arrancar `doctor`, que es quien debe diagnosticarlo.
+Detalle de los flujos en §10.
+
 ## 3. Flujo de datos
 
 ```
@@ -435,6 +456,11 @@ obligatorios:
     en el diff (estado, puertos y hallazgos de los comunes; §2.1, §2.3,
     §2.6) y reutilización del triaje ante el mismo prompt exacto (§2.1,
     §2.4). *(`memorias/Memoria_Ampliacion_Diff_Triaje_Atalaya.md`.)*
+14. **Puesta en marcha guiada** 🚧 — TLS en los puertos con TLS implícito
+    (§2.2), hosts `wildcard` fuera del escaneo de puertos (§7.6), y
+    `atalaya doctor`/`atalaya init` (§2.9, §10); pendiente la fase B
+    (`GET /config/status` y bienvenida en el dashboard).
+    *(`memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
 CLAUDE.md (que cuenta Shodan, takeover y agentes como una sola ampliación);
@@ -719,3 +745,88 @@ AskResponse  (API) — expone los cuatro campos, no solo `answer`
 El paso de enrutado es una petición puntual: si el proveedor falla ahí,
 `AIProviderError` se propaga (→ 502), igual que hacía `ai/query.py::ask()`
 en el Paso 5 — no hay nada parcial que conservar en una única pregunta.
+
+---
+
+## 10. Detalle: puesta en marcha guiada (`init` y `doctor`)
+
+### 10.1 `atalaya init`: nada se escribe hasta confirmar
+
+```
+[1 Alcance]     dominios → normalize_domain() → confirmación de autorización
+                (vacío solo con --allow-any; sin autorización → sale, código 1)
+[2 Base datos]  SQLite / Postgres del compose / URL propia → probe_database()
+                (conecta y lee la revisión de Alembic; un SQLite inexistente
+                 no se abre: abrirlo lo crearía)
+[3 IA]          Anthropic / Gemini / más tarde → lista de modelos (gratuita)
+                → modelo disponible con esa clave
+[4 Shodan]      opcional → /api-info (gratuito) → aviso si el plan es oss
+[5 Seguridad]   X-API-Key (secrets.token_urlsafe(32)) y takeover opt-in
+        │
+[Resumen]  secretos enmascarados (sk-ant-…a1b2, URL sin contraseña)
+        │  ¿Escribir? ── no ──→ código 1, nada escrito
+        ▼
+write_env()  → check_secrets() (git) → apply_migrations() → siguientes pasos
+```
+
+Ctrl+C en cualquier punto anterior al resumen sale con 130 y sin cambios: por
+eso las migraciones se aplican al final, sobre la base de datos elegida y
+después de escribir el `.env`, y no al elegirla. Alembic recibe esa URL por
+`config.attributes` (`migrations/env.py`), porque el `.env` que la contiene
+aún no existía al arrancar el proceso, y se ejecuta en un hilo aparte
+(`env.py` hace `asyncio.run()`). Con un `.env` previo, Enter conserva cada
+valor actual.
+
+`--non-interactive` reúne las mismas respuestas desde opciones (`--allowlist`,
+`--database`, `--ai-provider`...) y los secretos **solo** desde variables de
+entorno: como argumentos quedarían en el historial y en la lista de
+procesos. Opciones incompletas → código 2; algo que no valida → código 1;
+en ambos casos sin escribir nada. Sin terminal interactiva (un pipe, Git Bash
+sin `winpty`), `init` lo explica y sale con 2 en vez de quedarse esperando.
+
+### 10.2 Escritura del `.env`
+
+1. Se parte del `.env` existente o, si no hay, de `.env.example`, y solo se
+   reemplazan los valores pedidos: comentarios, orden y demás campos quedan.
+2. El texto resultante se vuelve a leer con `python-dotenv` (el mismo parser
+   que usa pydantic-settings) y se compara con lo pedido. Si algo no sale
+   idéntico, no se escribe. Caso real: `${...}` se expande incluso entre
+   comillas simples y no tiene escape.
+3. Copia del anterior en `.env.bak-AAAAMMDD-HHMMSS`; escritura en un temporal
+   del mismo directorio y `os.replace` (atómico); `chmod 600` en POSIX.
+4. Las copias y temporales llevan las mismas claves: `.gitignore` y
+   `.dockerignore` los excluyen, y `doctor` comprueba que git los ignore.
+
+### 10.3 `atalaya doctor`
+
+| Comprobación | Error | Aviso |
+|---|---|---|
+| Configuración | un valor del `.env` no carga | no hay `.env`; claves que Atalaya no conoce (pydantic las ignora sin avisar) |
+| Alcance | entrada que no es un dominio | `SCAN_ALLOWLIST` vacía (sin restricción) |
+| Base de datos | no conecta | no existe, sin migrar o migraciones pendientes |
+| IA | clave rechazada, proveedor desconocido, `replay` sin grabaciones | sin clave, modelo no disponible, no se pudo comprobar |
+| Shodan | clave rechazada | plan sin búsqueda DNS |
+| crt.sh | — | no responde (el escaneo sigue solo con DNS) |
+| API | — | sin `X-API-Key` |
+| Secretos | `.env` o una copia versionados o sin ignorar en git | — |
+
+Sale con 1 si hay algún error; los avisos no cuentan como fallo. Las
+comprobaciones de red van en paralelo y `--offline` las omite. Ninguna
+devuelve un secreto: hay un test que lo exige sobre la salida completa.
+
+**Sin coste y sin prometer de más.** Las claves se validan con llamadas que no
+consumen crédito (lista de modelos, `/api-info`), y por eso mismo no
+comprueban el saldo: una clave válida sin crédito pasa, y la pantalla lo dice.
+La clave de Gemini va en la cabecera `x-goog-api-key`; la de Shodan solo
+puede ir en la URL, y la CLI deja `httpx` en WARNING para que no acabe en el
+log (era un defecto real de `atalaya -v`).
+
+### 10.4 Terminal
+
+`rich`, con menús numerados: las librerías de menús con flechas
+(`prompt_toolkit`) fallan en Git Bash. Si la salida no es UTF-8 (redirigida
+en Windows, cp1252), logo, iconos y reglas pasan a ASCII y la salida se
+reconfigura con `errors="replace"`: escribir `●` en cp1252 lanzaba
+`UnicodeEncodeError` dentro de `rich` (reproducido al maquetar). No se fuerza
+UTF-8: quien recibe la salida redirigida espera su codificación. Las claves
+se leen con `getpass` y, al terminar, la línea se reescribe con puntos.

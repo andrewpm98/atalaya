@@ -42,6 +42,7 @@ la ruta base ya es profunda.
 
 ```bash
 cp .env.example .env         # rellena ANTHROPIC_API_KEY o GEMINI_API_KEY (según AI_PROVIDER)
+                             # o, con Python instalado: atalaya init (ver más abajo)
 docker compose up --build -d # levanta db + api + dashboard (equivale a `make up`)
 ```
 
@@ -70,9 +71,8 @@ La CLI también está disponible dentro del contenedor:
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"            # make install
-docker compose up -d db            # solo PostgreSQL (o usa SQLite: ver .env.example)
-cp .env.example .env               # Windows (cmd): copy .env.example .env
-alembic upgrade head               # make migrate — crea las tablas (una vez)
+atalaya init                       # configura .env paso a paso y crea las tablas
+atalaya doctor                     # comprueba que todo está en orden
 uvicorn atalaya.api.main:app       # make api — en una terminal
 streamlit run dashboard/app.py     # make dashboard — en otra
 pytest -q                          # make test — suite completa (deterministas, sin red)
@@ -81,9 +81,57 @@ pytest -q                          # make test — suite completa (deterministas
 `make` es opcional (Windows no lo trae): cada objetivo del `Makefile` es un
 alias del comando que aparece a su izquierda.
 
+Sin `atalaya init`, a mano: `cp .env.example .env` (en cmd, `copy`), edita
+las claves y `alembic upgrade head`. Para PostgreSQL en lugar de SQLite,
+`docker compose up -d db` antes.
+
+### Configuración guiada: `atalaya init` y `atalaya doctor`
+
+`atalaya init` pregunta en cinco pasos lo que hace falta y lo comprueba en el
+momento, sin coste:
+
+1. **Alcance autorizado**: los dominios que se pueden escanear
+   (`SCAN_ALLOWLIST`), con confirmación de que tienes autorización.
+2. **Base de datos**: SQLite local, el PostgreSQL de Docker o una URL propia
+   (se comprueba la conexión).
+3. **IA**: Anthropic o Gemini; la clave se valida y se elige un modelo
+   disponible. La validación no comprueba el saldo.
+4. **Shodan** (opcional): avisa si el plan de la clave no incluye la
+   búsqueda DNS.
+5. **Seguridad**: genera la clave de la API (`X-API-Key`) y deja la
+   verificación HTTP de takeover desactivada salvo que la pidas.
+
+Las claves no se ven al escribirlas. Nada se guarda hasta confirmar el
+resumen (Ctrl+C sale sin cambios); entonces escribe el `.env` (con copia del
+anterior, si lo había) y crea las tablas. Si ya hay un `.env`, Enter conserva
+cada valor.
+
+`atalaya doctor` comprueba en cualquier momento la configuración, la base de
+datos, las claves, crt.sh y que el `.env` no se vaya a subir a git, y dice
+cómo resolver cada problema. Sale con código 1 si hay errores (útil en CI);
+`--offline` no sale a la red.
+
+Para scripts y CI, sin preguntas. Los secretos van **siempre** en variables
+de entorno, nunca como argumentos (quedarían en el historial):
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... atalaya init --non-interactive \
+    --allowlist ejemplo.com --database sqlite --ai-provider anthropic --protect-api
+```
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+atalaya init --non-interactive --allowlist ejemplo.com --database sqlite --ai-provider anthropic --protect-api
+```
+
+En Git Bash, el modo interactivo necesita `winpty atalaya init`: su terminal
+no ofrece a Python una consola de Windows. En PowerShell y Windows Terminal
+funciona directamente.
+
 ### Autenticación
 
-Opcional. Con `API_KEY` vacía en `.env` (por defecto) la API no pide nada.
+Opcional (`atalaya init` la genera si lo eliges). Con `API_KEY` vacía en
+`.env` (por defecto) la API no pide nada.
 Con un valor, todo endpoint salvo `/health` exige la cabecera `X-API-Key` y
 responde `401` sin ella o con una clave distinta:
 
@@ -358,6 +406,8 @@ Ampliación posterior, más allá de los requisitos obligatorios:
       y reutilización del triaje entre escaneos ante el mismo prompt exacto
 - [x] TLS también en los puertos abiertos con TLS implícito (465, 993,
       995, 8443)
+- [x] `atalaya init` (configuración guiada) y `atalaya doctor`
+      (diagnóstico), con identidad visual propia en la terminal
 
 La memoria técnica de cada fase está en [`memorias/`](memorias/).
 
@@ -365,7 +415,8 @@ La memoria técnica de cada fase está en [`memorias/`](memorias/).
 
 Atalaya realiza reconocimiento sobre infraestructura. **Úsalo solo sobre
 dominios que te pertenezcan o para los que tengas autorización explícita.**
-La variable `SCAN_ALLOWLIST` permite restringir los objetivos permitidos.
+La variable `SCAN_ALLOWLIST` restringe los objetivos permitidos; `atalaya
+init` la pide en su primer paso.
 
 ## Licencia
 
