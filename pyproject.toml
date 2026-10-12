@@ -38,6 +38,10 @@ dependencies = [
     # Informes
     "jinja2>=3.1",
     "xhtml2pdf>=0.2.16",
+    # Terminal de `atalaya init` y `atalaya doctor` (src/atalaya/onboarding/).
+    # Python puro; los menús son numerados a propósito: las librerías de
+    # menús con flechas (prompt_toolkit) fallan en Git Bash.
+    "rich>=13.7",
 ]
 
 [project.optional-dependencies]
