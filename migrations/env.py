@@ -19,7 +19,12 @@ config = context.config
 
 # La URL de conexión sale de la configuración de la aplicación (.env), no de
 # alembic.ini: una sola fuente de verdad para dónde vive la base de datos.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Excepción: `atalaya init` migra la base de datos elegida antes de escribir
+# el `.env` que la contiene, y la pasa en `attributes` (onboarding/checks.py).
+# El `%` se duplica porque la configuración de Alembic lo interpola: una
+# contraseña con `%` rompería la migración.
+_database_url = config.attributes.get("database_url", settings.database_url)
+config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

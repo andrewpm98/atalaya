@@ -10,14 +10,10 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 from atalaya import __version__
-from atalaya.core.database import SessionLocal
 from atalaya.core.exceptions import AtalayaError
-from atalaya.core.persistence import apply_discovery_findings, apply_port_scan, save_subdomain_scan
-from atalaya.discovery.enrichment import enrich_scan
-from atalaya.discovery.models import ResolutionStatus
-from atalaya.discovery.subdomains import enumerate_subdomains
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -33,6 +29,19 @@ def _configure_logging(verbose: bool) -> None:
 
 
 async def _run_subdomains(args: argparse.Namespace) -> int:
+    # Imports aquí y no arriba: cargan `atalaya.config`, y un `.env` con un
+    # valor inválido impediría arrancar incluso `atalaya doctor`, que es el
+    # comando que debe diagnosticarlo.
+    from atalaya.core.database import SessionLocal
+    from atalaya.core.persistence import (
+        apply_discovery_findings,
+        apply_port_scan,
+        save_subdomain_scan,
+    )
+    from atalaya.discovery.enrichment import enrich_scan
+    from atalaya.discovery.models import ResolutionStatus
+    from atalaya.discovery.subdomains import enumerate_subdomains
+
     result = await enumerate_subdomains(args.domain, resolve=not args.no_resolve)
 
     if args.save:
@@ -90,6 +99,13 @@ async def _run_subdomains(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_doctor(args: argparse.Namespace) -> int:
+    from atalaya.onboarding.doctor import run_doctor
+    from atalaya.onboarding.ui import make_terminal
+
+    return await run_doctor(make_terminal(), Path.cwd(), offline=args.offline)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="atalaya", description="Atalaya ASM")
     parser.add_argument("--version", action="version", version=f"Atalaya {__version__}")
@@ -112,6 +128,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--save", action="store_true", help="Persiste el resultado en base de datos"
     )
     subdomains.set_defaults(func=_run_subdomains)
+
+    doctor = subparsers.add_parser(
+        "doctor", help="Comprueba la configuración: qué funciona y cómo arreglar lo que no"
+    )
+    doctor.add_argument(
+        "--offline", action="store_true", help="No sale a la red (no valida claves ni crt.sh)"
+    )
+    doctor.set_defaults(func=_run_doctor)
 
     return parser
 
