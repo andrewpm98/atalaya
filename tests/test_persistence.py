@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atalaya.core.models import Asset, Finding, ScanStatus
-from atalaya.core.persistence import save_subdomain_scan
+from atalaya.core.persistence import apply_port_scan, save_subdomain_scan
 from atalaya.discovery.models import (
     DiscoverySource,
     ResolutionStatus,
@@ -103,3 +103,32 @@ async def test_save_subdomain_scan_sin_resolver_queda_running(db_session: AsyncS
     await db_session.commit()
 
     assert scan.status is ScanStatus.RUNNING
+
+
+async def test_apply_port_scan_no_asigna_puertos_a_hosts_wildcard(
+    db_session: AsyncSession,
+) -> None:
+    """Un host `wildcard` que comparte IP con un host activo (el servidor
+    comodín también sirve un nombre real) no hereda sus puertos: en el
+    dashboard, el diff y el contexto de la IA parecería un servicio propio."""
+    result = SubdomainScanResult(domain="ejemplo.com")
+    result.records = [
+        SubdomainRecord(
+            hostname="www.ejemplo.com",
+            status=ResolutionStatus.ACTIVE,
+            ip_addresses=["140.82.121.3"],
+        ),
+        SubdomainRecord(
+            hostname="no-existe.ejemplo.com",
+            status=ResolutionStatus.WILDCARD,
+            ip_addresses=["140.82.121.3"],
+        ),
+    ]
+    result.finished_at = datetime.now(UTC)
+    scan = await save_subdomain_scan(db_session, result)
+
+    apply_port_scan(scan, {"140.82.121.3": [80, 443]})
+
+    puertos = {asset.hostname: asset.open_ports for asset in scan.assets}
+    assert puertos["www.ejemplo.com"] == [80, 443]
+    assert not puertos["no-existe.ejemplo.com"]

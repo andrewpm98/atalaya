@@ -624,3 +624,26 @@ def test_scan_targets_excluye_no_enrutables() -> None:
     assert len(resultado.unroutable_records) == 1
     assert len(resultado.leaking_records) == 1
     assert resultado.summary()["scan_targets"] == 1
+
+
+def test_scan_targets_excluye_los_hosts_wildcard() -> None:
+    """Un host reclasificado como `wildcard` sale del inventario activo y del
+    escaneo de puertos: su IP (la del comodín DNS) no es objetivo salvo que
+    un host activo de verdad también resuelva a ella."""
+    resultado = SubdomainScanResult(
+        domain=DOMAIN,
+        records=[
+            SubdomainRecord(
+                hostname="a.ejemplo.com",
+                status=ResolutionStatus.ACTIVE,
+                ip_addresses=["45.33.32.156"],
+            ),
+            SubdomainRecord(
+                hostname="cualquiera.ejemplo.com",
+                status=ResolutionStatus.WILDCARD,
+                ip_addresses=["93.184.216.34"],
+            ),
+        ],
+    )
+    assert resultado.scan_targets() == ["45.33.32.156"]
+    assert resultado.summary()["scan_targets"] == 1

@@ -178,8 +178,13 @@ class SubdomainScanResult(BaseModel):
         Es la entrada del módulo de puertos. Excluye deliberadamente las
         direcciones no alcanzables, que producirían intentos de conexión
         inútiles o, peor, dirigidos al propio equipo que ejecuta la herramienta.
+
+        Solo recorre los hosts activos: uno reclasificado como `wildcard`
+        resuelve a la IP del comodín DNS y no es un servicio real del
+        inventario. Esa IP solo se escanea si un host activo también resuelve
+        a ella.
         """
-        return sorted({ip for record in self.records for ip in record.routable_ips})
+        return sorted({ip for record in self.active_records for ip in record.routable_ips})
 
     def summary(self) -> dict[str, object]:
         """Resumen compacto para logs, CLI y respuestas de la API."""

@@ -12,7 +12,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atalaya.core.models import Asset, Finding, FindingSeverity, Scan, ScanStatus
-from atalaya.discovery.models import DiscoveryFinding, SubdomainScanResult
+from atalaya.discovery.models import DiscoveryFinding, ResolutionStatus, SubdomainScanResult
 
 
 async def save_subdomain_scan(session: AsyncSession, result: SubdomainScanResult) -> Scan:
@@ -81,8 +81,15 @@ def apply_port_scan(scan: Scan, ports_by_ip: dict[str, list[int]]) -> None:
 
     Un host puede compartir IP con otros (balanceo, CDN); se le asignan los
     puertos de *todas* las IPs en las que resuelve, no solo la primera.
+
+    Solo a los activos `active`: un host `wildcard` puede compartir IP con
+    uno activo (el servidor comodín también sirve un nombre real), y heredar
+    sus puertos lo presentaría como un servicio propio en el dashboard, el
+    diff y el contexto de la IA.
     """
     for asset in scan.assets:
+        if asset.status != ResolutionStatus.ACTIVE.value:
+            continue
         abiertos: set[int] = set()
         for ip in asset.ip_addresses:
             abiertos.update(ports_by_ip.get(ip, []))
