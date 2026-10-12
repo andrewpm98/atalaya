@@ -34,15 +34,35 @@ from atalaya.discovery.headers import analyze_headers
 from atalaya.discovery.models import (
     EnrichmentResult,
     HeaderScanResult,
+    SubdomainRecord,
     SubdomainScanResult,
     TlsScanResult,
 )
 from atalaya.discovery.ports import scan_ports
 from atalaya.discovery.takeover import find_takeover_candidates
 from atalaya.discovery.takeover_verify import verify_candidates
-from atalaya.discovery.tls import inspect_tls
+from atalaya.discovery.tls import IMPLICIT_TLS_PORTS, inspect_tls
 
 logger = logging.getLogger(__name__)
+
+
+def _extra_tls_targets(
+    active: list[SubdomainRecord], ports_by_ip: dict[str, list[int]]
+) -> list[tuple[str, int]]:
+    """Pares ``(hostname, puerto)`` con TLS implícito abierto, salvo el 443.
+
+    El 443 ya se inspecciona en todo host activo, abierto o no según el
+    escaneo de puertos (comportamiento previo, que no cambia). Los demás
+    puertos de `IMPLICIT_TLS_PORTS` solo se inspeccionan con evidencia de que
+    están abiertos en alguna IP enrutable del host: la negociación se hace
+    por hostname (SNI), así que basta con que uno de sus destinos lo tenga.
+    """
+    extra_ports = set(IMPLICIT_TLS_PORTS) - {443}
+    targets: list[tuple[str, int]] = []
+    for record in active:
+        open_ports = {port for ip in record.routable_ips for port in ports_by_ip.get(ip, [])}
+        targets.extend((record.hostname, port) for port in sorted(open_ports & extra_ports))
+    return targets
 
 
 async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
@@ -62,7 +82,11 @@ async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
     siendo relevante -- por eso ya no hay una salida temprana cuando
     `result.active_records` está vacío.
 
-    Tras el `gather`, si `TAKEOVER_VERIFY` está activo, `verify_candidates`
+    Tras el `gather`, TLS se repite en los demás puertos con TLS implícito
+    (`IMPLICIT_TLS_PORTS`: 465, 993, 995, 8443) que el escaneo encontró
+    abiertos en cada host (`_extra_tls_targets`), con el mismo semáforo.
+
+    Después, si `TAKEOVER_VERIFY` está activo, `verify_candidates`
     (`discovery/takeover_verify.py`) hace un `GET` a la página de error del
     proveedor de cada candidato para buscar la huella de "recurso no
     reclamado". Es opt-in (off por defecto): sin el flag, devuelve los
@@ -84,15 +108,24 @@ async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
         async with header_semaphore:
             return await analyze_headers(f"https://{hostname}/")
 
-    async def _tls(hostname: str) -> TlsScanResult:
+    async def _tls(hostname: str, port: int = 443) -> TlsScanResult:
         async with tls_semaphore:
-            return await inspect_tls(hostname)
+            return await inspect_tls(hostname, port)
 
     port_pairs, header_results, tls_results, takeover_candidates = await asyncio.gather(
         asyncio.gather(*(_ports(ip) for ip in ips)),
         asyncio.gather(*(_headers(hostname) for hostname in hostnames)),
         asyncio.gather(*(_tls(hostname) for hostname in hostnames)),
         find_takeover_candidates(result.records),
+    )
+
+    # TLS en los demás puertos con TLS implícito que el escaneo encontró
+    # abiertos. Va después del gather porque depende de sus puertos: solo
+    # añade latencia a los hosts que los tienen, no al resto del escaneo.
+    ports_by_ip = dict(port_pairs)
+    extra_tls = _extra_tls_targets(active, ports_by_ip)
+    extra_tls_results = await asyncio.gather(
+        *(_tls(hostname, port) for hostname, port in extra_tls)
     )
 
     # Verificación HTTP opt-in (TAKEOVER_VERIFY, off por defecto). Va DESPUÉS
@@ -103,15 +136,16 @@ async def enrich_scan(result: SubdomainScanResult) -> EnrichmentResult:
 
     logger.info(
         "Enriquecimiento de %s completado: %d IPs escaneadas, %d hosts analizados "
-        "(cabeceras + TLS), %d candidatos a takeover",
+        "(cabeceras + TLS), %d puertos TLS adicionales, %d candidatos a takeover",
         result.domain,
         len(port_pairs),
         len(hostnames),
+        len(extra_tls),
         len(takeover_candidates),
     )
     return EnrichmentResult(
-        ports_by_ip=dict(port_pairs),
+        ports_by_ip=ports_by_ip,
         header_results=list(header_results),
-        tls_results=list(tls_results),
+        tls_results=[*tls_results, *extra_tls_results],
         takeover_candidates=list(takeover_candidates),
     )

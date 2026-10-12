@@ -406,3 +406,13 @@ def test_la_verificacion_no_usa_el_modo_estricto_de_python_313() -> None:
     assert not contexto.verify_flags & ssl.VERIFY_X509_STRICT
     assert contexto.verify_mode == ssl.CERT_REQUIRED
     assert contexto.check_hostname is False
+
+
+def test_los_puertos_con_tls_implicito_estan_en_los_puertos_escaneados() -> None:
+    """Un puerto de `IMPLICIT_TLS_PORTS` fuera de `COMMON_PORTS` nunca saldría
+    abierto en el escaneo, así que su inspección TLS no se lanzaría jamás."""
+    from atalaya.discovery.ports import COMMON_PORTS
+    from atalaya.discovery.tls import IMPLICIT_TLS_PORTS
+
+    assert set(IMPLICIT_TLS_PORTS) <= set(COMMON_PORTS)
+    assert 443 in IMPLICIT_TLS_PORTS

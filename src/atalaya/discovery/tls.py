@@ -12,6 +12,11 @@ Además de caducidad y versión, se valida el certificado como lo haría un
 cliente: que cubra el hostname (`hostname_matches`, pura, sobre los SAN) y
 que su cadena lleve a una CA de confianza (`_verify_chain`, una segunda
 negociación TLS **con** verificación, en paralelo con la de inspección).
+
+`inspect_tls` evalúa un puerto; los demás puertos con TLS implícito
+(`IMPLICIT_TLS_PORTS`) los añade `discovery/enrichment.py` cuando el escaneo
+de puertos los encuentra abiertos, y `EnrichmentResult.findings_by_hostname`
+fusiona sus hallazgos en **uno por tipo y host**.
 """
 
 from __future__ import annotations
@@ -50,6 +55,15 @@ _VERIFY_CODES_CUBIERTOS = {_X509_V_ERR_CERT_HAS_EXPIRED, _X509_V_ERR_HOSTNAME_MI
 #: SAN que se citan como mucho en la evidencia (un certificado de CDN puede
 #: llevar cientos).
 _MAX_SAN_EN_EVIDENCIA = 6
+
+#: Puertos de `COMMON_PORTS` donde TLS empieza en el primer byte (TLS
+#: implícito): HTTPS, SMTPS, IMAPS, POP3S y HTTPS alternativo. El 443 se
+#: inspecciona siempre en todo host activo; los demás, solo si el escaneo de
+#: puertos los encontró abiertos (`discovery/enrichment.py`) — sin esa
+#: evidencia serían negociaciones a ciegas. Quedan fuera, a propósito, los
+#: puertos con STARTTLS (25, 587, 110, 143): exigen hablar antes el protocolo
+#: (SMTP, POP3, IMAP), más intrusivo y específico de cada servicio.
+IMPLICIT_TLS_PORTS: tuple[int, ...] = (443, 465, 993, 995, 8443)
 
 
 class CertificateInfo(TypedDict):

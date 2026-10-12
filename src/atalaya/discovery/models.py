@@ -311,6 +311,60 @@ def _takeover_evidence(candidate: TakeoverCandidate) -> str:
     return f"{base} Riesgo de takeover si el recurso de terceros no está reclamado; no verificado."
 
 
+def _evidence_by_port(entries: list[tuple[int, str]]) -> str:
+    """Evidencia de un hallazgo TLS presente en puertos distintos del 443.
+
+    Los puertos con la misma evidencia se citan juntos: el caso habitual es
+    el mismo certificado servido en 443 y 8443, y repetir el texto entero
+    por puerto solo alarga el informe y el prompt de triaje.
+    """
+    ports_by_text: dict[str, list[int]] = {}
+    for port, text in sorted(entries):
+        ports_by_text.setdefault(text, []).append(port)
+    parts = []
+    for text, ports in ports_by_text.items():
+        if len(ports) == 1:
+            label = f"Puerto {ports[0]}"
+        else:
+            label = "Puertos " + ", ".join(map(str, ports[:-1])) + f" y {ports[-1]}"
+        parts.append(f"{label}: {text}")
+    return " ".join(parts)
+
+
+def _merge_tls_findings(results: list[TlsScanResult]) -> dict[str, list[DiscoveryFinding]]:
+    """Fusiona los hallazgos TLS de varios puertos en **uno por tipo y host**.
+
+    El diff (`core/repository.py::diff_scans`) y la reutilización del triaje
+    (`ai/triage_reuse.py`) asumen como mucho un hallazgo de cada tipo por
+    host. Un certificado caducado servido en 443 y en 8443 es un problema
+    con dos puertos afectados, no dos problemas: la evidencia los cita todos.
+
+    Si el hallazgo solo aparece en el 443, la evidencia queda **idéntica** a
+    la de antes de inspeccionar otros puertos. No es estética: la
+    reutilización del triaje compara el prompt exacto, y cambiar esta
+    redacción haría pagar otra vez el triaje de todo hallazgo TLS ya triado.
+    """
+    by_host: dict[str, dict[str, list[tuple[int, str]]]] = {}
+    for result in results:
+        for finding in result.findings:
+            by_host.setdefault(result.hostname, {}).setdefault(
+                finding.finding_type, []
+            ).append((result.port, finding.evidence))
+
+    merged: dict[str, list[DiscoveryFinding]] = {}
+    for hostname, by_type in by_host.items():
+        merged[hostname] = []
+        for finding_type, entries in by_type.items():
+            if [port for port, _ in entries] == [443]:
+                evidence = entries[0][1]
+            else:
+                evidence = _evidence_by_port(entries)
+            merged[hostname].append(
+                DiscoveryFinding(finding_type=finding_type, evidence=evidence)
+            )
+    return merged
+
+
 class EnrichmentResult(BaseModel):
     """Resultado combinado de puertos, cabeceras y TLS sobre los hosts
     activos de un `SubdomainScanResult` (Paso 2, resto).
@@ -324,7 +378,11 @@ class EnrichmentResult(BaseModel):
 
     ports_by_ip: dict[str, list[int]] = Field(default_factory=dict)
     header_results: list[HeaderScanResult] = Field(default_factory=list)
-    tls_results: list[TlsScanResult] = Field(default_factory=list)
+    tls_results: list[TlsScanResult] = Field(
+        default_factory=list,
+        description="Una inspección por host y puerto: el 443 de todo host activo y "
+        "los demás puertos con TLS implícito que el escaneo encontró abiertos",
+    )
     takeover_candidates: list[TakeoverCandidate] = Field(
         default_factory=list,
         description="Candidatos a subdomain takeover, detectados sobre TODOS los "
@@ -339,16 +397,16 @@ class EnrichmentResult(BaseModel):
         `TakeoverCandidate` se traduce aquí a un `DiscoveryFinding`
         (`finding_type="subdomain_takeover_risk"`) para que se persista con
         el mismo mecanismo genérico que cabeceras y TLS, sin que
-        `core/persistence.py` necesite conocer este tipo de hallazgo.
+        `core/persistence.py` necesite conocer este tipo de hallazgo. Los
+        hallazgos TLS de varios puertos de un mismo host se fusionan antes
+        (`_merge_tls_findings`): uno por tipo y host.
         """
         grouped: dict[str, list[DiscoveryFinding]] = {}
-        items: list[HeaderScanResult | TlsScanResult] = [
-            *self.header_results,
-            *self.tls_results,
-        ]
-        for item in items:
+        for item in self.header_results:
             if item.findings:
                 grouped.setdefault(item.hostname, []).extend(item.findings)
+        for hostname, tls_findings in _merge_tls_findings(self.tls_results).items():
+            grouped.setdefault(hostname, []).extend(tls_findings)
         for candidate in self.takeover_candidates:
             grouped.setdefault(candidate.hostname, []).append(
                 DiscoveryFinding(
