@@ -388,6 +388,12 @@ pide evitar explícitamente ("los stubs no son código muerto").
     mismo prompt exacto (27 % menos llamadas en la demo). Incluye la revisión
     crítica de la herramienta y sus carencias. Memoria:
     `memorias/Memoria_Ampliacion_Diff_Triaje_Atalaya.md`.
+13. **Ampliación — Puesta en marcha guiada** 🚧 (desde el 12/10/2026) —
+    TLS en los puertos con TLS implícito y hosts `wildcard` fuera del escaneo
+    de puertos (✅); `atalaya doctor` (diagnóstico) y `atalaya init`
+    (asistente de configuración) con identidad visual propia en la terminal
+    (fase A); después, `GET /config/status` y bienvenida en el dashboard
+    (fase B). Maqueta aprobada antes de implementar.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -569,6 +575,12 @@ cómo trata esto.
 | `risk_score`: la banda la fija la severidad máxima presente; el volumen solo mueve dentro de ella, con rendimientos decrecientes por tipo (`core/scoring.py`) | La suma ponderada acotada saturaba con volumen: github.com (194 `low` + 9 `medium`) salía 100/100 «crítico», igual que un escaneo con diez críticos. Monótono por construcción (`tests/test_scoring.py` lo comprueba por propiedades). Una sola función para PDF y API: el dashboard pinta el de la API, ya no replica pesos |
 | Demo sin red: reproducir respuestas reales grabadas (`AI_PROVIDER=replay`), nunca inventarlas | Una petición no grabada falla con 502 como un proveedor caído; servir una respuesta "parecida" presentaría como análisis del modelo algo que nunca dijo sobre esos datos. `tests/test_demo_data.py` detecta grabaciones obsoletas |
 | Autenticación: una clave compartida en `X-API-Key`, opcional (`API_KEY` vacía = desactivada), no usuarios ni tokens | Un operador y un cliente propio: cuentas, login y rotación de tokens no protegerían nada más. Desactivada por defecto para que la demo y el stack sin `.env` no cambien. Todo endpoint salvo `/health` (sondas de Docker y del dashboard) la exige; `/docs` y `/openapi.json` quedan abiertos (describen, no devuelven datos; «Authorize» introduce la clave). `secrets.compare_digest` en bytes. `tests/test_api_auth.py` recorre el esquema OpenAPI: un router nuevo sin la dependencia hace fallar la suite |
+| Configuración guiada en la CLI (`atalaya init`), no en un formulario web | Los secretos se escriben en la máquina del operador. Un formulario en el dashboard exigiría un endpoint que reciba claves, y con `API_KEY` vacía (el default) cualquiera que llegue a la API podría cambiar la del proveedor de IA o la allowlist. La web solo **consulta** el estado (sí/no, nunca valores) |
+| `init` exige alcance explícito; allowlist vacía solo con `--allow-any` | `SCAN_ALLOWLIST` vacía significa «sin restricción». Quien configura con `init` decide qué puede escanear y confirma que tiene autorización; lo permisivo hay que pedirlo. Sin `init`, la herramienta se comporta igual que antes |
+| Las claves se validan con llamadas gratuitas (lista de modelos, `/api-info`) y se dice que eso no comprueba el saldo | Validar con una llamada al modelo costaría dinero en cada `init`/`doctor`. Una clave válida sin crédito pasa la validación: se avisa en vez de prometer lo que no se comprobó |
+| Modo no interactivo: secretos desde variables de entorno, nunca como argumentos | Un argumento queda en el historial de la shell y en la lista de procesos |
+| `rich` para la terminal; menús numerados, no con flechas | `questionary`/`prompt_toolkit` fallan en Git Bash (mintty) por no ser una consola de Windows. Con salida no UTF-8, iconos y logo en ASCII en vez de romper con `UnicodeEncodeError` (reproducido al maquetar) |
+| `init` no toca nada hasta confirmar el resumen: las migraciones se aplican al final | La maqueta las mostraba en el paso 2, pero eso rompería la promesa de que Ctrl+C sale sin cambios. En el paso 2 solo se conecta y se informa de lo pendiente |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
 
 ---
