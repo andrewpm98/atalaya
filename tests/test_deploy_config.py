@@ -143,6 +143,15 @@ def test_dockerignore_excluye_secretos_y_entornos_locales() -> None:
 
     assert ".env" in entries
     assert ".venv/" in entries
+    # Las copias que deja `atalaya init` llevan las mismas claves que `.env`.
+    assert ".env.bak-*" in entries
+    assert ".env.tmp-*" in entries
+
+
+def test_gitignore_excluye_las_copias_del_env() -> None:
+    entries = {line.strip() for line in _read(".gitignore").splitlines()}
+
+    assert {".env", ".env.bak-*", ".env.tmp-*"} <= entries
 
 
 # --- .env.example ------------------------------------------------------------

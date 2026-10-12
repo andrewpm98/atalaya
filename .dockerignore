@@ -1,5 +1,7 @@
 # Contexto de build mínimo: sin entornos locales, secretos ni artefactos.
 .env
+.env.bak-*
+.env.tmp-*
 .venv/
 **/__pycache__/
 *.pyc

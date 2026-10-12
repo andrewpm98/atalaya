@@ -106,6 +106,45 @@ async def _run_doctor(args: argparse.Namespace) -> int:
     return await run_doctor(make_terminal(), Path.cwd(), offline=args.offline)
 
 
+async def _run_init(args: argparse.Namespace) -> int:
+    import os
+
+    import httpx
+
+    from atalaya.onboarding import ui
+    from atalaya.onboarding.wizard import (
+        NonInteractiveOptions,
+        RichPrompter,
+        Wizard,
+        run_non_interactive,
+    )
+
+    term = ui.make_terminal()
+    root = Path.cwd()
+    async with httpx.AsyncClient() as client:
+        if args.non_interactive:
+            options = NonInteractiveOptions(
+                allowlist=args.allowlist,
+                allow_any=args.allow_any,
+                database=args.database,
+                ai_provider=args.ai_provider,
+                ai_model=args.ai_model,
+                protect_api=args.protect_api,
+                takeover_verify=args.takeover_verify,
+                offline=args.offline,
+            )
+            return await run_non_interactive(term, root, client, options)
+        if not sys.stdin.isatty():
+            term.print(ui.status(term, "err", "atalaya init necesita una terminal interactiva"))
+            if "MSYSTEM" in os.environ:
+                # Git Bash (mintty) no ofrece a Python una consola de Windows.
+                term.print(ui.note("En Git Bash: winpty atalaya init, o abre PowerShell."))
+            term.print(ui.note("Para scripts y CI: atalaya init --non-interactive --allowlist ..."))
+            return 2
+        wizard = Wizard(term, RichPrompter(term), root, client, allow_any=args.allow_any)
+        return await wizard.run()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="atalaya", description="Atalaya ASM")
     parser.add_argument("--version", action="version", version=f"Atalaya {__version__}")
@@ -136,6 +175,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--offline", action="store_true", help="No sale a la red (no valida claves ni crt.sh)"
     )
     doctor.set_defaults(func=_run_doctor)
+
+    init = subparsers.add_parser(
+        "init", help="Configura Atalaya paso a paso (alcance, base de datos, claves)"
+    )
+    init.add_argument(
+        "--allow-any",
+        action="store_true",
+        help="Permite dejar el alcance sin restricción (no recomendado)",
+    )
+    init.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Sin preguntas: opciones y secretos desde variables de entorno",
+    )
+    init.add_argument("--allowlist", help="Dominios autorizados, separados por comas")
+    init.add_argument(
+        "--database",
+        choices=["sqlite", "docker"],
+        help="Base de datos predefinida (o DATABASE_URL en el entorno)",
+    )
+    init.add_argument(
+        "--ai-provider",
+        choices=["anthropic", "gemini", "replay", "keep"],
+        default="keep",
+        help="Proveedor de IA; la clave sale de ANTHROPIC_API_KEY o GEMINI_API_KEY",
+    )
+    init.add_argument("--ai-model", help="Modelo del proveedor de IA")
+    init.add_argument(
+        "--protect-api", action="store_true", help="Exige X-API-Key (la genera si no hay)"
+    )
+    init.add_argument(
+        "--takeover-verify",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Verificación HTTP de takeover (opt-in)",
+    )
+    init.add_argument(
+        "--offline", action="store_true", help="No valida las claves contra los proveedores"
+    )
+    init.set_defaults(func=_run_init)
 
     return parser
 

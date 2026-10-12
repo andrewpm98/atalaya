@@ -11,6 +11,9 @@ env/
 
 # Entorno / secretos
 .env
+# Copias y temporales de `atalaya init` (onboarding/envfile.py): mismas claves que .env
+.env.bak-*
+.env.tmp-*
 *.local
 
 # Base de datos local
