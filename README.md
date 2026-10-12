@@ -168,7 +168,9 @@ automáticamente cada uno con:
   marca como hallazgo un certificado caducado o a menos de 30 días de
   caducar, versiones obsoletas (TLS 1.0/1.1), un certificado que no cubre el
   hostname y una cadena que no lleva a una CA de confianza (autofirmado,
-  raíz desconocida o intermedio no enviado).
+  raíz desconocida o intermedio no enviado). Se inspecciona el 443 y,
+  si están abiertos, los demás puertos con TLS (465, 993, 995, 8443); un
+  mismo problema en varios puertos es un solo hallazgo que los cita.
 
 No hace falta invocar nada aparte: es parte del mismo escaneo. Los hallazgos
 resultantes entran al mismo flujo que el resto — triaje por IA
@@ -354,6 +356,8 @@ Ampliación posterior, más allá de los requisitos obligatorios:
       (hostname y cadena) y re-triaje forzado
 - [x] Diff con cambios de los activos comunes (estado, puertos y hallazgos)
       y reutilización del triaje entre escaneos ante el mismo prompt exacto
+- [x] TLS también en los puertos abiertos con TLS implícito (465, 993,
+      995, 8443)
 
 La memoria técnica de cada fase está en [`memorias/`](memorias/).
 

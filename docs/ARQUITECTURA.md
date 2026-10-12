@@ -72,7 +72,7 @@ Cada técnica es un módulo independiente con salida normalizada:
 | `shodan`       | Segunda fuente de subdominios                  | API DNS de Shodan (`SHODAN_API_KEY` opcional — sin ella, se omite sin incidencia) |
 | `ports`        | Puertos TCP abiertos (`COMMON_PORTS` por defecto) | Conexión asíncrona, concurrencia acotada |
 | `headers`      | HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy; redirección HTTP → HTTPS (`http_sin_redireccion_https`); cookies sin `Secure`/`HttpOnly`/`SameSite` (un hallazgo por tipo y host, nombres sin valores) | Petición HTTPS y, en paralelo, HTTP (que además sirve de respaldo para `sin_https`) |
-| `tls`          | Versión de protocolo, emisor, caducidad del certificado; hostname cubierto por los SAN (`tls_hostname_no_coincide`) y cadena de confianza (`tls_cadena_no_confiable`) | `cryptography` sobre el `ssl_object` de la conexión; en paralelo, una negociación con verificación contra el almacén de Mozilla (`certifi`) |
+| `tls`          | Versión de protocolo, emisor, caducidad del certificado; hostname cubierto por los SAN (`tls_hostname_no_coincide`) y cadena de confianza (`tls_cadena_no_confiable`). En el 443 de todo host activo y en los puertos con TLS implícito (465/993/995/8443) que el escaneo encuentre abiertos | `cryptography` sobre el `ssl_object` de la conexión; en paralelo, una negociación con verificación contra el almacén de Mozilla (`certifi`) |
 | `takeover`     | Riesgo de *subdomain takeover* (patrón de CNAME hacia hosting de terceros) | Resolución DNS de CNAME sobre hosts **sin** A/AAAA — reconocimiento pasivo puro (la verificación, opcional, vive en `takeover_verify`) |
 | `takeover_verify` | Verificación HTTP **opt-in** (`TAKEOVER_VERIFY`) de un candidato: huella de "recurso no reclamado" en la página de error del proveedor | `GET` al destino del CNAME — off por defecto, gated por `SCAN_ALLOWLIST`, con auditoría (ver §8.3) |
 | `enrichment`   | Orquesta `ports`+`headers`+`tls` (hosts activos) y `takeover` (todos los registros), concurrentemente; encadena `takeover_verify` si está activado | Compone los cinco anteriores |
@@ -88,6 +88,16 @@ CNAME abandonado vive precisamente en los hosts que no resuelven por
 A/AAAA. Los módulos devuelven `DiscoveryFinding`/`TakeoverCandidate`
 (`discovery/models.py`), no un `Finding` de SQLAlchemy: la capa de
 descubrimiento no conoce la de persistencia.
+
+TLS en puertos distintos del 443 es la única dependencia entre técnicas: se
+lanza **después** del `gather`, porque necesita los puertos abiertos
+(`_extra_tls_targets`), y solo añade latencia a los hosts que los tienen. Sus
+hallazgos se fusionan en `EnrichmentResult.findings_by_hostname()` en **uno
+por tipo y host** (`_merge_tls_findings`), la invariante de la que dependen
+`diff_scans()` y la reutilización del triaje. Un hallazgo que solo aparece
+en el 443 conserva la evidencia exacta de siempre: cambiarla haría pagar de
+nuevo el triaje de todo hallazgo TLS ya triado. Los puertos con STARTTLS
+(25, 587, 110, 143) quedan fuera: exigen hablar antes el protocolo.
 
 ### 2.3 Persistencia (PostgreSQL) — `src/atalaya/core`
 Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
@@ -550,8 +560,12 @@ defecto de corrección y no como una limitación.
 - Tras resolver, todo registro `active` cuyas IPs sean **subconjunto** de las
   del comodín pasa a `wildcard`. Un host con alguna IP propia sigue `active`:
   puede ser un servicio real que además comparta la IP del comodín.
-- `wildcard` no es `active`, así que el host sale de `scan_targets()`,
-  `active_records` y del recuento sin tocar esas propiedades; tampoco es
+- `wildcard` no es `active`, así que el host sale de `active_records` y del
+  recuento sin tocar esas propiedades. `scan_targets()` recorre solo los
+  activos, y `apply_port_scan()` solo asigna puertos a activos `active`: la
+  IP del comodín se escanea únicamente si un host activo de verdad resuelve
+  a ella, y aun así el host `wildcard` no hereda sus puertos (hasta
+  `e581fa3` no era así, pese a lo que decía este apartado). Tampoco es
   `no_answer`/`nxdomain`/`unroutable`, así que no entra en la detección de
   takeover (tiene IP: no hay CNAME colgante). El registro se conserva en
   `records`, y `summary()` expone `wildcard_dns`/`wildcard_filtered`.

@@ -104,7 +104,9 @@ src/atalaya/
 │   │                             redirección HTTP→HTTPS (sonda en paralelo)
 │   │                             y cookies (Secure/HttpOnly/SameSite)
 │   ├── tls.py                     inspect_tls() — versión, emisor, caducidad,
-│   │                             hostname (SAN) y cadena de confianza (certifi)
+│   │                             hostname (SAN) y cadena de confianza (certifi);
+│   │                             IMPLICIT_TLS_PORTS (443 + 465/993/995/8443 si
+│   │                             están abiertos), fusionados por tipo y host
 │   ├── takeover.py                find_takeover_candidates() — riesgo de
 │   │                             subdomain takeover vía patrón de CNAME
 │   │                             (reconocimiento pasivo puro, nunca HTTP)
@@ -312,7 +314,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **472 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **480 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -323,7 +325,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -401,7 +403,7 @@ defensa oral.
 
 **Dónde se quedó:** `main` limpio, con los commits de la fase 12 en local y
 sin `push` al cerrar la sesión (el usuario decide cuándo; al retomar,
-comprobar con `git status -sb` si ya se subieron). 472 tests, `ruff` y `mypy` a cero.
+comprobar con `git status -sb` si ya se subieron). 480 tests, `ruff` y `mypy` a cero.
 La demo en `replay` reproduce el guion completo sin grabaciones faltantes.
 
 **Restricción operativa:** el **crédito de la API de Anthropic está
@@ -425,10 +427,8 @@ en vivo, no para regrabar la demo (grabada con `claude-sonnet-4-6`).
    - **Escaneos programados con alerta sobre el diff**: la carencia más
      grande como ASM, y las piezas (persistencia, diff con `cambiados`) ya
      existen.
-   - **TLS en los puertos abiertos además del 443**: el límite más barato
-     de cerrar (`inspect_tls()` sobre `Asset.open_ports`), con una trampa:
-     no romper la invariante de un hallazgo por tipo y host (ver el punto
-     «TLS» de la deuda pendiente).
+   - ~~**TLS en los puertos abiertos además del 443**~~ ✅ 12/10/2026 (ver
+     «Deuda técnica conocida → Resuelta»).
    - **`POST /scans` como tarea en segundo plano** con consulta de estado.
 4. **Cuando vuelva el crédito**: regrabar la valoración del diff posterior al
    triaje (escribe «`vpn-ca.github.com` (IAD)» en vez de
@@ -786,18 +786,13 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   detrás (eso exigiría enviar payloads específicos por protocolo, más
   intrusivo). Un barrido completo de los 65535 puertos tampoco está
   contemplado, por la misma razón de intrusividad acotada.
-- **TLS: solo el puerto 443 y un error de cadena por host.** OpenSSL
+- **TLS: un error de cadena por host, sin STARTTLS ni cifrados.** OpenSSL
   reporta el primer fallo de verificación que encuentra: si un certificado
-  tiene varios problemas de cadena, sale uno. Tampoco se inspecciona TLS en
-  otros puertos abiertos (p. ej. 8443) ni la configuración de cifrados.
-  Lo de otros puertos es el límite más barato de cerrar: los puertos
-  abiertos ya están en `Asset.open_ports` e `inspect_tls()` ya acepta
-  `port`. **Trampa:** daría varios hallazgos del mismo tipo en un mismo host
-  (uno por puerto), y el diff (`diff_scans`) y la reutilización del triaje
-  asumen como mucho uno por tipo y host: habría que distinguir el puerto en
-  el `finding_type` o agruparlos en un solo hallazgo por tipo. Los cifrados
-  no: son terreno de herramientas específicas (testssl.sh), con otra
-  intrusividad.
+  tiene varios problemas de cadena, sale uno. Se inspeccionan el 443 y los
+  puertos con TLS implícito abiertos (ver «Resuelta»), pero no los de
+  STARTTLS (25, 587, 110, 143: exigen hablar antes SMTP/POP3/IMAP) ni la
+  configuración de cifrados, terreno de herramientas específicas
+  (testssl.sh), con otra intrusividad.
 - **Cabeceras: sin CORS, y solo la portada.** `discovery/headers.py`
   evalúa la raíz (`/`) de cada host: las seis cabeceras del enunciado sobre
   la respuesta **final**, las cookies de toda la cadena de redirecciones y
@@ -829,6 +824,29 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   preguntas anteriores.
 
 ### Resuelta (se deja constancia para la defensa)
+
+- ~~**TLS solo en el puerto 443**~~ → `enrich_scan()` repite la inspección
+  en 465, 993, 995 y 8443 (`tls.py::IMPLICIT_TLS_PORTS`) cuando el escaneo
+  de puertos los encuentra abiertos en una IP del host; el 443 se sigue
+  inspeccionando en todo host activo, como antes. Los hallazgos de varios
+  puertos se fusionan en **uno por tipo y host**
+  (`models.py::_merge_tls_findings`), la invariante de la que dependen el diff
+  y la reutilización del triaje; no se metió el puerto en el `finding_type`
+  porque los escaneos antiguos dejarían de compararse con los nuevos. Si el
+  hallazgo solo sale en el 443, la evidencia es **idéntica** a la de antes
+  (si no, todo triaje TLS ya hecho dejaría de reutilizarse); si no, cita los
+  puertos y agrupa los que comparten evidencia («Puertos 443 y 8443: …»).
+  Verificado en real sobre github.com: `emails.github.com:8443` sirve el mismo
+  certificado próximo a caducar que el 443 → un solo hallazgo;
+  `info.github.com:8443` falla el handshake → degradación sin hallazgo.
+- ~~**Los hosts `wildcard` seguían recibiendo escaneo de puertos**~~
+  (encontrado al leer `scan_targets()` para lo anterior, contra lo que decían
+  CLAUDE.md, ARQUITECTURA y la memoria de robustez) → `scan_targets()`
+  recorría todos los registros, no solo los activos, y `apply_port_scan()`
+  asignaba a un host `wildcard` los puertos del activo con el que compartiera
+  IP. Ahora ambos se limitan a los `active`. Latente: ningún escaneo real
+  guardado tiene hosts `wildcard`; los dos tests nuevos fallan contra la
+  versión anterior.
 
 - ~~**Cada re-escaneo pagaba otra vez el triaje de lo que no había
   cambiado**~~ → `ai/triage_reuse.py`: antes de llamar al modelo,
@@ -1047,7 +1065,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ```bash
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
-pytest -q                            # tests (deben pasar los 472)
+pytest -q                            # tests (deben pasar los 480)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

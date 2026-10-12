@@ -161,6 +161,13 @@ trató como un bug de corrección, no como una limitación documentada más.
   correcto en ambos casos, verificado leyendo los dos módulos antes de tocar
   nada.
 
+  > **Estado posterior:** para el escaneo de puertos no era correcto.
+  > `scan_targets()` recorría todos los registros, no solo los activos, así
+  > que la IP del comodín se seguía escaneando, y `apply_port_scan()`
+  > asignaba a un host `wildcard` los puertos del activo con el que
+  > compartiera IP. Corregido el 12/10/2026 en `e581fa3`; cabeceras y TLS sí
+  > estaban bien excluidos.
+
 ### 4.3 Verificación
 
 7 tests deterministas sin red: `detect_wildcard_dns` aislado (con/sin wildcard,
