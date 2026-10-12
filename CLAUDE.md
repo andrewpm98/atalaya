@@ -421,45 +421,112 @@ defensa oral.
 
 ## Estado al 12/10/2026 y próxima sesión
 
-**Dónde se quedó:** `main` con los commits de la fase 13 (TLS multipuerto,
-hosts `wildcard`, clave de Shodan fuera del log, `doctor` e `init`) en local
-y sin `push` (el usuario decide cuándo; al retomar, comprobar con
-`git status -sb`). 558 tests, `ruff` y `mypy` a cero. Ningún prompt ha
-cambiado: la demo en `replay` sigue intacta (`tests/test_demo_data.py`).
+**Dónde se quedó:** fase 13 a medias, **todo subido** a `origin/main` al
+cerrar la sesión del 12/10/2026 (TLS multipuerto, hosts `wildcard`, clave de
+Shodan fuera del log, `atalaya doctor` y `atalaya init`). 558 tests, `ruff` y
+`mypy` a cero. Ningún prompt ha cambiado: la demo en `replay` sigue intacta
+(`tests/test_demo_data.py`). Al retomar, comprobar con `git status -sb` y
+`git log --oneline -5` que el repo está como aquí se describe.
+
+**Calendario:** a 12/10/2026, «hay algo de margen», sin fecha de defensa
+concreta. El usuario trabaja **bloque a bloque**: se cierra uno (código,
+tests, prueba real, docs, commits) antes de empezar el siguiente.
 
 **Restricción operativa:** el **crédito de la API de Anthropic está
 agotado**. Cualquier cambio de prompt o del contexto que recibe un agente
 deja obsoleta `demo/ai_recordings.json`, y regrabar exige llamadas reales:
 antes de un cambio así, parar y preguntar. Gemini, si hay
 `GEMINI_API_KEY` (cuota gratuita ~20 peticiones/día), sirve para verificar
-en vivo, no para regrabar la demo (grabada con `claude-sonnet-4-6`).
+en vivo, no para regrabar la demo (grabada con `claude-sonnet-4-6`). Listar
+modelos (`GET /v1/models`) y `/api-info` de Shodan no consumen crédito: es
+lo que usan `doctor` e `init`.
 
-**Por orden de prioridad:**
+### Plan acordado para las próximas sesiones (en este orden)
 
-1. **Fase B de la puesta en marcha**: `GET /config/status` (las
-   comprobaciones de `onboarding/checks.py` sin salir a la red, solo sí/no,
-   con `X-API-Key`), pantalla de bienvenida del dashboard cuando no hay
-   escaneos y el logo de la torre en su cabecera. Calendario a 12/10/2026:
-   «hay algo de margen», sin fecha de defensa concreta.
-2. **Preparar la defensa**: ensayar el guion con
-   `scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una BD
-   aparte; repasar los bloques de preguntas de las memorias, sobre todo el de
-   la fase 12 (diff, reutilización del triaje, carencias) y la justificación
-   de los seis agentes.
-3. **Si hay margen de código** (detalle en «Deuda técnica conocida →
-   Pendiente»):
-   - **Escaneos programados con alerta sobre el diff**: la carencia más
-     grande como ASM, y las piezas (persistencia, diff con `cambiados`) ya
-     existen.
-   - ~~**TLS en los puertos abiertos además del 443**~~ ✅ 12/10/2026 (ver
-     «Deuda técnica conocida → Resuelta»).
-   - **`POST /scans` como tarea en segundo plano** con consulta de estado
-     (siguiente bloque acordado tras la fase B; después, la monitorización).
-4. **Cuando vuelva el crédito**: regrabar la valoración del diff posterior al
-   triaje (escribe «`vpn-ca.github.com` (IAD)» en vez de
-   `vpn-ca.iad.github.com`; 1 llamada) y valorar quitar las IPs del prompt
-   de triaje para que la reutilización sobreviva a CDN (cambia todos los
-   prompts: regrabación completa).
+Diseño ya hablado con el usuario el 12/10/2026; no reabrirlo sin motivo.
+
+**1. Fase B de la puesta en marcha** (cierra la fase 13) — que el dashboard
+diga qué está configurado y oriente a quien llega de fuera.
+
+- **`GET /config/status`** (área de `atalaya-api`): reutiliza
+  `onboarding/checks.py`, **solo las comprobaciones que no salen a la red**
+  (config, alcance, base de datos, API, secretos; IA y Shodan solo «clave
+  presente sí/no», sin validarla: nada de llamadas externas en cada carga
+  del dashboard). Devuelve **estado y texto, nunca valores** (ni claves ni
+  URL con contraseña). Protegido con `X-API-Key` como todo salvo `/health`
+  (`tests/test_api_auth.py` lo exige al recorrer el OpenAPI). Esquema
+  Pydantic en `api/schemas.py`; `CheckResult` ya es un `BaseModel`.
+- **Bienvenida en el dashboard** (área de `atalaya-dashboard`): cuando no
+  hay escaneos, pantalla con el logo, la lista de qué está activo (IA,
+  Shodan, autenticación, alcance) y el primer paso sugerido («ejecuta
+  `atalaya init`» o «lanza tu primer escaneo contra `scanme.nmap.org`»). Con
+  la API caída, el aviso actual añade «¿has ejecutado `atalaya init`?».
+- **Logo de la torre en la cabecera del dashboard**: la misma marca que la
+  terminal (`onboarding/ui.py::_TOWER`: torre de celosía con baliza
+  `( ● )`, acento `#00c8e8`, ondas en `#0a7f94`), como SVG en línea.
+  **Trampa conocida:** `st.html()` sanea con DOMPurify (ver «Dashboard:
+  diseño visual»): comprobar que el SVG sobrevive al saneado, con el
+  navegador abierto (`_shot.py`), no solo con `AppTest`.
+- El usuario prefiere **ver una maqueta gráfica antes** de los cambios
+  visuales: enseñar la bienvenida y el logo (capturas reales del dashboard)
+  y esperar su visto bueno antes de cerrarlos.
+- Al cerrar: completar `memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`
+  (sección de la fase B, estado «completa», commits y preguntas de defensa),
+  CLAUDE.md, ARQUITECTURA (§2.1, §2.6, §2.9) y README.
+
+**2. `POST /scans` en segundo plano** — hoy el escaneo corre dentro de la
+petición (19 s para github.com; minutos para un dominio grande).
+
+- Devuelve **`202`** con el escaneo en `running` (`ScanStatus.RUNNING` ya
+  existe); el dashboard consulta `GET /scans/{id}` hasta que acabe.
+- **Validación y autorización antes de lanzar la tarea**: un dominio no
+  autorizado sigue dando `403` al momento, no un escaneo `failed` después.
+- **Hoy la fila del `Scan` se crea después de enumerar** (`create_scan` →
+  `save_subdomain_scan`): hay que crearla antes, en `running`.
+- La tarea abre **su propia sesión de BD**: la de la petición se cierra al
+  responder.
+- Al arrancar la API, los escaneos que quedaron en `running` (reinicio a
+  mitad) pasan a `failed` con la incidencia en `errors`.
+- **`?wait=true`** conserva el comportamiento síncrono actual, para no romper
+  `scripts/build_demo_data.py`, los `curl` del README ni los tests.
+- Commits separados: API y dashboard (consulta periódica del estado).
+
+**3. Monitorización: escaneos programados con aviso por webhook** — la
+carencia más grande como ASM. Depende del bloque 2 (reutiliza la función de
+escaneo en segundo plano).
+
+- Tabla nueva **`monitors`** (dominio, intervalo, `webhook_url`, último
+  escaneo, activo) con su migración, y rutas `POST`/`GET`/`DELETE /monitors`.
+- Un bucle en el `lifespan` de la API lanza los escaneos que tocan; al
+  terminar, `diff_scans()` **sin IA** (no gasta crédito) y, si `nuevos`,
+  `desaparecidos` o `cambiados` no están vacíos, `POST` del diff al webhook.
+- **Seguridad, que se evalúa:** el dominio pasa `ensure_authorized()` al
+  crear el monitor **y en cada ejecución**; el webhook es un vector de
+  **SSRF**: resolver su host y rechazar direcciones no enrutables con
+  `classify_ip()` (mismo criterio que la restricción #2); intervalo mínimo
+  (p. ej. 1 h) por la restricción #5; cada aviso enviado, al log de
+  auditoría (`core/audit.py`).
+- **Límite a documentar:** el planificador vive en el proceso de la API; con
+  varios workers de uvicorn, cada escaneo se lanzaría varias veces.
+- Cumple de forma literal el requisito «API o webhook».
+
+**4. Cierre de la fase** — docs de cada bloque (CLAUDE.md, ARQUITECTURA,
+README, `.env.example` si hay campos nuevos), memoria de la fase con su bloque
+de preguntas de defensa, guion de la demo recorrido en `replay` por HTTP sin
+grabaciones faltantes, y `push` cuando el usuario lo diga.
+
+**Después, o si el calendario aprieta:** preparar la defensa (ensayar el
+guion con `scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una
+BD aparte; repasar los bloques de preguntas de las memorias). **Cuando vuelva
+el crédito:** regrabar la valoración del diff posterior al triaje (escribe
+«`vpn-ca.github.com` (IAD)» en vez de `vpn-ca.iad.github.com`; 1 llamada) y
+valorar quitar las IPs del prompt de triaje para que la reutilización
+sobreviva a CDN (cambia todos los prompts: regrabación completa).
+
+**Pendiente del usuario, fuera del código:** su `.env` de desarrollo aún
+tiene `API_HOST`, `API_PORT` y `ENVIRONMENT` (retirados en `521019e`;
+`atalaya doctor` los señala) y `SCAN_ALLOWLIST` vacía. Puede limpiarlo a mano
+o pasar `atalaya init` (conserva el resto y deja copia).
 
 ---
 
@@ -772,10 +839,13 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   de ASM, que se define por vigilar en el tiempo. El diff con `cambiados` es
   la pieza que permitiría alertar («ayer no tenía el 22 abierto»); falta el
   disparador (planificador + notificación cuando el diff no está vacío).
+  **Planificado** como bloque 3 (diseño en «Plan acordado para las próximas
+  sesiones»).
 - **`POST /scans` es síncrono.** El escaneo completo corre dentro de la
   petición HTTP: 19 s para github.com, pero un dominio grande dejaría la
   conexión abierta minutos. Lo normal sería lanzarlo como tarea en segundo
-  plano y consultar su estado.
+  plano y consultar su estado. **Planificado** como bloque 2 (diseño en
+  «Plan acordado para las próximas sesiones»).
 - **Señal/ruido de los hallazgos.** En github.com, 194 de 211 hallazgos son
   `low`, casi todo higiene de cabeceras. La reutilización del triaje reduce
   el coste de triarlos, no su volumen ni el ruido para quien lee.

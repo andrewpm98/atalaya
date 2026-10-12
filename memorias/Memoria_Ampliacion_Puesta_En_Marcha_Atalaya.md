@@ -5,9 +5,10 @@
 **Fase documentada:** Ampliación 13, iniciada el 12/10/2026. Cierra un límite
 del descubrimiento (TLS solo en el 443), corrige dos defectos encontrados por
 el camino y añade la puesta en marcha guiada: `atalaya doctor` y `atalaya init`.
-**Estado:** En curso. Fase A completa, en local (pendiente de `push`): 558
-tests, `ruff` y `mypy` a cero, cada commit verificado en verde por separado.
-Fase B pendiente (`GET /config/status` y bienvenida en el dashboard).
+**Estado:** En curso. Fase A completa y subida a `origin/main` el 12/10/2026:
+558 tests, `ruff` y `mypy` a cero, cada commit verificado en verde por
+separado. Fase B pendiente (`GET /config/status` y bienvenida en el
+dashboard); ver §10.
 
 ---
 
@@ -304,7 +305,24 @@ crédito de Anthropic agotado.
 
 ---
 
-## 10. Commits
+## 10. Lo que queda de la fase
+
+La sesión del 12/10/2026 se cerró con la fase A subida a `origin/main`. Queda,
+en este orden y con el diseño ya hablado (detalle en CLAUDE.md, «Plan
+acordado para las próximas sesiones»):
+
+1. **Fase B:** `GET /config/status` (solo comprobaciones locales, estado sin
+   valores, con `X-API-Key`), bienvenida en el dashboard cuando no hay
+   escaneos y el logo de la torre en su cabecera, con maqueta previa.
+2. **`POST /scans` en segundo plano** (`202`, `running`, `?wait=true`).
+3. **Monitorización** con aviso por webhook, protegido contra SSRF.
+4. **Cierre**: documentación, preguntas de defensa y guion de la demo.
+
+Esta memoria se completará con la fase B antes de darla por cerrada.
+
+---
+
+## 11. Commits
 
 | Commit | Contenido |
 |---|---|
@@ -316,10 +334,11 @@ crédito de Anthropic agotado.
 | `8f03f6a` | build: `rich` |
 | `eb063a9` | feat(onboarding): `atalaya doctor` |
 | `778d2c7` | feat(onboarding): `atalaya init` |
+| `d12dc6e`, `d974680` | docs: CLAUDE.md, ARQUITECTURA, README, `.env.example` y esta memoria |
 
 ---
 
-## 11. Bloque de defensa: preguntas previsibles
+## 12. Bloque de defensa: preguntas previsibles
 
 ### Sobre la puesta en marcha
 
