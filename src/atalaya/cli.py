@@ -25,6 +25,11 @@ def _configure_logging(verbose: bool) -> None:
         level=logging.INFO if verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    # httpx registra en INFO la URL completa de cada petición, y Shodan solo
+    # acepta la clave en la URL (`?key=...`): con `-v` acababa en claro en la
+    # terminal. Sus avisos y errores se siguen viendo.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 async def _run_subdomains(args: argparse.Namespace) -> int:
