@@ -201,9 +201,21 @@ html, body, [data-testid="stAppViewContainer"], .stApp {
 
 /* La barra multicolor y la cabecera por defecto son la firma visual de
    Streamlit; fuera. La cabecera se deja como banda transparente para no
-   perder el botón de plegar la barra lateral. */
-[data-testid="stDecoration"], [data-testid="stToolbar"], #MainMenu, footer {
+   perder el botón que vuelve a abrir la barra lateral: con ella plegada, ese
+   botón vive DENTRO de la barra de herramientas. Ocultarla con display
+   dejaba la barra lateral plegada sin forma de recuperarla (reproducido en
+   Streamlit 1.64). Por eso se oculta con visibility, que un hijo puede
+   revertir: el botón se ve y todo lo demás que Streamlit ponga ahí, no. */
+[data-testid="stDecoration"], #MainMenu, footer {
   display: none !important;
+}
+[data-testid="stToolbar"] { visibility: hidden; }
+[data-testid="stExpandSidebarButton"] { visibility: visible; color: var(--fg-dim); }
+[data-testid="stExpandSidebarButton"]:hover { color: var(--accent); }
+/* Ese botón flota arriba a la izquierda: con la barra plegada, por debajo
+   de ~1500px de ancho caía encima de la torre. La cabecera le deja sitio. */
+[data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) .atl-masthead {
+  padding-left: 3.9rem;
 }
 header[data-testid="stHeader"] {
   background: transparent !important;
@@ -414,6 +426,11 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
 [data-testid="stSidebar"] {
   background: var(--bg-panel);
   border-right: 1px solid var(--line);
+}
+/* El ancho fijo, solo abierta. Plegarla la desplaza fuera de la pantalla,
+   pero con el ancho forzado seguía ocupando su hueco en el flujo y el
+   contenido no se ensanchaba: quedaba una franja vacía a la izquierda. */
+[data-testid="stSidebar"][aria-expanded="true"] {
   width: 268px !important; min-width: 268px !important;
 }
 [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] { padding: 1.15rem 1rem 1rem 1rem; }

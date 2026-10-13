@@ -1049,3 +1049,29 @@ def test_el_estado_no_se_pide_en_cada_reejecucion() -> None:
     assert not at.exception
     assert peticiones.count("/scans") == 2
     assert peticiones.count("/config/status") == 1
+
+
+def _reglas_css() -> list[tuple[str, str]]:
+    """(selector, cuerpo) de cada regla de `_CSS`, leídas del fuente."""
+    fuente = _APP_PATH.read_text(encoding="utf-8")
+    inicio = fuente.index('_CSS = """')
+    css = fuente[inicio : fuente.index('"""', inicio + 10)]
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    return [(s.strip(), c) for s, c in re.findall(r"([^{}]+)\{([^{}]*)\}", css)]
+
+
+def test_la_barra_lateral_plegada_se_puede_volver_a_abrir() -> None:
+    """Con la barra lateral plegada, el botón que la reabre vive dentro de
+    `stToolbar` (Streamlit 1.64): ocultarla con `display: none` dejaba la
+    barra lateral plegada sin forma de recuperarla. Y un ancho forzado sin
+    condición la mantenía ocupando su hueco plegada. `AppTest` no pinta CSS
+    (lo visual se comprobó en Chromium): esta guarda lee las reglas."""
+    reglas = _reglas_css()
+    for selector, cuerpo in reglas:
+        if "stToolbar" in selector:
+            assert "display" not in cuerpo, selector
+        if "268px" in cuerpo:
+            assert 'aria-expanded="true"' in selector, selector
+    assert any(
+        "stExpandSidebarButton" in s and "visibility: visible" in c for s, c in reglas
+    )
