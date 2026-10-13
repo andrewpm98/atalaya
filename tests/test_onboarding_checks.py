@@ -31,8 +31,10 @@ from atalaya.onboarding.checks import (
     check_scope,
     check_secrets,
     check_shodan,
+    environ_settings,
     gemini_models,
     probe_database,
+    run_local_checks,
     shodan_plan,
 )
 
@@ -219,6 +221,18 @@ def test_check_config_sin_env_aconseja_init() -> None:
     assert "atalaya init" in (resultado.hint or "")
 
 
+def test_check_config_sin_env_pero_con_variables_de_entorno() -> None:
+    """Así llega la configuración a la API en Docker: sin fichero `.env`."""
+    resultado = check_config(_inputs(env_exists=False, env_keys=[], environ_keys=["API_KEY"]))
+    assert resultado.status is Status.OK
+    assert resultado.detail == "sin .env · 1 campo desde variables de entorno"
+
+
+def test_environ_settings_solo_cuenta_campos_conocidos_sin_distinguir_mayusculas() -> None:
+    entorno = {"api_key": "x", "AI_PROVIDER": "gemini", "PATH": "/usr/bin", "API_HOST": "0.0.0.0"}
+    assert environ_settings({"AI_PROVIDER", "API_KEY"}, entorno) == ["AI_PROVIDER", "API_KEY"]
+
+
 def test_check_config_detecta_claves_que_atalaya_no_conoce() -> None:
     """Pydantic las ignora sin avisar: una errata dejaba un campo sin efecto."""
     resultado = check_config(_inputs(env_keys=["AI_PROVIDER", "ANTHROPIC_APIKEY"]))
@@ -347,3 +361,27 @@ def test_fuera_de_un_repositorio_no_hay_nada_que_proteger_en_git(tmp_path: Path)
         return subprocess.CompletedProcess(args, 128, "", "not a git repository")
 
     assert check_secrets(tmp_path, run_git=no_repo).status is Status.OK
+
+
+# ─── Comprobaciones locales (GET /config/status) ────────────────────────────
+
+
+async def test_run_local_checks_no_valida_claves_aunque_no_se_pida_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Las comprobaciones locales son offline siempre, no según quien llama."""
+
+    async def _no_debe_llamarse(*args: object) -> list[str]:
+        raise AssertionError("validó una clave contra el proveedor")
+
+    monkeypatch.setattr("atalaya.onboarding.checks.anthropic_models", _no_debe_llamarse)
+    resultados = await run_local_checks(_inputs(offline=False, shodan_api_key="clave"))
+
+    por_clave = {r.key: r for r in resultados}
+    assert [r.key for r in resultados] == [
+        "config", "scope", "database", "ai", "shodan", "api", "secrets",
+    ]
+    assert por_clave["ai"].status is Status.INFO
+    assert por_clave["shodan"].status is Status.INFO
+    assert "crtsh" not in por_clave
+

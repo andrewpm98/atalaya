@@ -1,8 +1,8 @@
 """Comprobaciones de la puesta en marcha: qué está configurado y si funciona.
 
 Las usan `atalaya doctor` (todas), `atalaya init` (para validar cada paso al
-momento) y, más adelante, `GET /config/status` (solo las que no salen a la
-red). Por eso devuelven `CheckResult` —datos, no texto pintado— y reciben los
+momento) y `GET /config/status` (solo las que no salen a la red,
+`run_local_checks`). Por eso devuelven `CheckResult` —datos, no texto pintado— y reciben los
 valores explícitamente en vez de leer `settings`: así `doctor` puede seguir
 diagnosticando aunque el `.env` tenga un valor que impide cargar la
 configuración.
@@ -20,11 +20,12 @@ crédito pasa. Se dice así en vez de prometer lo que no se comprobó.
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 import subprocess
 import time
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,8 +33,12 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import BaseModel
 
+from atalaya.onboarding.envfile import read_env
+
 if TYPE_CHECKING:
     from alembic.config import Config
+
+    from atalaya.config import Settings
 
 ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -338,10 +343,61 @@ class DoctorInputs:
     crtsh_url: str
     api_key: str
     offline: bool = False
+    #: Campos de la configuración definidos como variables de entorno. Es como
+    #: le llega a la API en Docker: el compose pasa el `.env` como variables y
+    #: el fichero no existe dentro del contenedor (`.dockerignore`).
+    environ_keys: list[str] = field(default_factory=list)
+
+
+def environ_settings(known_keys: set[str], environ: Mapping[str, str] | None = None) -> list[str]:
+    """Campos de la configuración presentes en el entorno del proceso.
+
+    Sin distinguir mayúsculas, igual que pydantic-settings al leerlos.
+    """
+    source = os.environ if environ is None else environ
+    return sorted({key.upper() for key in source if key.upper() in known_keys})
+
+
+def inputs_from_settings(current: Settings, project_root: Path, *, offline: bool) -> DoctorInputs:
+    """`DoctorInputs` a partir de una configuración ya cargada.
+
+    `doctor` la carga de nuevo (para diagnosticar el `.env` actual);
+    `GET /config/status` pasa la del proceso de la API, que es la que está en
+    uso aunque alguien haya editado el `.env` sin reiniciarla.
+    """
+    known_keys = {name.upper() for name in type(current).model_fields}
+    env_path = project_root / ".env"
+    return DoctorInputs(
+        project_root=project_root,
+        env_exists=env_path.exists(),
+        env_keys=list(read_env(env_path)),
+        known_keys=known_keys,
+        allowlist_raw=current.scan_allowlist,
+        database_url=current.database_url,
+        ai_provider=current.ai_provider,
+        anthropic_api_key=current.anthropic_api_key,
+        ai_model=current.ai_model,
+        gemini_api_key=current.gemini_api_key,
+        gemini_model=current.gemini_model,
+        ai_replay_file=current.ai_replay_file,
+        shodan_api_key=current.shodan_api_key,
+        shodan_url=current.shodan_url,
+        crtsh_url=current.crtsh_url,
+        api_key=current.api_key,
+        offline=offline,
+        environ_keys=environ_settings(known_keys),
+    )
 
 
 def check_config(inputs: DoctorInputs) -> CheckResult:
     name = "Configuración"
+    if not inputs.env_exists and inputs.environ_keys:
+        count = len(inputs.environ_keys)
+        noun = "campo" if count == 1 else "campos"
+        return CheckResult(
+            key="config", name=name, status=Status.OK,
+            detail=f"sin .env · {count} {noun} desde variables de entorno",
+        )
     if not inputs.env_exists:
         return CheckResult(
             key="config", name=name, status=Status.WARN,
@@ -460,7 +516,7 @@ async def check_ai(inputs: DoctorInputs, client: httpx.AsyncClient) -> CheckResu
         )
     if inputs.offline:
         return CheckResult(
-            key="ai", name=name, status=Status.INFO, detail=f"{label} · clave sin comprobar (--offline)"
+            key="ai", name=name, status=Status.INFO, detail=f"{label} · clave configurada, sin validar"
         )
     fetch = anthropic_models if provider == "anthropic" else gemini_models
     try:
@@ -492,7 +548,7 @@ async def check_shodan(inputs: DoctorInputs, client: httpx.AsyncClient) -> Check
         return CheckResult(key="shodan", name=name, status=Status.OFF, detail="no configurado (opcional)")
     if inputs.offline:
         return CheckResult(
-            key="shodan", name=name, status=Status.INFO, detail="clave sin comprobar (--offline)"
+            key="shodan", name=name, status=Status.INFO, detail="clave configurada, sin validar"
         )
     try:
         plan = await shodan_plan(client, inputs.shodan_url, inputs.shodan_api_key)
@@ -565,4 +621,42 @@ async def run_checks(inputs: DoctorInputs, client: httpx.AsyncClient) -> list[Ch
         crtsh,
         check_api(inputs.api_key),
         check_secrets(inputs.project_root),
+    ]
+
+
+def _refuse_network(request: httpx.Request) -> httpx.Response:
+    # No es un `httpx.HTTPError`: `_get` lo convertiría en «no se pudo
+    # comprobar» y la llamada pasaría desapercibida.
+    raise RuntimeError(f"una comprobación local intentó salir a la red: {request.url}")
+
+
+async def run_local_checks(inputs: DoctorInputs) -> list[CheckResult]:
+    """Las comprobaciones que no salen a la red: las de `GET /config/status`.
+
+    Las de `doctor` sin crt.sh y con la IA y Shodan en «clave configurada, sin
+    validar»: el dashboard las pide al cargar, y validar claves en cada carga
+    serían llamadas externas por mirar una pantalla. La base de datos sí se
+    comprueba: es la propia de la herramienta, no un tercero.
+
+    El cliente HTTP que reciben IA y Shodan rechaza cualquier petición: si un
+    cambio hiciera que una de ellas saliera a la red pese a `offline`, fallaría
+    aquí en vez de añadir en silencio una llamada externa.
+    """
+    local = replace(inputs, offline=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_refuse_network)) as client:
+        database, ai, shodan, secrets = await asyncio.gather(
+            timed(check_database(local.database_url, local.project_root)),
+            check_ai(local, client),
+            check_shodan(local, client),
+            # `git` en un hilo: un subproceso bloquearía el bucle de la API.
+            asyncio.to_thread(check_secrets, local.project_root),
+        )
+    return [
+        check_config(local),
+        check_scope(local.allowlist_raw),
+        database,
+        ai,
+        shodan,
+        check_api(local.api_key),
+        secrets,
     ]
