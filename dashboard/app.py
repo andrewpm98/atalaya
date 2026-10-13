@@ -29,6 +29,7 @@ limitaciones al final de `_CSS`.
 from __future__ import annotations
 
 import os
+import time
 from html import escape
 from typing import Any
 
@@ -245,12 +246,124 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
   padding: 0.95rem 2.2rem 0.8rem 2.2rem;
 }
 .atl-wordmark {
+  display: flex; align-items: flex-end; gap: 0.7rem;
   font-family: var(--mono); font-weight: 700; font-size: 1.5rem;
   letter-spacing: 0.30em; color: var(--fg); line-height: 1;
 }
-.atl-wordmark::before {
-  content: "◈"; color: var(--accent);
-  margin-right: 0.55rem; font-size: 1.05rem; vertical-align: 0.12em;
+.atl-wordmark .atl-tower { width: 1.75rem; height: 1.95rem; flex: none; }
+
+/* ── Marca: torre de celosía con baliza ───────────────────────────────── */
+/* La misma que pinta la terminal en atalaya init y doctor: una torre de
+   vigilancia que es también una A. Los colores salen de la paleta, no del
+   propio dibujo: los atributos de presentación del SVG no admiten var(). */
+.atl-tower { display: block; overflow: visible; }
+.atl-tower .t-wave { fill: none; stroke: #0a7f94; stroke-width: 1.7; stroke-linecap: round; }
+.atl-tower .t-glow { fill: var(--accent-soft); }
+.atl-tower .t-beacon { fill: var(--accent); }
+.atl-tower .t-frame {
+  fill: none; stroke: var(--accent); stroke-width: 2.3;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.atl-tower .t-brace {
+  fill: none; stroke: var(--accent); stroke-width: 1.5;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.atl-tower .t-mast { stroke: var(--accent); stroke-width: 3; stroke-linecap: round; }
+
+/* ── Configuración (GET /config/status) ───────────────────────────────── */
+/* Un punto por estado, del mismo tamaño que la leyenda de severidad. El
+   rojo solo para un error real (no conecta, valor no válido). */
+.atl-cfg { display: flex; flex-direction: column; gap: 0.32rem; }
+.atl-cfg-row {
+  display: grid; grid-template-columns: 0.6rem 6.6rem 1fr; align-items: baseline;
+  font-family: var(--mono); font-size: 0.7rem; color: var(--fg-dim);
+}
+.atl-cfg-row b { font-weight: 500; color: var(--fg); }
+.atl-cfg-hint {
+  grid-column: 3; font-family: var(--sans); font-size: 0.7rem;
+  color: var(--fg-faint); line-height: 1.4; margin-top: 0.1rem;
+}
+.atl-cfg-hint code, .atl-welcome code, .atl-side-note code {
+  font-family: var(--mono); font-size: 0.68rem; color: var(--accent);
+  background: none; border: none; padding: 0;
+}
+/* Arriba y no centrado: con el detalle en dos líneas, centrado caía entre
+   ellas. El margen lo alinea con la primera. */
+.atl-dot {
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+  background: var(--c); align-self: start; margin-top: 0.42em;
+}
+.atl-dot--ok   { --c: var(--ok); }
+.atl-dot--warn { --c: var(--sev-medium); }
+.atl-dot--err  { --c: var(--sev-critical); }
+.atl-dot--info { --c: var(--accent); }
+.atl-dot--off  { --c: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-faint); }
+/* En la barra lateral, más estrecha: el detalle pasa debajo del nombre. */
+[data-testid="stSidebar"] .atl-cfg-row { grid-template-columns: 0.6rem 1fr; font-size: 0.64rem; }
+[data-testid="stSidebar"] .atl-cfg-row span {
+  grid-column: 2; color: var(--fg-faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Un comando no se parte a mitad: se lee y se copia entero. */
+.atl-side-note code { white-space: nowrap; }
+
+/* ── Bienvenida (sin escaneos) ────────────────────────────────────────── */
+.atl-welcome {
+  background: var(--bg-panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 3px;
+  max-width: 1080px; margin-bottom: 0.4rem;
+}
+.atl-welcome-brand {
+  display: flex; gap: 1.6rem; align-items: center;
+  padding: 1.3rem 1.5rem 1.2rem 1.5rem; border-bottom: 1px solid var(--line);
+}
+.atl-welcome-brand .atl-tower { width: 4.4rem; height: 4.9rem; flex: none; }
+.atl-welcome-kicker {
+  font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.26em;
+  color: var(--accent); text-transform: uppercase;
+}
+.atl-welcome-title {
+  font-family: var(--sans); font-weight: 600; font-size: 1.35rem;
+  color: var(--fg); margin: 0.25rem 0 0.4rem 0; letter-spacing: -0.01em;
+}
+.atl-welcome-text {
+  font-family: var(--sans); font-size: 0.8rem; line-height: 1.55;
+  color: var(--fg-dim); max-width: 78ch;
+}
+.atl-welcome-grid { display: grid; grid-template-columns: 1fr 1fr; }
+.atl-welcome-col { padding: 1rem 1.5rem 1.1rem 1.5rem; }
+.atl-welcome-col + .atl-welcome-col { border-left: 1px solid var(--line); }
+.atl-welcome-h {
+  font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.24em;
+  color: var(--fg-faint); text-transform: uppercase; margin-bottom: 0.7rem;
+}
+.atl-welcome-foot {
+  font-family: var(--sans); font-size: 0.7rem; color: var(--fg-faint);
+  margin-top: 0.8rem; line-height: 1.45;
+}
+.atl-steps { display: flex; flex-direction: column; gap: 0.75rem; }
+.atl-step { display: grid; grid-template-columns: 1.6rem 1fr; gap: 0.2rem 0.6rem; }
+.atl-step-n {
+  font-family: var(--mono); font-size: 0.68rem; font-weight: 700;
+  width: 1.35rem; height: 1.35rem; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-strong); color: var(--fg-faint);
+}
+.atl-step-t { font-family: var(--sans); font-size: 0.82rem; font-weight: 600; color: var(--fg-dim); }
+.atl-step-d {
+  grid-column: 2; font-family: var(--sans); font-size: 0.74rem;
+  line-height: 1.5; color: var(--fg-faint);
+}
+.atl-step--now .atl-step-n {
+  border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent);
+}
+.atl-step--now .atl-step-t { color: var(--fg); }
+.atl-step--now .atl-step-d { color: var(--fg-dim); }
+.atl-step--done .atl-step-n { border-color: rgba(57, 211, 83, 0.45); color: var(--ok); }
+.atl-step--done .atl-step-t { color: var(--fg-faint); text-decoration: line-through; }
+@media (max-width: 760px) {
+  .atl-welcome-grid { grid-template-columns: 1fr; }
+  .atl-welcome-col + .atl-welcome-col { border-left: none; border-top: 1px solid var(--line); }
 }
 .atl-tagline {
   font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.24em;
@@ -1033,6 +1146,183 @@ def render_risk_score(scan: dict[str, Any]) -> None:
     )
 
 
+# ─── Marca y puesta en marcha ───────────────────────────────────────────────
+
+#: Torre de celosía con baliza, la marca de `atalaya init`/`doctor`
+#: (`onboarding/ui.py::_TOWER`) dibujada en vectorial: baliza con dos ondas,
+#: patas en A, mástil central y arriostrado en X. Sin colores propios: los pone
+#: `_CSS` (`.atl-tower`), así la marca sigue a la paleta.
+_TOWER_SVG = (
+    '<svg class="atl-tower" viewBox="0 0 40 44" role="img" aria-label="Atalaya">'
+    '<path class="t-wave" d="M13.2 3.6 Q9.6 8 13.2 12.4"/>'
+    '<path class="t-wave" d="M26.8 3.6 Q30.4 8 26.8 12.4"/>'
+    '<circle class="t-glow" cx="20" cy="8" r="4.6"/>'
+    '<circle class="t-beacon" cx="20" cy="8" r="2.5"/>'
+    '<path class="t-frame" d="M20 14.5 L9 40.5 M20 14.5 L31 40.5"/>'
+    '<path class="t-brace" d="M16.6 22.5 L20 27.5 L23.4 22.5 M12.6 32 L20 27.5 L27.4 32 L12.6 32"/>'
+    '<line class="t-mast" x1="20" y1="14.5" x2="20" y2="40.5"/>'
+    '<path class="t-frame" d="M6 41.5 L34 41.5"/>'
+    "</svg>"
+)
+
+#: Segundos que se reutiliza la respuesta de `/config/status`. La API tarda
+#: unas décimas en responder (abre la base de datos, mira las migraciones y
+#: pregunta a git) y Streamlit reejecuta el script en cada clic: sin esto,
+#: cada interacción pagaría esa espera. Por sesión y no con `st.cache_data`,
+#: que es global al proceso y mezclaría el estado entre pruebas.
+_CONFIG_TTL = 60.0
+
+
+def fetch_config_status() -> dict[str, Any] | None:
+    """`GET /config/status`, o `None` si no se pudo obtener.
+
+    A diferencia de `api_get`, un fallo no se pinta: el estado de la
+    configuración es información de apoyo, y una API antigua sin la ruta
+    (404) o una clave incorrecta (401, que `/scans` ya muestra) no deben
+    llenar la página de errores repetidos.
+    """
+    cached = st.session_state.get("_config_status")
+    if cached is not None and time.monotonic() - cached[0] < _CONFIG_TTL:
+        result: dict[str, Any] = cached[1]
+        return result
+    try:
+        with _client() as client:
+            resp = client.get("/config/status")
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        return None
+    status: dict[str, Any] = resp.json()
+    st.session_state["_config_status"] = (time.monotonic(), status)
+    return status
+
+
+_CFG_ORDER = ("scope", "ai", "shodan", "api", "database", "config", "secrets")
+_CFG_STATES = ("ok", "warn", "err", "info", "off")
+
+
+def _checks(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {check["key"]: check for check in status.get("checks", [])}
+
+
+def _con_codigo(texto: str) -> str:
+    """Escapa *texto* y marca como código los comandos que menciona."""
+    seguro = escape(texto)
+    for comando in (
+        "atalaya init", "atalaya doctor", "alembic upgrade head",
+        "docker compose up -d db", "SCAN_ALLOWLIST",
+    ):
+        seguro = seguro.replace(comando, f"<code>{comando}</code>")
+    return seguro
+
+
+def _cfg_rows(status: dict[str, Any], *, hints: bool) -> str:
+    """Filas de estado: punto de color, nombre y detalle (y la pista si la hay)."""
+    checks = _checks(status)
+    filas = []
+    for key in _CFG_ORDER:
+        check = checks.get(key)
+        if check is None:
+            continue
+        estado = check["status"] if check["status"] in _CFG_STATES else "off"
+        fila = (
+            f'<div class="atl-cfg-row"><i class="atl-dot atl-dot--{estado}"></i>'
+            f'<b>{escape(check["name"])}</b>'
+            f'<span title="{escape(check["detail"])}">{escape(check["detail"])}</span>'
+        )
+        if hints and check.get("hint") and estado in ("warn", "err"):
+            fila += f'<div class="atl-cfg-hint">{_con_codigo(check["hint"])}</div>'
+        filas.append(fila + "</div>")
+    return '<div class="atl-cfg">' + "".join(filas) + "</div>"
+
+
+def _configurado(status: dict[str, Any] | None) -> bool:
+    """¿Está hecho el paso «configura»? Sin errores, con `.env` (o variables
+    de entorno) válido, alcance definido y proveedor de IA con clave."""
+    if status is None:
+        return False
+    checks = _checks(status)
+    if any(c["status"] == "err" for c in checks.values()):
+        return False
+    return all(checks.get(k, {}).get("status") in ("ok", "info") for k in ("config", "scope", "ai"))
+
+
+def render_bienvenida(status: dict[str, Any] | None) -> None:
+    """Pantalla de bienvenida: solo cuando aún no hay ningún escaneo.
+
+    Orienta a quien llega de fuera: qué es, qué está configurado y cuál es el
+    siguiente paso. No configura nada: eso es `atalaya init`, en la máquina
+    del operador (los secretos no viajan por la web).
+    """
+    hecho = _configurado(status)
+    alcance = _checks(status).get("scope", {}) if status else {}
+    restringido = alcance.get("status") == "ok"
+    pasos = [
+        (
+            "Configura la herramienta",
+            (
+                "Alcance autorizado, base de datos y claves, paso a paso y sin editar "
+                "ficheros: <code>atalaya init</code> en la terminal."
+            ),
+        ),
+        (
+            "Lanza tu primer escaneo",
+            "En «Nuevo escaneo», contra uno de tus dominios autorizados."
+            if restringido
+            else (
+                "En «Nuevo escaneo». Para probar: <code>scanme.nmap.org</code>, "
+                "mantenido por Nmap para reconocimiento autorizado."
+            ),
+        ),
+        (
+            "Tría y consulta",
+            (
+                "Prioriza los hallazgos con IA, pregunta en lenguaje natural y "
+                "descarga el informe PDF desde «Escaneos»."
+            ),
+        ),
+    ]
+    actual = 1 if hecho else 0
+    marcado = ""
+    for indice, (titulo, texto) in enumerate(pasos):
+        clase = "done" if indice < actual else "now" if indice == actual else "todo"
+        numero = "✓" if clase == "done" else str(indice + 1)
+        marcado += (
+            f'<div class="atl-step atl-step--{clase}"><div class="atl-step-n">{numero}</div>'
+            f'<div class="atl-step-t">{titulo}</div><div class="atl-step-d">{texto}</div></div>'
+        )
+
+    if status is not None:
+        columna_estado = (
+            '<div class="atl-welcome-h">Configuración de la API</div>'
+            + _cfg_rows(status, hints=True)
+            + '<div class="atl-welcome-foot">Las claves no se validan desde aquí: '
+            "<code>atalaya doctor</code> las comprueba contra cada proveedor.</div>"
+        )
+    else:
+        columna_estado = (
+            '<div class="atl-welcome-h">Configuración de la API</div>'
+            '<div class="atl-welcome-foot">No disponible. <code>atalaya doctor</code> '
+            "la diagnostica desde la terminal.</div>"
+        )
+
+    _html(
+        '<div class="atl-welcome">'
+        f'<div class="atl-welcome-brand">{_TOWER_SVG}<div>'
+        '<div class="atl-welcome-kicker">Primer arranque · sin escaneos</div>'
+        '<div class="atl-welcome-title">Te damos la bienvenida a Atalaya</div>'
+        '<div class="atl-welcome-text">Vigila la superficie de ataque de un dominio: '
+        "descubre sus subdominios por Certificate Transparency y DNS, revisa puertos, "
+        "cabeceras y TLS, y usa un modelo de IA para priorizar lo que encuentra sobre "
+        "evidencia verificada.</div></div></div>"
+        '<div class="atl-welcome-grid">'
+        f'<div class="atl-welcome-col">{columna_estado}</div>'
+        '<div class="atl-welcome-col"><div class="atl-welcome-h">Primeros pasos</div>'
+        f'<div class="atl-steps">{marcado}</div></div>'
+        "</div></div>"
+    )
+
+
 # ─── Componentes de render ──────────────────────────────────────────────────
 
 
@@ -1435,7 +1725,7 @@ def render_scan_detail(scan: dict[str, Any], otros: list[dict[str, Any]] | None 
 _html(
     '<div class="atl-masthead">'
     "<div>"
-    '<div class="atl-wordmark">ATALAYA</div>'
+    f'<div class="atl-wordmark">{_TOWER_SVG}<span>ATALAYA</span></div>'
     '<div class="atl-tagline">Attack Surface Management · Triaje asistido por IA</div>'
     "</div>"
     '<div class="atl-masthead-meta">'
@@ -1455,7 +1745,19 @@ with st.sidebar:
             st.warning(f"API respondió {r.status_code}")
     except httpx.HTTPError:
         st.error("API no disponible")
+        _html(
+            '<div class="atl-side-note">¿Has ejecutado <code>atalaya init</code>? '
+            "Después arranca la API:<br><code>uvicorn atalaya.api.main:app</code><br>"
+            "o el stack completo:<br><code>docker compose up -d</code></div>"
+        )
     _html(f'<div class="atl-side-kv"><span>endpoint</span><span>{escape(API_URL)}</span></div>')
+
+    estado_config = fetch_config_status()
+    if estado_config is not None:
+        _html(
+            '<div class="atl-side-h atl-side-h--gap">Configuración</div>'
+            + _cfg_rows(estado_config, hints=False)
+        )
 
     _html(
         '<div class="atl-side-h atl-side-h--gap">Severidad máx. · banda</div>'
@@ -1473,6 +1775,11 @@ with st.sidebar:
         " solo mueve dentro de ella, y repetir un mismo tipo de hallazgo suma cada vez"
         " menos.</div>"
     )
+
+# La bienvenida depende de `/scans`, que se pide dentro de su pestaña (ahí se
+# pintan sus errores). Se reserva aquí el sitio, encima de las pestañas, y se
+# rellena desde la pestaña si la lista llega vacía.
+hueco_bienvenida = st.container()
 
 tab_nuevo, tab_escaneos, tab_preguntar = st.tabs(
     ["Nuevo escaneo", "Escaneos", "Preguntar"]
@@ -1507,11 +1814,18 @@ with tab_nuevo:
                 st.caption("Consulta el detalle en la pestaña «Escaneos».")
 
 with tab_escaneos:
-    scans = api_get("/scans") or []
+    respuesta_scans = api_get("/scans")
+    scans = respuesta_scans or []
     _seccion("Escaneos realizados", f"{len(scans)}")
 
-    if not scans:
+    if respuesta_scans is None:
+        # La API no respondió (el error ya está pintado): no se sabe si hay
+        # escaneos, así que ni «todavía no hay» ni bienvenida de primer arranque.
+        pass
+    elif not scans:
         st.info("Todavía no hay escaneos. Lanza uno en la pestaña «Nuevo escaneo».")
+        with hueco_bienvenida:
+            render_bienvenida(fetch_config_status())
     else:
         st.dataframe(
             [

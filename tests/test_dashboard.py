@@ -862,3 +862,190 @@ def test_el_diff_se_conserva_sin_volver_a_pedirlo() -> None:
     assert not at.exception
     assert llamadas.count("/scans/2/diff/1") == 1
     assert any(m.label == "Nuevos" for m in at.tabs[1].metric)
+
+
+# ─── Puesta en marcha: bienvenida y estado de la configuración ─────────────
+
+
+def _check(key: str, name: str, status: str, detail: str, hint: str | None = None) -> dict[str, Any]:
+    return {"key": key, "name": name, "status": status, "detail": detail, "hint": hint,
+            "elapsed_ms": None}
+
+
+def _config_status(**overrides: dict[str, Any]) -> dict[str, Any]:
+    """Respuesta de `GET /config/status` con todo correcto, salvo *overrides*."""
+    checks = {
+        "config": _check("config", "Configuración", "ok", ".env cargado · 6 campos válidos"),
+        "scope": _check("scope", "Alcance", "ok", "1 dominio autorizado"),
+        "database": _check("database", "Base de datos", "ok", "SQLite 3.50.4 · migraciones al día"),
+        "ai": _check("ai", "IA", "info", "Anthropic · clave configurada, sin validar"),
+        "shodan": _check("shodan", "Shodan", "off", "no configurado (opcional)"),
+        "api": _check("api", "API", "ok", "protegida con X-API-Key"),
+        "secrets": _check("secrets", "Secretos", "ok", ".env ignorado por git"),
+    }
+    checks.update(overrides)
+    return {"checks": list(checks.values()), "errors": 0, "warnings": 0}
+
+
+_SIN_ALCANCE = _check(
+    "scope", "Alcance", "warn", "sin restricción: se puede escanear cualquier dominio",
+    "Limítalo a los dominios autorizados con atalaya init (SCAN_ALLOWLIST).",
+)
+_PASO_ACTIVO_RE = re.compile(r'atl-step--now"><div class="atl-step-n">(\d)<')
+
+
+def _bienvenida(at: AppTest) -> str | None:
+    """Marcado de la bienvenida, o `None` si no se pintó."""
+    return next((m.value for m in at.main.markdown if "atl-welcome" in m.value), None)
+
+
+def _paso_activo(at: AppTest) -> int | None:
+    marcado = _bienvenida(at) or ""
+    encontrado = _PASO_ACTIVO_RE.search(marcado)
+    return int(encontrado.group(1)) if encontrado else None
+
+
+def _barra_lateral(at: AppTest) -> str:
+    return "".join(m.value for m in at.sidebar.markdown)
+
+
+def test_la_cabecera_lleva_la_torre() -> None:
+    at = _run_app(get_map={"/scans": _Resp(200, [])})
+    assert any('class="atl-tower"' in m.value and "ATALAYA" in m.value for m in at.main.markdown)
+
+
+def test_sin_escaneos_da_la_bienvenida_con_el_estado() -> None:
+    at = _run_app(
+        get_map={"/scans": _Resp(200, []), "/config/status": _Resp(200, _config_status())}
+    )
+    assert not at.exception
+    marcado = _bienvenida(at)
+    assert marcado is not None
+    assert "1 dominio autorizado" in marcado
+    assert "Anthropic · clave configurada, sin validar" in marcado
+
+
+def test_con_escaneos_no_hay_bienvenida() -> None:
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, _scan_detail()),
+            "/config/status": _Resp(200, _config_status()),
+        }
+    )
+    assert not at.exception
+    assert _bienvenida(at) is None
+
+
+def test_configurado_el_paso_activo_es_el_primer_escaneo() -> None:
+    at = _run_app(
+        get_map={"/scans": _Resp(200, []), "/config/status": _Resp(200, _config_status())}
+    )
+    assert _paso_activo(at) == 2
+    # Con alcance restringido no se sugiere un dominio ajeno a la allowlist.
+    assert "scanme.nmap.org" not in (_bienvenida(at) or "")
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"scope": _SIN_ALCANCE},
+        {"ai": _check("ai", "IA", "warn", "Anthropic sin clave: triaje, consultas y "
+                      "resúmenes no disponibles", "Añade la clave con atalaya init.")},
+        {"config": _check("config", "Configuración", "warn",
+                          "sin .env: se usan los valores por defecto")},
+        {"database": _check("database", "Base de datos", "err",
+                            "no conecta con 127.0.0.1:5432: connection refused")},
+    ],
+    ids=["sin-alcance", "ia-sin-clave", "sin-env", "bd-caida"],
+)
+def test_sin_configurar_el_paso_activo_es_init(override: dict[str, Any]) -> None:
+    at = _run_app(
+        get_map={"/scans": _Resp(200, []), "/config/status": _Resp(200, _config_status(**override))}
+    )
+    assert _paso_activo(at) == 1
+    assert "atalaya init" in (_bienvenida(at) or "")
+
+
+def test_sin_alcance_sugiere_scanme_y_muestra_la_pista() -> None:
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, []),
+            "/config/status": _Resp(200, _config_status(scope=_SIN_ALCANCE)),
+        }
+    )
+    marcado = _bienvenida(at) or ""
+    assert "scanme.nmap.org" in marcado
+    assert "Limítalo a los dominios autorizados" in marcado
+
+
+def test_sin_estado_de_la_configuracion_la_bienvenida_no_falla() -> None:
+    """Una API anterior a `/config/status` (404) o una clave rechazada: la
+    bienvenida sale igual, sin el estado y sin un error más en la página."""
+    at = _run_app(get_map={"/scans": _Resp(200, [])})
+    assert not at.exception
+    marcado = _bienvenida(at) or ""
+    assert "No disponible" in marcado
+    assert _paso_activo(at) == 1
+    assert not any("/config/status" in e.value for e in at.error)
+    assert "Configuración</div>" not in _barra_lateral(at)
+
+
+def test_con_la_api_caida_no_hay_bienvenida_y_se_sugiere_init() -> None:
+    """Sin respuesta de `/scans` no se sabe si hay escaneos: decir «primer
+    arranque» o «todavía no hay escaneos» sería afirmar algo no comprobado."""
+    with patch("httpx.Client", _UnreachableClient):
+        at = AppTest.from_file(_APP_PATH, default_timeout=15)
+        at.run()
+
+    assert not at.exception
+    assert _bienvenida(at) is None
+    assert not any("Todavía no hay escaneos" in i.value for i in at.info)
+    assert "atalaya init" in _barra_lateral(at)
+
+
+def test_la_barra_lateral_muestra_la_configuracion() -> None:
+    at = _run_app(
+        get_map={
+            "/scans": _Resp(200, [_scan_summary()]),
+            "/scans/1": _Resp(200, _scan_detail()),
+            "/config/status": _Resp(200, _config_status(scope=_SIN_ALCANCE)),
+        }
+    )
+    lateral = _barra_lateral(at)
+    assert "Configuración</div>" in lateral
+    assert "atl-dot--warn" in lateral and "sin restricción" in lateral
+    assert "atl-dot--off" in lateral  # Shodan no configurado
+
+
+def test_el_texto_del_estado_se_escapa() -> None:
+    """El detalle viene de la API: se pinta como texto, nunca como HTML."""
+    malicioso = _check("ai", "IA", "warn", "<img src=x onerror=alert(1)>", "<script>x</script>")
+    at = _run_app(
+        get_map={"/scans": _Resp(200, []), "/config/status": _Resp(200, _config_status(ai=malicioso))}
+    )
+    todo = (_bienvenida(at) or "") + _barra_lateral(at)
+    assert "<img src=x" not in todo and "<script>" not in todo
+    assert "&lt;img src=x onerror=alert(1)&gt;" in todo
+
+
+def test_el_estado_no_se_pide_en_cada_reejecucion() -> None:
+    """Cada clic reejecuta el script entero; el estado se reutiliza 60 s."""
+    peticiones: list[str] = []
+    base = _fake_client(
+        {"/scans": _Resp(200, []), "/config/status": _Resp(200, _config_status())}
+    )
+
+    class _Registrador(base):  # type: ignore[misc, valid-type]
+        def get(self, path: str, params: dict[str, object] | None = None) -> _Resp:
+            peticiones.append(path)
+            return super().get(path, params)
+
+    with patch("httpx.Client", _Registrador):
+        at = AppTest.from_file(_APP_PATH, default_timeout=15)
+        at.run()
+        at.run()
+
+    assert not at.exception
+    assert peticiones.count("/scans") == 2
+    assert peticiones.count("/config/status") == 1
