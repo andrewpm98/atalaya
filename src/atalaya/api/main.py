@@ -8,6 +8,8 @@ esqueletos; cada fase posterior los va rellenando.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -16,7 +18,11 @@ from atalaya import __version__
 from atalaya.api.routes import assets, config, findings, scans
 from atalaya.api.security import require_api_key
 from atalaya.config import settings
+from atalaya.core.database import SessionLocal
 from atalaya.core.exceptions import AIProviderError, InvalidTargetError, UnauthorizedTargetError
+from atalaya.core.scan_runner import fail_interrupted_scans
+
+logger = logging.getLogger(__name__)
 
 
 def _configure_logging() -> None:
@@ -39,10 +45,37 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Al arrancar, cierra como fallidos los escaneos que una parada dejó a medias.
+
+    Un escaneo corre en segundo plano dentro de este proceso: si se detiene
+    (reinicio, despliegue), la tarea muere y el escaneo quedaría en `running`
+    para siempre. Un fallo aquí (base de datos aún sin migrar o caída) se
+    registra y no impide arrancar: la API debe poder responder para que se
+    vea qué pasa (`/health`, `/config/status`).
+    """
+    try:
+        async with SessionLocal() as session:
+            interrupted = await fail_interrupted_scans(session)
+    except Exception as exc:  # noqa: BLE001 - degradación controlada al arrancar
+        logger.warning(
+            "No se pudieron revisar los escaneos interrumpidos: %s", type(exc).__name__
+        )
+    else:
+        if interrupted:
+            logger.warning(
+                "%d escaneo(s) en curso al detenerse la API pasan a fallidos", interrupted
+            )
+    yield
+
+
 app = FastAPI(
     title="Atalaya API",
     description="Attack Surface Management con triaje por IA",
     version=__version__,
+    lifespan=_lifespan,
 )
 
 # La clave se exige por router, no en `FastAPI(dependencies=...)`: eso la

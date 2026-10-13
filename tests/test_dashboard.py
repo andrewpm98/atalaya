@@ -222,7 +222,7 @@ def test_error_de_la_api_se_muestra_sin_excepcion() -> None:
     nunca en una excepción de Python que tumbe la página.
     """
     get_map = {"/scans": _Resp(200, [])}
-    post_map = {"/scans": _Resp(400, {"detail": "Dominio no válido: 'x'"})}
+    post_map = {"/scans?wait=true": _Resp(400, {"detail": "Dominio no válido: 'x'"})}
 
     with patch("httpx.Client", _fake_client(get_map, post_map)):
         at = AppTest.from_file(_APP_PATH, default_timeout=15)
@@ -240,7 +240,7 @@ def test_error_de_la_api_se_muestra_sin_excepcion() -> None:
 def test_nuevo_escaneo_exitoso_muestra_resumen() -> None:
     nuevo = _scan_detail(scan_id=5)
     get_map = {"/scans": _Resp(200, [])}
-    post_map = {"/scans": _Resp(201, nuevo)}
+    post_map = {"/scans?wait=true": _Resp(201, nuevo)}
 
     with patch("httpx.Client", _fake_client(get_map, post_map)):
         at = AppTest.from_file(_APP_PATH, default_timeout=15)

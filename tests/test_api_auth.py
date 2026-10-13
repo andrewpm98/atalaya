@@ -127,12 +127,12 @@ def test_una_peticion_rechazada_no_llega_a_ejecutar_la_ruta(
 ) -> None:
     """El 401 se decide antes de la ruta: sin clave, `POST /scans` no debe
     llegar a enumerar (red) ni `POST /findings/ask` a llamar al proveedor."""
-    from atalaya.api.routes import scans as scans_routes
+    from atalaya.core import scan_runner
 
     def _no_debe_llamarse(*args: object, **kwargs: object) -> None:
         raise AssertionError("la ruta se ejecutó sin autenticación")
 
-    monkeypatch.setattr(scans_routes, "enumerate_subdomains", _no_debe_llamarse)
+    monkeypatch.setattr(scan_runner, "enumerate_subdomains", _no_debe_llamarse)
     resp = client.post("/scans", json={"domain": "scanme.nmap.org"})
     assert resp.status_code == 401
 

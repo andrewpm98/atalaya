@@ -1821,7 +1821,11 @@ with tab_nuevo:
             st.warning("Introduce un dominio.")
         else:
             with st.spinner(f"Escaneando {domain}..."):
-                scan = api_post("/scans", json={"domain": domain.strip(), "resolve": resolve})
+                # `wait=true`: espera al escaneo completo, como antes de que la
+                # API lo lanzara en segundo plano (202).
+                scan = api_post(
+                    "/scans?wait=true", json={"domain": domain.strip(), "resolve": resolve}
+                )
             if scan is not None:
                 total = sum(len(a["findings"]) for a in scan["assets"])
                 st.success(

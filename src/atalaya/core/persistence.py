@@ -15,8 +15,16 @@ from atalaya.core.models import Asset, Finding, FindingSeverity, Scan, ScanStatu
 from atalaya.discovery.models import DiscoveryFinding, ResolutionStatus, SubdomainScanResult
 
 
-async def save_subdomain_scan(session: AsyncSession, result: SubdomainScanResult) -> Scan:
+async def save_subdomain_scan(
+    session: AsyncSession, result: SubdomainScanResult, scan: Scan | None = None
+) -> Scan:
     """Persiste un `SubdomainScanResult` como un `Scan` con sus `Asset`.
+
+    Sin `scan`, crea uno nuevo con el estado del resultado (lo que hace la CLI
+    con `--save`). Con `scan`, rellena uno ya creado en `running` por
+    `POST /scans` (`core/scan_runner.py`): le añade activos e incidencias, pero
+    no toca su estado ni sus fechas, porque el escaneo no termina hasta que
+    acaba el enriquecimiento, y eso lo decide quien lo ejecuta.
 
     Un host con `leaks_internal_addressing` genera además un `Finding`: no es
     solo un dato de inventario, es un hallazgo por derecho propio (ver
@@ -25,13 +33,18 @@ async def save_subdomain_scan(session: AsyncSession, result: SubdomainScanResult
     No hace commit: la transacción queda a cargo de quien llama, para que
     pueda combinarse con otras escrituras en la misma unidad de trabajo.
     """
-    scan = Scan(
-        domain=result.domain,
-        status=ScanStatus.COMPLETED if result.finished_at else ScanStatus.RUNNING,
-        started_at=result.started_at,
-        finished_at=result.finished_at,
-        errors=list(result.errors),
-    )
+    if scan is None:
+        scan = Scan(
+            domain=result.domain,
+            status=ScanStatus.COMPLETED if result.finished_at else ScanStatus.RUNNING,
+            started_at=result.started_at,
+            finished_at=result.finished_at,
+            errors=list(result.errors),
+        )
+    else:
+        # Lista nueva, no `append`: una columna JSON no detecta mutaciones en
+        # sitio y el cambio no llegaría a la base de datos.
+        scan.errors = [*scan.errors, *result.errors]
 
     for record in result.records:
         asset = Asset(

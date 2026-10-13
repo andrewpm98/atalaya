@@ -28,3 +28,15 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Dependencia FastAPI: entrega una sesión de BD por petición."""
     async with SessionLocal() as session:
         yield session
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Dependencia FastAPI: la fábrica de sesiones, para el trabajo que
+    sobrevive a la petición (un escaneo en segundo plano).
+
+    Ese trabajo no puede usar la sesión de `get_session`, que se cierra al
+    responder. Se inyecta como dependencia, y no importando `SessionLocal`
+    directamente, para que los tests la sustituyan por su base de datos en
+    memoria, igual que hacen con `get_session`.
+    """
+    return SessionLocal

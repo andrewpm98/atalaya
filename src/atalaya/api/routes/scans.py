@@ -1,9 +1,9 @@
 """Router de escaneos: lanzar, consultar, comparar y triar escaneos de
 superficie de exposición.
 
-`create_scan` encadena las cuatro fases de descubrimiento sobre el mismo
-escaneo: subdominios (Paso 2), puertos/cabeceras/TLS sobre los hosts activos
-(`enrich_scan`, Paso 2 resto) y persistencia (Paso 3). `triage_scan`
+`create_scan` valida el dominio, crea el escaneo en `running` y deja el
+trabajo largo (subdominios, puertos/cabeceras/TLS y persistencia) a
+`core/scan_runner.py::run_scan`, en segundo plano. `triage_scan`
 (Paso 5) es la puerta de entrada REST al triaje por IA: sin ella,
 `ai/triage.py` no sería alcanzable desde la API. `download_report`
 (Paso 7) cumple el mismo papel para `reporting/generator.py`. `diff_scan`
@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atalaya.ai.diff_analyst import analyze_diff
 from atalaya.ai.provider import get_provider
@@ -35,13 +35,12 @@ from atalaya.api.schemas import (
     TriageResponse,
 )
 from atalaya.core import repository
-from atalaya.core.database import get_session
+from atalaya.core.authorization import ensure_authorized
+from atalaya.core.database import get_session, get_session_factory
 from atalaya.core.exceptions import AIProviderError
-from atalaya.core.models import FindingSeverity, Scan
-from atalaya.core.persistence import apply_discovery_findings, apply_port_scan, save_subdomain_scan
+from atalaya.core.models import FindingSeverity, Scan, ScanStatus
 from atalaya.core.repository import diff_scans
-from atalaya.discovery.enrichment import enrich_scan
-from atalaya.discovery.subdomains import enumerate_subdomains
+from atalaya.core.scan_runner import run_scan
 from atalaya.reporting.generator import generate_report
 
 logger = logging.getLogger(__name__)
@@ -49,34 +48,79 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scans", tags=["escaneos"])
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=ScanDetail)
-async def create_scan(
-    payload: ScanRequest, session: AsyncSession = Depends(get_session)
-) -> Scan:
-    """Lanza un escaneo completo sobre `payload.domain` y lo persiste.
+def _ensure_not_running(scan: Scan) -> None:
+    """409 si el escaneo aún está en curso.
 
-    `enumerate_subdomains` valida y autoriza el dominio internamente (levanta
-    `InvalidTargetError`/`UnauthorizedTargetError`, traducidas a HTTP por los
-    manejadores de `api/main.py`): este endpoint no duplica esa comprobación.
-
-    `enrich_scan` solo actúa sobre hosts activos (`result.active_records`):
-    con `payload.resolve=False` esa lista está vacía y el enriquecimiento no
-    hace ninguna llamada de red, sin necesidad de una rama explícita aquí.
+    Mientras corre no tiene activos (se guardan todos al final), así que
+    triarlo devolvería «0 triados» como si estuviera hecho, y su informe
+    saldría vacío. 409 (conflicto con el estado del recurso) dice lo que pasa:
+    el escaneo existe, pero todavía no se puede usar para eso.
     """
-    result = await enumerate_subdomains(payload.domain, resolve=payload.resolve)
-    scan = await save_subdomain_scan(session, result)
+    if scan.status is ScanStatus.RUNNING:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"El escaneo #{scan.id} aún está en curso.",
+        )
 
-    enrichment = await enrich_scan(result)
-    apply_port_scan(scan, enrichment.ports_by_ip)
-    apply_discovery_findings(scan, enrichment.findings_by_hostname())
 
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=ScanDetail,
+    responses={201: {"description": "Con `wait=true`: el escaneo ya terminado, con sus activos."}},
+)
+async def create_scan(
+    payload: ScanRequest,
+    background: BackgroundTasks,
+    response: Response,
+    wait: bool = Query(
+        default=False,
+        description=(
+            "true: espera a que termine y responde 201 con el escaneo completo, como antes "
+            "de que el escaneo fuera en segundo plano. Puede tardar minutos."
+        ),
+    ),
+    session: AsyncSession = Depends(get_session),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+) -> Scan:
+    """Lanza un escaneo de `payload.domain`: 202 al momento, y corre en segundo plano.
+
+    Responde con el escaneo en `running`, sin activos, y la cabecera
+    `Location` apunta a `GET /scans/{id}`, que se consulta hasta que el
+    estado pase a `completed` o `failed`. Un escaneo tarda de segundos a
+    minutos: dentro de la petición, la conexión quedaba abierta todo ese
+    tiempo y un cliente con timeout lo daba por fallido aunque siguiera.
+
+    La validación y la autorización van **antes** de crear nada: un dominio
+    mal formado da 400 y uno fuera de `SCAN_ALLOWLIST` da 403 al momento (vía
+    los manejadores de `api/main.py`), sin dejar un escaneo `failed` en la
+    base de datos. `run_scan` vuelve a comprobarla al ejecutar.
+
+    `wait=true` conserva el comportamiento anterior (201 con el detalle): lo
+    usan los scripts y los ejemplos de `curl` que necesitan el resultado en
+    la misma llamada. Es la misma función, esperada en línea.
+    """
+    domain = ensure_authorized(payload.domain)
+    # `assets=[]` explícito: deja la relación cargada (vacía) para serializar
+    # la respuesta sin una carga perezosa fuera del contexto async.
+    scan = Scan(domain=domain, status=ScanStatus.RUNNING, assets=[])
+    session.add(scan)
     await session.commit()
-    # Se recarga con `selectinload`: `scan.assets` tiene todos los `Asset` (se
-    # poblaron en memoria antes del flush), pero `asset.findings` solo está
-    # cargado para los assets a los que `save_subdomain_scan` les añadió un
-    # finding. Acceder a los demás dispararía un lazy-load fuera de contexto
-    # async (`MissingGreenlet`) al serializar la respuesta.
-    loaded = await repository.get_scan(session, scan.id)
+    scan_id = scan.id
+
+    if not wait:
+        background.add_task(run_scan, session_factory, scan_id, resolve=payload.resolve)
+        response.headers["Location"] = f"/scans/{scan_id}"
+        return scan
+
+    await run_scan(session_factory, scan_id, resolve=payload.resolve)
+    response.status_code = status.HTTP_201_CREATED
+    # `run_scan` escribió con otra sesión: sin expirar, esta devolvería el
+    # `Scan` que tiene en memoria, todavía en `running` y sin activos. Tras
+    # expirarlo no se puede leer ni `scan.id` sin una carga perezosa fuera
+    # del contexto async: por eso el id se guardó antes.
+    session.expire_all()
+    loaded = await repository.get_scan(session, scan_id)
     assert loaded is not None
     return loaded
 
@@ -160,6 +204,18 @@ async def diff_scan(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Escaneo {faltante} no encontrado"
         )
 
+    for escaneo in (scan_a, scan_b):
+        if escaneo.status is not ScanStatus.COMPLETED:
+            # Uno en curso no tiene activos todavía y uno fallido no los tendrá:
+            # compararlos daría todos sus hostnames por «desaparecidos».
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Solo se comparan escaneos completados: el #{escaneo.id} "
+                    f"está {'en curso' if escaneo.status is ScanStatus.RUNNING else 'fallido'}."
+                ),
+            )
+
     if scan_a.domain != scan_b.domain:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -230,6 +286,7 @@ async def triage_scan(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Escaneo {scan_id} no encontrado"
         )
+    _ensure_not_running(scan)
 
     pendientes = [
         finding
@@ -299,6 +356,7 @@ async def download_report(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Escaneo {scan_id} no encontrado"
         )
+    _ensure_not_running(scan)
     try:
         provider = get_provider()
     except AIProviderError:

@@ -10,7 +10,7 @@ from atalaya.ai.provider import get_provider
 from atalaya.api.schemas import AskRequest, AskResponse, FindingOut
 from atalaya.core import repository
 from atalaya.core.database import get_session
-from atalaya.core.models import Finding
+from atalaya.core.models import Finding, ScanStatus
 
 router = APIRouter(prefix="/findings", tags=["hallazgos"])
 
@@ -55,6 +55,13 @@ async def ask_natural_language(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No hay un escaneo completado para ese dominio o id.",
+        )
+    if scan.status is not ScanStatus.COMPLETED:
+        # Con `scan_id` explícito no pasa por `get_latest_scan`, que ya filtra:
+        # uno en curso aún no tiene activos y la respuesta hablaría de un vacío.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"El escaneo #{scan.id} no está completado ({scan.status.value}).",
         )
 
     provider = get_provider()

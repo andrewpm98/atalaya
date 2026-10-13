@@ -19,7 +19,7 @@ from sqlalchemy.pool import StaticPool
 from atalaya.api.main import app
 from atalaya.config import settings
 from atalaya.core import models  # noqa: F401 - registra las tablas en Base.metadata
-from atalaya.core.database import Base, get_session
+from atalaya.core.database import Base, get_session, get_session_factory
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +66,10 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 async def client() -> AsyncGenerator[TestClient, None]:
     """`TestClient` de la API con `get_session` inyectado contra SQLite en
     memoria — igual que `db_session`, pero por request HTTP en vez de directa.
+
+    `get_session_factory` apunta a la misma base de datos: es la que usa el
+    escaneo en segundo plano (`core/scan_runner.py`). Sin ella, `POST /scans`
+    escribiría en el `DATABASE_URL` real de quien ejecuta la suite.
     """
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
@@ -82,6 +86,7 @@ async def client() -> AsyncGenerator[TestClient, None]:
             yield session
 
     app.dependency_overrides[get_session] = _override_get_session
+    app.dependency_overrides[get_session_factory] = lambda: session_factory
     yield TestClient(app)
     app.dependency_overrides.clear()
     await engine.dispose()

@@ -94,8 +94,8 @@ def _create_scan_con_finding(client: TestClient, monkeypatch, domain: str = "eje
     async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
         return _fake_result(domain)
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
-    created = client.post("/scans", json={"domain": domain}).json()
+    monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", fake_enumerate)
+    created = client.post("/scans?wait=true", json={"domain": domain}).json()
     return created["id"]
 
 
@@ -271,8 +271,8 @@ async def test_triage_no_reutiliza_si_cambia_el_contexto(
         result.records[0].ip_addresses = ["10.0.0.6"]
         return result
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", otra_ip)
-    nuevo_id = client.post("/scans", json={"domain": "ejemplo.com"}).json()["id"]
+    monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", otra_ip)
+    nuevo_id = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()["id"]
     actual = _CountingProvider(tool_output={"severity": "low", "impact": "i", "remediation": "r"})
     monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: actual)
 
@@ -314,8 +314,8 @@ async def test_triage_reutiliza_aunque_el_proveedor_falle_para_el_resto(
         )
         return result
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", con_host_extra)
-    nuevo_id = client.post("/scans", json={"domain": "ejemplo.com"}).json()["id"]
+    monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", con_host_extra)
+    nuevo_id = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()["id"]
     monkeypatch.setattr(
         "atalaya.api.routes.scans.get_provider",
         lambda: _FakeProvider(error=AIProviderError("503")),

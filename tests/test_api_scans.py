@@ -75,8 +75,12 @@ def _fake_result(domain: str) -> SubdomainScanResult:
 
 def _mock_discovery(monkeypatch, *, enrichment: EnrichmentResult | None = None) -> None:
     """Sustituye `enumerate_subdomains` y `enrich_scan` por dobles rápidos y
-    sin red, en el módulo del router (no en `discovery/`, que es donde se
-    resuelven las llamadas)."""
+    sin red, en `core/scan_runner.py`, que es quien los llama (no en
+    `discovery/`, donde se definen).
+
+    Los tests de este fichero piden `?wait=true`, que espera al escaneo y
+    devuelve el detalle: prueban lo que el escaneo guarda. El 202 y el
+    segundo plano se prueban en `test_scan_background.py`."""
 
     async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
         return _fake_result(domain)
@@ -84,14 +88,14 @@ def _mock_discovery(monkeypatch, *, enrichment: EnrichmentResult | None = None) 
     async def fake_enrich(result: SubdomainScanResult) -> EnrichmentResult:
         return enrichment if enrichment is not None else EnrichmentResult()
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
-    monkeypatch.setattr("atalaya.api.routes.scans.enrich_scan", fake_enrich)
+    monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", fake_enumerate)
+    monkeypatch.setattr("atalaya.core.scan_runner.enrich_scan", fake_enrich)
 
 
 async def test_create_scan_persiste_y_devuelve_detalle(client: TestClient, monkeypatch) -> None:
     _mock_discovery(monkeypatch)
 
-    resp = client.post("/scans", json={"domain": "ejemplo.com"})
+    resp = client.post("/scans?wait=true", json={"domain": "ejemplo.com"})
 
     assert resp.status_code == 201
     body = resp.json()
@@ -106,7 +110,7 @@ async def test_create_scan_persiste_y_devuelve_detalle(client: TestClient, monke
 
 
 async def test_create_scan_dominio_invalido_da_400(client: TestClient) -> None:
-    resp = client.post("/scans", json={"domain": "no es un dominio"})
+    resp = client.post("/scans?wait=true", json={"domain": "no es un dominio"})
     assert resp.status_code == 400
 
 
@@ -114,14 +118,14 @@ async def test_create_scan_dominio_no_autorizado_da_403(
     client: TestClient, monkeypatch
 ) -> None:
     monkeypatch.setattr("atalaya.config.settings.scan_allowlist", "permitido.com")
-    resp = client.post("/scans", json={"domain": "otro-dominio.com"})
+    resp = client.post("/scans?wait=true", json={"domain": "otro-dominio.com"})
     assert resp.status_code == 403
 
 
 async def test_list_and_get_scan(client: TestClient, monkeypatch) -> None:
     _mock_discovery(monkeypatch)
 
-    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    created = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     listado = client.get("/scans")
     assert listado.status_code == 200
@@ -138,7 +142,7 @@ async def test_list_and_get_scan(client: TestClient, monkeypatch) -> None:
 async def test_list_assets_y_findings_filtran_por_scan(client: TestClient, monkeypatch) -> None:
     _mock_discovery(monkeypatch)
 
-    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    created = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
     scan_id = created["id"]
 
     assets = client.get("/assets", params={"scan_id": scan_id})
@@ -183,7 +187,7 @@ async def test_create_scan_persiste_puertos_y_hallazgos_del_enriquecimiento(
     )
     _mock_discovery(monkeypatch, enrichment=enrichment)
 
-    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    created = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     www = next(a for a in created["assets"] if a["hostname"] == "www.ejemplo.com")
     assert www["open_ports"] == [80, 443]
@@ -218,19 +222,19 @@ def _crear_dos_escaneos(client: TestClient, monkeypatch, domain: str = "ejemplo.
     async def fake_enrich(result: SubdomainScanResult) -> EnrichmentResult:
         return EnrichmentResult()
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enrich_scan", fake_enrich)
+    monkeypatch.setattr("atalaya.core.scan_runner.enrich_scan", fake_enrich)
 
     async def fake_enumerate_1(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
         return _fake_result_con_hosts(domain, f"www.{domain}", f"old.{domain}")
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate_1)
-    primero = client.post("/scans", json={"domain": domain}).json()
+    monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", fake_enumerate_1)
+    primero = client.post("/scans?wait=true", json={"domain": domain}).json()
 
     async def fake_enumerate_2(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
         return _fake_result_con_hosts(domain, f"www.{domain}", f"new.{domain}")
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate_2)
-    segundo = client.post("/scans", json={"domain": domain}).json()
+    monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", fake_enumerate_2)
+    segundo = client.post("/scans?wait=true", json={"domain": domain}).json()
 
     return primero["id"], segundo["id"]
 
@@ -277,10 +281,10 @@ async def test_diff_scan_es_independiente_del_orden_de_los_ids_en_la_url(
 
 async def test_diff_scan_dominios_distintos_da_400(client: TestClient, monkeypatch) -> None:
     _mock_discovery(monkeypatch)
-    escaneo_a = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    escaneo_a = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     _mock_discovery(monkeypatch)
-    escaneo_b = client.post("/scans", json={"domain": "otro.com"}).json()
+    escaneo_b = client.post("/scans?wait=true", json={"domain": "otro.com"}).json()
 
     resp = client.get(f"/scans/{escaneo_a['id']}/diff/{escaneo_b['id']}")
 
@@ -289,7 +293,7 @@ async def test_diff_scan_dominios_distintos_da_400(client: TestClient, monkeypat
 
 async def test_diff_scan_escaneo_inexistente_da_404(client: TestClient, monkeypatch) -> None:
     _mock_discovery(monkeypatch)
-    escaneo = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    escaneo = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     resp = client.get(f"/scans/{escaneo['id']}/diff/999")
 
@@ -346,9 +350,9 @@ async def test_diff_scan_detecta_cambios_en_activos_comunes(
     async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
         return _fake_result_con_hosts(domain, "www.ejemplo.com", "new.ejemplo.com")
 
-    monkeypatch.setattr("atalaya.api.routes.scans.enrich_scan", fake_enrich)
-    monkeypatch.setattr("atalaya.api.routes.scans.enumerate_subdomains", fake_enumerate)
-    tercero = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    monkeypatch.setattr("atalaya.core.scan_runner.enrich_scan", fake_enrich)
+    monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", fake_enumerate)
+    tercero = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     resp = client.get(f"/scans/{scan_id_1}/diff/{tercero['id']}", params={"analysis": "false"})
 
@@ -371,9 +375,9 @@ async def test_diff_scan_detecta_cambios_en_activos_comunes(
 async def test_diff_scan_sin_analisis_mantiene_404_y_400(client: TestClient, monkeypatch) -> None:
     """Saltarse la IA no se salta las validaciones."""
     _mock_discovery(monkeypatch)
-    a = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    a = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
     _mock_discovery(monkeypatch)
-    b = client.post("/scans", json={"domain": "otro.com"}).json()
+    b = client.post("/scans?wait=true", json={"domain": "otro.com"}).json()
 
     params = {"analysis": "false"}
     assert client.get(f"/scans/{a['id']}/diff/999", params=params).status_code == 404
@@ -398,7 +402,7 @@ async def test_download_report_devuelve_pdf(
     se descarga igual, sin resumen ejecutivo."""
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
     _mock_discovery(monkeypatch)
-    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    created = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     resp = client.get(f"/scans/{created['id']}/report")
 
@@ -421,7 +425,7 @@ async def test_download_report_con_proveedor_disponible_incluye_resumen_ejecutiv
     `ai/report_writer.py::write_executive_summary()` se invoca de verdad."""
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
     _mock_discovery(monkeypatch)
-    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    created = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     fake_provider = _FakeDiffProvider(text="Resumen ejecutivo de prueba.")
     monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: fake_provider)
@@ -442,7 +446,7 @@ async def test_download_report_proveedor_configurado_pero_caido_no_impide_la_des
     `POST /findings/ask` y `GET /scans/{id}/diff/{other_id}`."""
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path))
     _mock_discovery(monkeypatch)
-    created = client.post("/scans", json={"domain": "ejemplo.com"}).json()
+    created = client.post("/scans?wait=true", json={"domain": "ejemplo.com"}).json()
 
     fake_provider = _FakeDiffProvider(error=AIProviderError("proveedor caído"))
     monkeypatch.setattr("atalaya.api.routes.scans.get_provider", lambda: fake_provider)
