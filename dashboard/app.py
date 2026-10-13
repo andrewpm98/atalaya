@@ -1379,7 +1379,7 @@ _SEGUIMIENTO_CADA = 2
 
 def _segundos_desde(iso: str) -> int:
     """Segundos transcurridos desde una marca de tiempo de la API (UTC)."""
-    inicio = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    inicio = datetime.fromisoformat(iso)  # acepta la «Z» desde Python 3.11
     if inicio.tzinfo is None:
         inicio = inicio.replace(tzinfo=UTC)
     return max(0, int((datetime.now(UTC) - inicio).total_seconds()))
