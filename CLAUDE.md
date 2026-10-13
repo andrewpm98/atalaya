@@ -332,7 +332,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **582 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **583 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -343,7 +343,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -431,10 +431,10 @@ defensa oral.
 **Dónde se quedó:** fase 13 **cerrada** el 13/10/2026 con la fase B
 (`GET /config/status`, y la bienvenida, la torre y el estado de la
 configuración en el dashboard; maqueta aprobada:
-https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4). 582 tests, `ruff` (ahora
+https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4). 583 tests, `ruff` (ahora
 también sobre `dashboard/`) y `mypy` a cero. Los commits de la fase B
-(`124fb8d`, `39136c6`, `9051799`, `ad0cd06` y el de documentación) se
-hicieron **en local**: el `push`, cuando el usuario lo diga. Ningún prompt ha
+(`124fb8d`, `39136c6`, `9051799`, `ad0cd06`, los de documentación y
+`912e6c5`, el arreglo de la barra lateral plegada) se hicieron **en local**: el `push`, cuando el usuario lo diga. Ningún prompt ha
 cambiado: la demo en `replay` sigue intacta (`tests/test_demo_data.py`). Al
 retomar, comprobar con `git status -sb` y `git log --oneline -5` que el repo
 está como aquí se describe.
@@ -724,6 +724,7 @@ ningún error, simplemente el resultado sale mal):
 | Streamlit resta `1rem` al contenedor de cada bloque markdown para cancelar el margen del último párrafo | Nuestro HTML no acaba en párrafo: cada bloque medía 16px menos que su contenido y **se solapaba con el siguiente** | Envoltorio `.atl-blk` (`flow-root` + `margin-bottom: 1rem`), centralizado en `_html()` |
 | Streamlit 1.63 migró los widgets de BaseWeb a **react-aria** | Los selectores `[data-baseweb="tab"]`, `[data-baseweb="input"]`… dejaron de existir; las reglas no daban error, simplemente no pintaban | Selectores contra el DOM real (`[data-testid="stTab"]`, `*RootElement`, `[role="group"]`), revisados con el navegador abierto |
 | El tipo de aviso (`success`/`warning`/`error`) se pinta en un hijo, no en el contenedor con borde | Los cuatro tipos se veían como la misma caja gris: un error y un éxito eran indistinguibles | `[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"])`, etc. |
+| Con la barra lateral plegada, el botón que la reabre (`stExpandSidebarButton`) vive **dentro** de `stToolbar` (Streamlit 1.64) | El rediseño ocultaba `stToolbar` con `display: none`: al plegar la barra lateral no había forma de volver a abrirla. Y su ancho forzado con `!important` la mantenía ocupando 268 px ya plegada | `stToolbar` con `visibility: hidden` y el botón con `visibility: visible` (un hijo puede revertirla); el ancho, solo con `aria-expanded="true"`. Guarda estática en `tests/test_dashboard.py` (`912e6c5`) |
 | Un elemento escrito en un `st.container()` reservado arriba se pinta cuando el script llega a escribirlo, no cuando se reservó | La bienvenida va encima de las pestañas pero se rellena desde la de «Escaneos»: una captura que solo esperaba a las pestañas salía sin ella y parecía que no se pintaba | Al capturar, esperar al elemento concreto o a que termine el script, no solo a las pestañas |
 
 La torre de la cabecera y de la bienvenida es SVG en línea pintado con
@@ -963,6 +964,12 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**Al plegar la barra lateral del dashboard no se podía volver a
+  abrir**~~ (lo encontró el usuario al probar la fase B; venía del rediseño
+  visual) → el botón que la reabre vive dentro de `stToolbar`, que `_CSS`
+  ocultaba con `display: none`; y el ancho forzado dejaba una franja vacía
+  de 268 px con la barra plegada. Ver la trampa en «Dashboard: diseño
+  visual» (`912e6c5`).
 - ~~**El dashboard no decía qué está configurado**~~ → fase B (fase 13):
   `GET /config/status` reutiliza las comprobaciones de `doctor` que no salen
   a la red (un cliente HTTP que rechaza toda petición lo garantiza) y el
@@ -1241,7 +1248,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
 atalaya init                         # configuración guiada: alcance, BD, claves (.env)
 atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
-pytest -q                            # tests (deben pasar los 582)
+pytest -q                            # tests (deben pasar los 583)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

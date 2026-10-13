@@ -7,7 +7,7 @@ del descubrimiento (TLS solo en el 443), corrige dos defectos encontrados por
 el camino y añade la puesta en marcha guiada: `atalaya doctor` y `atalaya init`
 en la terminal y, en la fase B, el estado de la configuración en el dashboard.
 **Estado:** Completa. Fase A subida a `origin/main` el 12/10/2026 (558
-tests); fase B cerrada el 13/10/2026 (582 tests). `ruff` y `mypy` a cero, cada
+tests); fase B cerrada el 13/10/2026 (583 tests). `ruff` y `mypy` a cero, cada
 commit verificado en verde por separado.
 
 ---
@@ -368,6 +368,17 @@ tener la paleta en un solo sitio. Con él se corrigió también el color de las
 ondas, que iba como hexadecimal suelto contra la regla del propio CSS
 (`ad0cd06`).
 
+**Lo que encontró el usuario al probarlo.** Con todo levantado, plegó la
+barra lateral y no pudo volver a abrirla. No era de esta fase, sino del
+rediseño visual: en Streamlit 1.64 el botón que la reabre vive dentro de la
+barra de herramientas, que `_CSS` ocultaba con `display: none`; y el ancho de
+la barra lateral, forzado con `!important`, la mantenía ocupando 268 px ya
+plegada. Se diagnosticó midiendo el DOM en Chromium, se corrigió (la barra de
+herramientas, invisible salvo ese botón; el ancho, solo abierta; y la
+cabecera, con sitio para el botón, que caía encima de la torre por debajo de
+~1500 px) y se añadió una guarda estática, porque `AppTest` no pinta CSS
+(`912e6c5`).
+
 ## 9. Verificación
 
 **Tests:** de 472 a 558 (+86): 6 de TLS multipuerto, 2 de hosts `wildcard`,
@@ -378,7 +389,7 @@ de git, un repositorio real temporal; los de proveedores, `httpx.MockTransport`.
 Dos tests recorren la salida completa de `doctor` e `init` y exigen que no
 aparezca ningún secreto.
 
-La fase B suma 24 (de 558 a 582): 6 del endpoint, 3 de las comprobaciones
+La fase B suma 24 (de 558 a 582), más 1 por la barra lateral (583): 6 del endpoint, 3 de las comprobaciones
 locales y de la configuración por variables de entorno, 1 de la guarda de
 autenticación (la ruta nueva entra sola en el recorrido del esquema OpenAPI)
 y 14 del dashboard. Cuatro mutaciones (quitar el modo sin red forzado, la
@@ -401,6 +412,7 @@ hacen fallar los tests que las cubren. `ruff` pasa ahora también sobre
 | La API lanzada sin `.env` y con la configuración en variables (lo que hace el compose) | «sin .env · 3 campos desde variables de entorno», correcto |
 | Dashboard en Chromium (Playwright) en cuatro situaciones | La torre llega al documento en todas; bienvenida solo con la base de datos vacía; con la API caída, ni bienvenida ni «Todavía no hay escaneos», y sí la pista de `init` |
 | Color de la torre tras pasarlo a la paleta | Trazo calculado `rgb(10, 127, 148)`, el mismo de antes |
+| Plegar y reabrir la barra lateral, a 1600 y 1280 px | Botón visible fuera de la torre; al pulsarlo, la barra vuelve; plegada, el contenido ocupa todo el ancho |
 
 Las llamadas a proveedores de estas pruebas fueron la lista de modelos y
 `/api-info`: no consumen crédito, coherente con la restricción operativa del
@@ -462,6 +474,7 @@ acordado para las próximas sesiones»):
 | `39136c6` | feat(api): `GET /config/status` |
 | `9051799` | feat(dashboard): bienvenida, torre y estado de la configuración |
 | `ad0cd06` | refactor(dashboard): el color de las ondas de la torre, en la paleta |
+| `912e6c5` | fix(dashboard): la barra lateral plegada se puede volver a abrir |
 | (este) | docs: cierre de la fase B en CLAUDE.md, ARQUITECTURA, README y esta memoria |
 
 ---
