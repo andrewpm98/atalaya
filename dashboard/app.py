@@ -37,7 +37,12 @@ import httpx
 import streamlit as st
 from dotenv import dotenv_values
 
-API_URL = os.getenv("ATALAYA_API_URL", "http://localhost:8000")
+#: `127.0.0.1` y no `localhost`: en Windows, `localhost` resuelve antes a IPv6
+#: (`::1`), uvicorn solo escucha en IPv4 y la conexión rechazada tarda unos 2 s
+#: en caer a `127.0.0.1` (medido: 2,05 s frente a 0,03 s por petición). Cada
+#: interacción del dashboard hace varias peticiones, así que cada clic perdía
+#: entre 6 y 10 s. En Docker no afecta: ahí la URL es `http://api:8000`.
+API_URL = os.getenv("ATALAYA_API_URL", "http://127.0.0.1:8000")
 
 
 def _api_key() -> str:
