@@ -465,11 +465,18 @@ cierre (bloque 5).
 
 **2. Dossier de defensa** ✅ (13/10/2026) — documento vivo en Claude Docs:
 https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91 (el
-usuario lo edita, comenta y exporta a PDF). Diez secciones: presentación de
-2 minutos, arquitectura con diagrama, los 5 requisitos en la demo, guion de
-la demo con plan B, cifras, decisiones, las 6 restricciones, límites, banco
-de preguntas (las 120 de las memorias, ~110 sin repetidas) y checklist del
-día.
+usuario lo edita, comenta y exporta a PDF). Secciones: presentación de 2
+minutos, arquitectura con diagrama, los 5 requisitos en la demo, guion de la
+demo con plan B, cifras, decisiones, las 6 restricciones, límites,
+**preguntas sobre la herramienta**, checklist del día y, al final, un anexo
+técnico con las preguntas de las memorias.
+
+- **Enfoque (pedido por el usuario el 13/10/2026):** en la defensa no espera
+  preguntas sobre el código, sino sobre la herramienta: qué es, para quién,
+  qué encuentra, qué aporta la IA, frente a qué alternativas, límites, uso
+  responsable y preguntas trampa. Ese banco es el principal; lo técnico queda
+  como anexo «por si la pregunta se vuelve técnica». Respuestas para decir en
+  voz alta: cortas, con un dato real de la demo y sin hablar de código.
 
 - **Se actualiza con cada bloque siguiente** (cargar antes el skill
   `anthropic-skills:docs`): las cifras (tests, commits), los límites que se
