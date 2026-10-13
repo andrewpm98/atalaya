@@ -41,6 +41,10 @@ orquesta el resto de módulos. Endpoints principales:
 - `GET /scans/{id}/report` ✅ — informe PDF con portada, `risk_score` y
   resumen ejecutivo de `ai/report_writer.py` (opcional: el informe se
   genera igual sin IA disponible, ver 2.5).
+- `GET /config/status` ✅ — qué está configurado, para la bienvenida del
+  dashboard: las comprobaciones de `atalaya doctor` que no salen a la red
+  (§2.9, §10.5). Estado y texto por comprobación, nunca valores. Solo
+  lectura: configurar es cosa de `atalaya init`.
 
 `api/schemas.py` define la frontera Pydantic entre las tablas y la respuesta
 pública; `api/main.py` traduce `InvalidTargetError`/`UnauthorizedTargetError`
@@ -50,7 +54,7 @@ llegan a ese 502 porque degradan antes (ver 2.4 y 2.5).
 
 **Autenticación opcional por `X-API-Key`** (`api/security.py`). Con `API_KEY`
 vacía (por defecto) no se exige nada y la API se comporta como antes. Con
-valor, `require_api_key()` se aplica a los tres routers y a `/`: sin la
+valor, `require_api_key()` se aplica a los cuatro routers y a `/`: sin la
 cabecera, o con una clave distinta, 401 con `WWW-Authenticate: X-API-Key`,
 antes de ejecutar la ruta (un `POST /scans` rechazado no llega a tocar la red).
 Se deja fuera `/health`, que usan el healthcheck de Docker y la sonda del
@@ -273,6 +277,22 @@ IA falla (502), repite con `?analysis=false` y muestra los cambios con un
 aviso del motivo: los hostnames son puro cálculo y no deben perderse porque
 falte el proveedor (Docker sin `.env`, o `replay` con una pareja no grabada).
 
+**Puesta en marcha (fase B).** La cabecera lleva la torre de celosía de
+`atalaya init`/`doctor` en SVG en línea, sin colores propios (los pone
+`_CSS`). Cuando la API responde a `/scans` con la lista vacía, encima de las
+pestañas sale una bienvenida: qué es la herramienta, el estado de
+`GET /config/status` con la pista de cada aviso, y tres pasos con el activo
+marcado (configurar con `atalaya init` mientras falte alcance, `.env` o clave
+de IA, o haya un error; después, el primer escaneo, sugiriendo
+`scanme.nmap.org` solo si el alcance no está restringido). La barra lateral
+muestra el mismo estado en compacto también con escaneos y, con la API
+caída, pregunta «¿Has ejecutado `atalaya init`?» con los comandos para
+arrancarla. Sin respuesta de `/scans` no se pinta ni la bienvenida ni
+«Todavía no hay escaneos»: no se sabe si los hay. `/config/status` se guarda
+60 s por sesión (tarda unas décimas y Streamlit reejecuta en cada clic) y su
+fallo no se pinta (API antigua, 401 ya visible en `/scans`); todo texto que
+viene de la API se escapa antes de pintarlo.
+
 Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
 `st.markdown(..., unsafe_allow_html=True)` — ver "Decisiones de diseño")
 para parecer una herramienta comercial de seguridad (referentes: Shodan,
@@ -330,7 +350,7 @@ que reciba claves, abierto a cualquiera con `API_KEY` vacía (el default).
 | Módulo | Papel |
 |---|---|
 | `ui.py` | Identidad visual: logo de la torre (una torre de vigilancia que es también una A), paleta del dashboard, piezas de pantalla. Modo ASCII si la salida no es UTF-8 |
-| `checks.py` | Comprobaciones que devuelven `CheckResult` (datos, no texto): las comparten `doctor`, `init` y, en la fase B, `GET /config/status` |
+| `checks.py` | Comprobaciones que devuelven `CheckResult` (datos, no texto): las comparten `doctor`, `init` y `GET /config/status` (solo las locales, `run_local_checks`) |
 | `doctor.py` | Ejecuta las comprobaciones (las de red en paralelo) y pinta el diagnóstico con cómo resolver cada error o aviso |
 | `envfile.py` | Lee y escribe el `.env`: atómico, con copia, verificado con el parser de la aplicación; enmascara secretos |
 | `wizard.py` | `init` interactivo (5 pasos) y `--non-interactive` (mismas respuestas desde opciones y entorno) |
@@ -338,7 +358,12 @@ que reciba claves, abierto a cualquiera con `API_KEY` vacía (el default).
 Los módulos reciben los valores explícitamente en vez de leer `settings`, y
 `cli.py` importa la configuración dentro de cada comando: un `.env` con un
 valor inválido no impide arrancar `doctor`, que es quien debe diagnosticarlo.
-Detalle de los flujos en §10.
+`inputs_from_settings()` traduce una configuración ya cargada a esos valores:
+`doctor` la carga de nuevo, la API pasa la de su proceso. La configuración
+puede llegar sin fichero: en Docker, Compose pasa el `.env` como variables de
+entorno y el fichero no está en el contenedor, así que sin `.env` pero con
+campos en el entorno la comprobación de configuración es correcta, no un
+aviso. Detalle de los flujos en §10.
 
 ## 3. Flujo de datos
 
@@ -456,10 +481,11 @@ obligatorios:
     en el diff (estado, puertos y hallazgos de los comunes; §2.1, §2.3,
     §2.6) y reutilización del triaje ante el mismo prompt exacto (§2.1,
     §2.4). *(`memorias/Memoria_Ampliacion_Diff_Triaje_Atalaya.md`.)*
-14. **Puesta en marcha guiada** 🚧 — TLS en los puertos con TLS implícito
-    (§2.2), hosts `wildcard` fuera del escaneo de puertos (§7.6), y
-    `atalaya doctor`/`atalaya init` (§2.9, §10); pendiente la fase B
-    (`GET /config/status` y bienvenida en el dashboard).
+14. **Puesta en marcha guiada** ✅ — TLS en los puertos con TLS implícito
+    (§2.2), hosts `wildcard` fuera del escaneo de puertos (§7.6),
+    `atalaya doctor`/`atalaya init` (§2.9, §10) y, en la fase B,
+    `GET /config/status` (§2.1, §10.5) con la bienvenida, el logo y el estado
+    de la configuración en el dashboard (§2.6).
     *(`memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
@@ -830,3 +856,39 @@ reconfigura con `errors="replace"`: escribir `●` en cp1252 lanzaba
 `UnicodeEncodeError` dentro de `rich` (reproducido al maquetar). No se fuerza
 UTF-8: quien recibe la salida redirigida espera su codificación. Las claves
 se leen con `getpass` y, al terminar, la línea se reescribe con puntos.
+
+### 10.5 El estado en el dashboard: `GET /config/status`
+
+```
+dashboard (cada carga, 60 s por sesión)
+   │  GET /config/status  (X-API-Key si está configurada)
+   ▼
+api/routes/config.py ── inputs_from_settings(settings del proceso, cwd)
+   ▼
+onboarding/checks.py::run_local_checks()
+   ├─ config, alcance, API ............ en memoria
+   ├─ base de datos ................... la propia de la herramienta (sin escribir)
+   ├─ IA, Shodan ...................... «clave configurada, sin validar»
+   └─ secretos (git) .................. en un hilo, para no bloquear el bucle
+   ▼
+ConfigStatusOut { checks: [CheckResult…], errors, warnings }
+```
+
+Son las comprobaciones de `doctor` sin crt.sh y sin validar claves: el
+dashboard las pide al cargar, y validar contra Anthropic, Google o Shodan en
+cada carga serían llamadas externas por mirar una pantalla. `run_local_checks`
+fuerza el modo sin red sea cual sea la entrada, y el cliente HTTP que reciben
+IA y Shodan rechaza cualquier petición con un error que no es de `httpx`: si
+un cambio hiciera que una de ellas saliera a la red, fallaría con un 500 en
+vez de convertirse en silencio en «no se pudo comprobar». Un test sustituye el
+transporte real de `httpx` por uno que falla y exige el 200.
+
+Describe la configuración con la que corre el proceso (`settings`, cargada al
+arrancar), no el `.env` de ahora: si alguien lo edita sin reiniciar la API,
+lo que cuenta es lo que está usando. `CheckResult` es la frontera: `key`
+estable para el dashboard, `detail` y `hint` sin secretos (la URL de la base
+de datos sale como `host:puerto`, sin contraseña). Un test recorre la
+respuesta completa con claves y contraseña configuradas y exige que no
+aparezcan. Tarda unas décimas (la base de datos, la revisión de Alembic y
+las llamadas a `git`), que es por lo que el dashboard la guarda 60 s.
+

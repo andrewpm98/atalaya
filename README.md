@@ -111,6 +111,12 @@ datos, las claves, crt.sh y que el `.env` no se vaya a subir a git, y dice
 cómo resolver cada problema. Sale con código 1 si hay errores (útil en CI);
 `--offline` no sale a la red.
 
+El dashboard muestra el mismo estado en la barra lateral y, mientras no hay
+ningún escaneo, en una pantalla de bienvenida que indica el siguiente paso.
+Lo obtiene de `GET /config/status`, que devuelve el estado y el texto de cada
+comprobación, nunca valores, y no sale a la red: dice si hay clave de IA,
+pero validarla es cosa de `atalaya doctor`.
+
 Para scripts y CI, sin preguntas. Los secretos van **siempre** en variables
 de entorno, nunca como argumentos (quedarían en el historial):
 
