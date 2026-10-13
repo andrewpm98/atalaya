@@ -331,6 +331,10 @@ repetir esa consulta, acoplando el módulo de informes a la capa de
 persistencia sin necesidad — mismo criterio que ya se aplicó en `ai/query.py`
 en el Paso 5.
 
+> **Estado posterior:** `ai/query.py` se retiró en la ampliación de agentes.
+> El criterio sigue vigente en los agentes que lo sustituyen: por ejemplo,
+> `ai/analyst.py::analyze_scan()` recibe el `Scan` ya cargado, no un id.
+
 ### Sobre las pruebas
 
 **¿Cómo se prueba un PDF sin abrirlo visualmente en cada ejecución?**

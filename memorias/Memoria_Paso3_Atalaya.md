@@ -440,6 +440,13 @@ real y se inspeccionaron las filas resultantes con `sqlite3` directamente
 > sobre SQLite. Las migraciones no se han ejecutado todavía contra
 > PostgreSQL, el motor declarado de producción — deuda recogida en
 > `CLAUDE.md`.
+>
+> **Estado posterior (cierre pre-entrega), que supera la nota anterior:** las
+> migraciones y la escritura se verificaron contra PostgreSQL 16 real, y
+> apareció un fallo grave que SQLite ocultaba: las fechas con zona horaria
+> hacían que `asyncpg` rechazara toda escritura de un `Scan`. Se arregló con
+> `UtcDateTime` (`3b9e1a6`) y hoy también corre en el stack de Docker
+> (`Memoria_Cierre_Preentrega`).
 
 ### Preguntas de comprensión
 

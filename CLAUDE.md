@@ -463,33 +463,24 @@ hace el compose (API sin `.env` y con la configuración en variables de
 entorno). Cabe al empezar el bloque 3, que también toca la API, o en el
 cierre (bloque 5).
 
-**2. Dossier de defensa** — acordado el 12/10/2026: hoy el material está
-disperso (unas 120 preguntas en los bloques de defensa de 11 memorias; la de
-robustez no tiene bloque) y no hay un documento único desde el que estudiar.
+**2. Dossier de defensa** ✅ (13/10/2026) — documento vivo en Claude Docs:
+https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91 (el
+usuario lo edita, comenta y exporta a PDF). Diez secciones: presentación de
+2 minutos, arquitectura con diagrama, los 5 requisitos en la demo, guion de
+la demo con plan B, cifras, decisiones, las 6 restricciones, límites, banco
+de preguntas (las 120 de las memorias, ~110 sin repetidas) y checklist del
+día.
 
-- **Formato:** documento vivo en **Claude Docs** (el conector está
-  disponible; cargar antes el skill `anthropic-skills:docs`) que el usuario
-  edita y comenta mientras prepara la defensa, y que **se exporta a PDF**
-  cuando lo quiera imprimir. Se hace después de la fase B para que incluya
-  `init`/`doctor` y el dashboard nuevo, y se actualiza con cada bloque
-  siguiente.
-- **Contenido:** (1) presentación de 2 minutos: qué es, qué problema
-  resuelve, por qué la IA es lo diferencial; (2) arquitectura en una página,
-  con diagrama; (3) los 5 requisitos obligatorios y dónde se ve cada uno en
-  la demo; (4) guion de la demo paso a paso (`seed_demo_data.py --reset`,
-  `AI_PROVIDER=replay`, las 4 preguntas grabadas, diff, informe) con plan B
-  sin red (ver «Datos de reserva para la demo»); (5) cifras para memorizar
-  (tests, 117 subdominios en 19 s, 27 % menos llamadas de triaje,
-  `risk_score` 39 → 40, 6 agentes…), sacadas del estado real del día; (6)
-  decisiones clave y su porqué; (7) las 6 restricciones de seguridad y cómo
-  se cumple cada una; (8) límites dichos con honestidad antes de que los
-  pregunten; (9) banco de preguntas consolidado por tema y sin repetidas;
-  (10) checklist del día de la defensa.
-- **Regla:** cada respuesta del banco se **comprueba contra el código
-  actual**: hay respuestas superadas en memorias antiguas (p. ej.
-  `ai/query.py` ya no existe y la fórmula del `risk_score` cambió). Si una
-  contradice el código, se corrige también el bloque de esa memoria: es la
-  excepción a «las memorias son fotos fechadas» (ver «Documentación»).
+- **Se actualiza con cada bloque siguiente** (cargar antes el skill
+  `anthropic-skills:docs`): las cifras (tests, commits), los límites que se
+  cierren (monitorización, `POST /scans` síncrono), el guion si cambia la
+  demo y las preguntas nuevas de cada bloque.
+- **Regla:** cada respuesta del banco se comprueba contra el código actual.
+  Si una memoria antigua dice otra cosa, manda el dossier, y el bloque de
+  defensa de esa memoria se corrige con una nota «Estado posterior» (es la
+  excepción a «las memorias son fotos fechadas»). Al hacerlo se corrigieron
+  tres: autenticación (Paso 1), PostgreSQL sin probar (Paso 3) y la
+  referencia a `ai/query.py` (Paso 7).
 
 **3. `POST /scans` en segundo plano** — hoy el escaneo corre dentro de la
 petición (19 s para github.com; minutos para un dominio grande).

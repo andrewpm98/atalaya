@@ -378,6 +378,13 @@ No hay secretos en el código. Se cargan desde variables de entorno mediante un 
 **¿La API no está expuesta sin autenticación?**
 En despliegue local no supone riesgo. Si se publica en un servidor con IP pública, la autenticación pasa a ser requisito previo. Está identificado como tal y documentado entre las limitaciones.
 
+> **Estado posterior:** resuelto en el cierre pre-entrega. Con `API_KEY` en
+> `.env`, todo endpoint salvo `/health` exige la cabecera `X-API-Key` y
+> responde 401 sin ella (`api/security.py`, comparación con
+> `secrets.compare_digest`). Sigue vacía por defecto porque la API solo
+> escucha en `127.0.0.1`; exponerla de verdad exigiría además TLS
+> (`Memoria_Cierre_Preentrega`).
+
 ### Preguntas de comprensión
 
 **Explica qué es una API con tus palabras.**
