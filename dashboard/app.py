@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import UTC, datetime
 from html import escape
 from typing import Any
 
@@ -325,6 +326,29 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
 }
 /* Un comando no se parte a mitad: se lee y se copia entero. */
 .atl-side-note code { white-space: nowrap; }
+
+/* ── Escaneo en curso ─────────────────────────────────────────────────── */
+/* Lo pinta un fragmento que se refresca cada 2 s. Sin animaciones: el
+   contador de segundos ya dice que sigue vivo. */
+.atl-run {
+  background: var(--bg-panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 3px;
+  padding: 0.75rem 1.1rem; max-width: 1080px;
+}
+.atl-run-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1rem;
+  font-family: var(--mono); font-size: 0.78rem; color: var(--fg-dim);
+}
+.atl-run-head b { color: var(--fg); font-weight: 600; }
+.atl-run-tag {
+  font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--accent); border: 1px solid var(--accent-line);
+  border-radius: 2px; padding: 0.05rem 0.4rem;
+}
+.atl-run-note {
+  font-family: var(--sans); font-size: 0.74rem; color: var(--fg-faint);
+  margin-top: 0.35rem; line-height: 1.45;
+}
 
 /* ── Bienvenida (sin escaneos) ────────────────────────────────────────── */
 .atl-welcome {
@@ -1347,6 +1371,96 @@ def render_bienvenida(status: dict[str, Any] | None) -> None:
     )
 
 
+# ─── Escaneo en segundo plano ───────────────────────────────────────────────
+
+#: Segundos entre consultas del estado de un escaneo en curso.
+_SEGUIMIENTO_CADA = 2
+
+
+def _segundos_desde(iso: str) -> int:
+    """Segundos transcurridos desde una marca de tiempo de la API (UTC)."""
+    inicio = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    if inicio.tzinfo is None:
+        inicio = inicio.replace(tzinfo=UTC)
+    return max(0, int((datetime.now(UTC) - inicio).total_seconds()))
+
+
+def _duracion(segundos: int) -> str:
+    return f"{segundos} s" if segundos < 60 else f"{segundos // 60} min {segundos % 60:02d} s"
+
+
+def _motivo(scan: dict[str, Any]) -> str:
+    """Las incidencias de un escaneo fallido, tal como las da la API, para
+    leerlas como una frase («Interrumpido: la API se detuvo…»)."""
+    texto = "; ".join(scan["errors"]) or "sin motivo registrado"
+    return texto[:1].upper() + texto[1:]
+
+
+@st.fragment(run_every=_SEGUIMIENTO_CADA)
+def seguimiento_escaneo() -> None:
+    """Estado del escaneo lanzado desde «Nuevo escaneo», refrescado cada 2 s.
+
+    Es un fragmento: se reejecuta solo, sin el resto del script, así que la
+    página sigue usable mientras tanto (se puede ir a «Escaneos»). Antes, la
+    petición bloqueaba la página entera hasta que el escaneo acababa. Al
+    terminar, guarda el resultado y relanza la app completa: la lista de
+    escaneos y la bienvenida tienen que reflejarlo.
+    """
+    scan_id = st.session_state.get("escaneo_en_curso")
+    if scan_id is None:
+        return
+    scan = api_get(f"/scans/{scan_id}")
+    if scan is None:
+        return
+    if scan["status"] == "running":
+        _html(
+            '<div class="atl-run"><div class="atl-run-head">'
+            '<span class="atl-run-tag">En curso</span>'
+            f"<b>Escaneo #{escape(str(scan['id']))}</b>"
+            f"<span>{escape(str(scan['domain']))}</span>"
+            f"<span>{_duracion(_segundos_desde(scan['started_at']))}</span></div>"
+            '<div class="atl-run-note">Sigue aunque cambies de pestaña o cierres el panel: '
+            "el resultado aparecerá en «Escaneos».</div></div>"
+        )
+        return
+    del st.session_state["escaneo_en_curso"]
+    st.session_state["escaneo_terminado"] = scan
+    st.rerun()
+
+
+@st.fragment(run_every=_SEGUIMIENTO_CADA)
+def seguimiento_detalle(scan_id: int) -> None:
+    """El detalle de un escaneo en curso en «Escaneos», refrescado cada 2 s.
+
+    Mismo mecanismo que `seguimiento_escaneo`: cuando deja de estar en curso,
+    relanza la app para pintar su detalle completo (índice, activos...).
+    """
+    scan = api_get(f"/scans/{scan_id}")
+    if scan is None:
+        return
+    if scan["status"] != "running":
+        st.rerun()
+    st.info(
+        f"En curso desde hace {_duracion(_segundos_desde(scan['started_at']))}. "
+        "Los activos y hallazgos aparecen al terminar."
+    )
+
+
+def render_escaneo_terminado(scan: dict[str, Any]) -> None:
+    """El resultado del escaneo que acaba de terminar, una vez."""
+    if scan["status"] == "failed":
+        st.error(f"Escaneo #{scan['id']} · {_motivo(scan)}")
+        return
+    total = sum(len(a["findings"]) for a in scan["assets"])
+    st.success(
+        f"Escaneo #{scan['id']} completado: "
+        f"{len(scan['assets'])} activo(s), {total} hallazgo(s)."
+    )
+    if scan["errors"]:
+        st.warning("Incidencias: " + "; ".join(scan["errors"]))
+    st.caption("Consulta el detalle en la pestaña «Escaneos».")
+
+
 # ─── Componentes de render ──────────────────────────────────────────────────
 
 
@@ -1657,6 +1771,15 @@ def render_scan_detail(scan: dict[str, Any], otros: list[dict[str, Any]] | None 
         f"</span></div>"
     )
 
+    # Uno en curso aún no tiene activos y uno fallido no los tendrá: el índice
+    # saldría 0, «riesgo bajo», y triar o pedir el informe daría 409.
+    if scan["status"] == "running":
+        seguimiento_detalle(scan["id"])
+        return
+    if scan["status"] == "failed":
+        st.error(_motivo(scan))
+        return
+
     # El score y las métricas se reservan aquí pero se pintan al final: el
     # botón de triaje de más abajo puede sustituir `scan` por una versión
     # recién releída, y estas cifras tienen que reflejar *esa*. Mismo motivo
@@ -1825,21 +1948,18 @@ with tab_nuevo:
         if not domain.strip():
             st.warning("Introduce un dominio.")
         else:
-            with st.spinner(f"Escaneando {domain}..."):
-                # `wait=true`: espera al escaneo completo, como antes de que la
-                # API lo lanzara en segundo plano (202).
-                scan = api_post(
-                    "/scans?wait=true", json={"domain": domain.strip(), "resolve": resolve}
-                )
-            if scan is not None:
-                total = sum(len(a["findings"]) for a in scan["assets"])
-                st.success(
-                    f"Escaneo #{scan['id']} completado: "
-                    f"{len(scan['assets'])} activo(s), {total} hallazgo(s)."
-                )
-                if scan["errors"]:
-                    st.warning("Incidencias: " + "; ".join(scan["errors"]))
-                st.caption("Consulta el detalle en la pestaña «Escaneos».")
+            # La API responde al momento (202) con el escaneo en curso; un
+            # dominio no válido o no autorizado da 400/403 aquí mismo.
+            lanzado = api_post("/scans", json={"domain": domain.strip(), "resolve": resolve})
+            if lanzado is not None:
+                st.session_state.pop("escaneo_terminado", None)
+                st.session_state["escaneo_en_curso"] = lanzado["id"]
+
+    terminado = st.session_state.pop("escaneo_terminado", None)
+    if terminado is not None:
+        render_escaneo_terminado(terminado)
+    if "escaneo_en_curso" in st.session_state:
+        seguimiento_escaneo()
 
 with tab_escaneos:
     respuesta_scans = api_get("/scans")
@@ -1892,8 +2012,13 @@ with tab_escaneos:
 
         detalle = api_get(f"/scans/{scan_id}")
         if detalle is not None:
+            # Solo completados: la API no compara uno en curso o fallido (409).
             otros = [
-                s for s in scans if s["domain"] == detalle["domain"] and s["id"] != detalle["id"]
+                s
+                for s in scans
+                if s["domain"] == detalle["domain"]
+                and s["id"] != detalle["id"]
+                and s["status"] == "completed"
             ]
             render_scan_detail(detalle, otros)
 

@@ -222,7 +222,7 @@ def test_error_de_la_api_se_muestra_sin_excepcion() -> None:
     nunca en una excepción de Python que tumbe la página.
     """
     get_map = {"/scans": _Resp(200, [])}
-    post_map = {"/scans?wait=true": _Resp(400, {"detail": "Dominio no válido: 'x'"})}
+    post_map = {"/scans": _Resp(400, {"detail": "Dominio no válido: 'x'"})}
 
     with patch("httpx.Client", _fake_client(get_map, post_map)):
         at = AppTest.from_file(_APP_PATH, default_timeout=15)
@@ -237,20 +237,66 @@ def test_error_de_la_api_se_muestra_sin_excepcion() -> None:
 # ─── Nuevo escaneo ──────────────────────────────────────────────────────────
 
 
-def test_nuevo_escaneo_exitoso_muestra_resumen() -> None:
-    nuevo = _scan_detail(scan_id=5)
-    get_map = {"/scans": _Resp(200, [])}
-    post_map = {"/scans?wait=true": _Resp(201, nuevo)}
+def _en_curso(scan_id: int = 5) -> dict[str, Any]:
+    """Lo que devuelve `POST /scans` (202) o el detalle mientras corre."""
+    return {
+        **_scan_detail(scan_id=scan_id),
+        "status": "running",
+        "finished_at": None,
+        "assets": [],
+        "risk_score": 0,
+    }
 
+
+def _fallido(scan_id: int = 5) -> dict[str, Any]:
+    return {
+        **_en_curso(scan_id),
+        "status": "failed",
+        "finished_at": "2026-01-01T00:00:03",
+        "errors": ["interrumpido: la API se detuvo antes de que terminara"],
+    }
+
+
+def _lanzar_escaneo(get_map: dict[str, Any]) -> AppTest:
+    """Pulsa «Escanear» con `POST /scans` respondiendo 202 en curso."""
+    post_map = {"/scans": _Resp(202, _en_curso())}
     with patch("httpx.Client", _fake_client(get_map, post_map)):
         at = AppTest.from_file(_APP_PATH, default_timeout=15)
         at.run()
         at.tabs[0].text_input[0].input("ejemplo.com").run()
         at.tabs[0].button[0].click().run()
+    return at
+
+
+def test_lanzar_un_escaneo_muestra_que_sigue_en_curso() -> None:
+    """La API responde al momento (202): el panel no espera al escaneo, sino
+    que lo sigue con un fragmento que se refresca solo."""
+    at = _lanzar_escaneo({"/scans": _Resp(200, []), "/scans/5": _Resp(200, _en_curso())})
 
     assert not at.exception
+    assert at.session_state["escaneo_en_curso"] == 5
+    aviso = next((m.value for m in at.tabs[0].markdown if "atl-run" in m.value), "")
+    assert "En curso" in aviso and "Escaneo #5" in aviso and "ejemplo.com" in aviso
+    assert not at.tabs[0].success
+
+
+def test_al_terminar_el_escaneo_muestra_el_resumen() -> None:
+    at = _lanzar_escaneo({"/scans": _Resp(200, []), "/scans/5": _Resp(200, _scan_detail(5))})
+
+    assert not at.exception
+    assert "escaneo_en_curso" not in at.session_state
     mensajes = [s.value for s in at.tabs[0].success]
     assert any("Escaneo #5 completado" in m and "1 hallazgo(s)" in m for m in mensajes)
+
+
+def test_si_el_escaneo_falla_muestra_el_motivo() -> None:
+    at = _lanzar_escaneo({"/scans": _Resp(200, []), "/scans/5": _Resp(200, _fallido(5))})
+
+    assert not at.exception
+    assert any(
+        "Escaneo #5" in e.value and "Interrumpido: la API se detuvo" in e.value
+        for e in at.tabs[0].error
+    )
 
 
 def test_nuevo_escaneo_sin_dominio_no_llama_a_la_api() -> None:
@@ -1075,3 +1121,56 @@ def test_la_barra_lateral_plegada_se_puede_volver_a_abrir() -> None:
     assert any(
         "stExpandSidebarButton" in s and "visibility: visible" in c for s, c in reglas
     )
+
+
+# ─── Escaneos en curso y fallidos en el detalle ────────────────────────────
+
+
+def _detalle_de(scan: dict[str, Any]) -> AppTest:
+    resumen = {k: scan[k] for k in ("id", "domain", "status", "started_at", "finished_at", "errors")}
+    return _run_app(
+        get_map={"/scans": _Resp(200, [resumen]), f"/scans/{scan['id']}": _Resp(200, scan)}
+    )
+
+
+def test_el_detalle_de_un_escaneo_en_curso_no_muestra_indice_ni_acciones() -> None:
+    """Sin activos todavía, el índice saldría 0 «riesgo bajo», y triar o pedir
+    el informe daría 409: solo el estado, que se refresca solo."""
+    at = _detalle_de(_en_curso(5))
+
+    assert not at.exception
+    assert any("En curso desde hace" in i.value for i in at.tabs[1].info)
+    assert _score_mostrado(at) is None
+    assert not [b for b in at.tabs[1].button if "Triar" in b.label or "informe" in b.label]
+
+
+def test_el_detalle_de_un_escaneo_fallido_muestra_el_motivo() -> None:
+    at = _detalle_de(_fallido(5))
+
+    assert not at.exception
+    assert [e.value for e in at.tabs[1].error] == [
+        "Interrumpido: la API se detuvo antes de que terminara"
+    ]
+    assert _score_mostrado(at) is None
+
+
+def test_comparar_solo_ofrece_escaneos_completados() -> None:
+    """La API no compara uno en curso o fallido (409): no se ofrecen."""
+    escaneos = [
+        {**_resumen(4, "ejemplo.com", "2026-01-04T00:00:00"), "status": "running"},
+        {**_resumen(3, "ejemplo.com", "2026-01-03T00:00:00"), "status": "failed"},
+        _resumen(2, "ejemplo.com", "2026-01-02T00:00:00"),
+        _resumen(1, "ejemplo.com", "2026-01-01T00:00:00"),
+    ]
+    get_map = {
+        "/scans": _Resp(200, escaneos),
+        "/scans/4": _Resp(200, _en_curso(4)),
+        "/scans/2": _Resp(200, _scan_detail(2)),
+    }
+    at = _app_con_registro(get_map, [], elegir=2)
+
+    assert not at.exception
+    selector = at.tabs[1].selectbox[1]
+    assert selector.label == "Comparar con"
+    assert [o.split(" ")[0] for o in selector.options] == ["#1"]
+
