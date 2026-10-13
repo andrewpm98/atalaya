@@ -15,7 +15,14 @@ Núcleo de la aplicación. Expone la API REST propia (requisito de la práctica)
 orquesta el resto de módulos. Endpoints principales:
 
 - `POST /scans` ✅ — lanza un escaneo completo (subdominios [crt.sh + Shodan]
-  + puertos + cabeceras + TLS + riesgo de takeover) y lo persiste.
+  + puertos + cabeceras + TLS + riesgo de takeover) **en segundo plano**:
+  valida y autoriza el dominio (400/403 al momento, sin crear nada), crea el
+  escaneo en `running` y responde **202** con `Location: /scans/{id}`. El
+  trabajo lo hace `core/scan_runner.py::run_scan` con su propia sesión de BD
+  y termina en `completed` o en `failed` con el motivo (§11). `?wait=true` lo
+  espera en la misma llamada y responde 201 con el detalle, como antes.
+  Triar, pedir el informe o preguntar por un escaneo en curso da **409**, y
+  comparar exige que los dos estén completados.
 - `GET  /scans`, `GET /scans/{id}` ✅ — consulta de escaneos (404 si no existe).
 - `GET  /assets` ✅ — activos descubiertos, filtrables por `scan_id`.
 - `GET  /findings` ✅ — hallazgos, filtrables por `asset_id`/`scan_id`;
@@ -293,6 +300,16 @@ arrancarla. Sin respuesta de `/scans` no se pinta ni la bienvenida ni
 fallo no se pinta (API antigua, 401 ya visible en `/scans`); todo texto que
 viene de la API se escapa antes de pintarlo.
 
+**Escaneo en segundo plano.** «Nuevo escaneo» lanza el escaneo (202) y lo
+sigue con un fragmento de Streamlit (`st.fragment(run_every=2)`) que consulta
+`GET /scans/{id}` sin reejecutar el resto del script: el panel sigue usable y
+el escaneo continúa aunque se cierre. Al terminar relanza la app con el
+resumen o el motivo del fallo. En «Escaneos», un escaneo en curso muestra solo
+su estado (también autorrefrescado) y uno fallido su motivo, sin índice ni
+botones; «Comparar con» solo ofrece completados. El dashboard llama a la API
+en `127.0.0.1` y no en `localhost`: en Windows, `localhost` prueba antes IPv6
+y cada petición perdía unos 2 s.
+
 Estética rediseñada en `_CSS` (inyectado con `st.html()`, no
 `st.markdown(..., unsafe_allow_html=True)` — ver "Decisiones de diseño")
 para parecer una herramienta comercial de seguridad (referentes: Shodan,
@@ -369,7 +386,7 @@ aviso. Detalle de los flujos en §10.
 
 ```
 dominio
-   │  POST /scans
+   │  POST /scans  → 202 (running); el resto, en segundo plano (§11)
    ▼
 [Descubrimiento]  subdominios (crt.sh + Shodan) → DNS → filtro de wildcards
    │               → puertos → cabeceras → TLS (solo activos)
@@ -487,6 +504,10 @@ obligatorios:
     `GET /config/status` (§2.1, §10.5) con la bienvenida, el logo y el estado
     de la configuración en el dashboard (§2.6).
     *(`memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.)*
+15. **Escaneo en segundo plano y monitorización** 🚧 — `POST /scans` en
+    segundo plano con su seguimiento en el dashboard (§2.1, §2.6, §11).
+    Pendiente: monitorización programada con aviso por webhook.
+    *(`memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`, en curso.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
 CLAUDE.md (que cuenta Shodan, takeover y agentes como una sola ampliación);
@@ -892,3 +913,44 @@ respuesta completa con claves y contraseña configuradas y exige que no
 aparezcan. Tarda unas décimas (la base de datos, la revisión de Alembic y
 las llamadas a `git`), que es por lo que el dashboard la guarda 60 s.
 
+## 11. Escaneo en segundo plano
+
+```
+POST /scans {"domain": ...}
+   │  ensure_authorized()  ── no válido → 400 · no autorizado → 403 (nada creado)
+   │  INSERT scans (status=running) · commit
+   ├─ ?wait=true ──▶ run_scan() en línea ──▶ 201 + detalle
+   └─ por defecto ─▶ 202 + Location: /scans/{id}
+                      │  BackgroundTasks, después de responder
+                      ▼
+              run_scan(session_factory, scan_id)        core/scan_runner.py
+                 sesión propia ── enumerate_subdomains (vuelve a autorizar)
+                               ── enrich_scan
+                               ── activos y hallazgos en UNA transacción
+                 ├─ bien        → completed (+ incidencias en errors)
+                 └─ excepción   → rollback → failed: «el escaneo falló: motivo»
+arranque de la API (lifespan)
+   └─ fail_interrupted_scans(): running → failed «interrumpido: la API se detuvo…»
+```
+
+**Por qué así.** El escaneo de un dominio grande dura minutos; dentro de la
+petición, la conexión quedaba abierta todo ese tiempo y un cliente con
+timeout lo daba por fallido aunque siguiera. La validación va antes de crear
+la fila para que un dominio no autorizado sea un 403 inmediato, no un escaneo
+`failed` en la base de datos; `run_scan` vuelve a autorizar porque
+`enumerate_subdomains` lo hace siempre (restricción #1). La tarea abre su
+propia sesión (`get_session_factory`, sustituible en los tests) porque la de
+la petición se cierra al responder. Activos y hallazgos se guardan juntos al
+final: quien consulta mientras corre ve el escaneo vacío, nunca a medias.
+
+**Fallos.** `run_scan` no lanza: todo fallo acaba en `failed`. De una
+excepción propia guarda su mensaje (pensado para el usuario); de una
+inesperada, solo el tipo, porque su texto podría llevar una URL con una clave
+(Shodan solo la acepta en la URL). Si la API se detiene a mitad, la tarea
+muere sin marcarlo, y el `lifespan` lo cierra al volver a arrancar; si la
+base de datos no está lista en ese momento, se registra y la API arranca
+igual.
+
+**Límite.** El trabajo vive en el proceso de la API. Con varios procesos
+(`uvicorn --workers N`) sobre la misma base de datos, uno que arranca cerraría
+como fallidos los escaneos que otro está ejecutando. Se despliega con uno.

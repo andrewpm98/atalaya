@@ -166,7 +166,15 @@ http://localhost:8000/docs. Lanza primero un escaneo:
 curl -X POST http://localhost:8000/scans \
   -H "Content-Type: application/json" \
   -d '{"domain": "scanme.nmap.org"}'
+# 202 al momento, con el escaneo en "running" y su id (cabecera Location)
+curl http://localhost:8000/scans/1
+# repite hasta que "status" pase a "completed" (o "failed", con el motivo en "errors")
 ```
+
+El escaneo corre en segundo plano: de segundos a minutos según el dominio.
+Si prefieres esperar en la misma llamada, añade `?wait=true` y la respuesta
+(201) trae ya el escaneo completo. Un dominio no válido o fuera de
+`SCAN_ALLOWLIST` da 400 o 403 al momento, sin crear el escaneo.
 
 `scanme.nmap.org` lo mantiene el autor de Nmap precisamente para pruebas de
 reconocimiento autorizadas; úsalo para probar la herramienta.
@@ -208,7 +216,7 @@ cuántos se descartaron.
 
 ## Uso rápido: puertos, cabeceras y TLS
 
-Ya operativo (Paso 2). `POST /scans` (y `atalaya subdomains --save`) enumera
+Ya operativo (Paso 2). Un escaneo (`POST /scans`, o `atalaya subdomains --save`) enumera
 subdominios y, sobre los hosts que resultan **activos**, enriquece
 automáticamente cada uno con:
 

@@ -72,10 +72,15 @@ src/atalaya/
 ├── cli.py                       CLI: `subdomains`, `doctor` (diagnóstico) e
 │                                 `init` (configuración guiada)
 ├── core/
-│   ├── database.py              Engine async + Base declarativa + get_session
+│   ├── database.py              Engine async + Base declarativa + get_session,
+│   │                             get_session_factory (trabajo en segundo plano)
 │   ├── models.py                Scan, Asset, Finding (SQLAlchemy 2.0)
 │   ├── persistence.py           save_subdomain_scan(), apply_port_scan(),
 │   │                             apply_discovery_findings() — descubrimiento → BD
+│   ├── scan_runner.py           run_scan() — el escaneo completo en segundo
+│   │                             plano, con su propia sesión: completed o
+│   │                             failed, nunca running para siempre;
+│   │                             fail_interrupted_scans() al arrancar la API
 │   ├── repository.py            Lectura: get_scan, list_scans, get_latest_scan,
 │   │                             list_assets, list_findings, diff_scans() —
 │   │                             hostnames y cambios de los activos comunes —,
@@ -332,7 +337,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **583 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **605 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -343,7 +348,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -415,6 +420,14 @@ pide evitar explícitamente ("los stubs no son código muerto").
     configuración en la barra lateral. Las dos partes visuales, con maqueta
     aprobada antes de cerrarlas. Memoria:
     `memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.
+14. **Ampliación — Escaneo en segundo plano y monitorización** 🚧 (desde el
+    13/10/2026) — dossier de defensa y guía de la herramienta en Claude Docs
+    ✅; **bloque 3** ✅: `POST /scans` en segundo plano (202; `running` →
+    `completed`/`failed`; recuperación al arrancar; 409 para usar un escaneo
+    no completado) y su seguimiento en el dashboard, con maqueta aprobada; de
+    paso, el dashboard llama a la API en `127.0.0.1` (con `localhost`, 2 s por
+    petición en Windows). Pendiente: decidir Netlas, monitorización con
+    webhook y cierre. Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -428,16 +441,30 @@ defensa oral.
 
 ## Estado al 13/10/2026 y próxima sesión
 
-**Dónde se quedó:** fase 13 **cerrada** el 13/10/2026 con la fase B
-(`GET /config/status`, y la bienvenida, la torre y el estado de la
-configuración en el dashboard; maqueta aprobada:
-https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4). 583 tests, `ruff` (ahora
-también sobre `dashboard/`) y `mypy` a cero. Los commits de la fase B
-(`124fb8d`, `39136c6`, `9051799`, `ad0cd06`, los de documentación y
-`912e6c5`, el arreglo de la barra lateral plegada) se hicieron **en local**: el `push`, cuando el usuario lo diga. Ningún prompt ha
-cambiado: la demo en `replay` sigue intacta (`tests/test_demo_data.py`). Al
-retomar, comprobar con `git status -sb` y `git log --oneline -5` que el repo
-está como aquí se describe.
+**Dónde se quedó (cierre de la sesión del 13/10/2026):** **todo subido** a
+`origin/main`. Hecho en la sesión: la fase B (cierra la fase 13), el dossier
+de defensa y la guía de la herramienta (Claude Docs), el bloque 3 (`POST
+/scans` en segundo plano y su seguimiento en el dashboard) y tres defectos
+anteriores encontrados al probar: la barra lateral plegada sin forma de
+reabrirla, 2 s por petición del dashboard con `localhost` en Windows y la
+configuración por variables de entorno en Docker. 605 tests; `ruff` (también
+sobre `dashboard/`) y `mypy` a cero. Ningún prompt ha cambiado: la demo en
+`replay` sigue intacta (`tests/test_demo_data.py`). Al retomar, comprobar
+con `git status -sb` y `git log --oneline -5`.
+
+- Dossier de defensa: https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91
+- Guía de la herramienta (funcionalidad, para quien llega de fuera):
+  https://claude.ai/code/artifact/1ff455ae-dbc0-4019-b0a9-10222c195a20
+- Maquetas aprobadas: fase B https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4
+  y bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b
+
+**Pendiente, en este orden:** (1) decidir si se añade Netlas (abajo, bloque
+3b); (2) bloque 4, monitorización con webhook; (3) verificar en el stack
+Docker real `GET /config/status` y el escaneo en segundo plano; (4) cierre de
+la fase (bloque 5) y actualizar el dossier con lo que cambie; (5) decidir si
+se fija `streamlit==1.64.0` en `pyproject.toml` (hoy `>=1.37`: una versión
+nueva puede romper el CSS, como pasó con la barra lateral; recomendado, sin
+respuesta del usuario todavía).
 
 **Calendario:** a 12/10/2026, «hay algo de margen», sin fecha de defensa
 concreta. El usuario trabaja **bloque a bloque**: se cierra uno (código,
@@ -489,22 +516,27 @@ técnico con las preguntas de las memorias.
   tres: autenticación (Paso 1), PostgreSQL sin probar (Paso 3) y la
   referencia a `ai/query.py` (Paso 7).
 
-**3. `POST /scans` en segundo plano** — hoy el escaneo corre dentro de la
-petición (19 s para github.com; minutos para un dominio grande).
+**3. `POST /scans` en segundo plano** ✅ (13/10/2026) — hecho con el diseño
+acordado (202, `running`, sesión propia, recuperación al arrancar,
+`?wait=true`), más el 409 para usar un escaneo no completado, que el diseño
+no preveía y destapó revisar los consumidores del estado. Commits
+`ce2a048` (API), `35cb462` (dashboard). Detalle en ARQUITECTURA §11 y en la
+memoria de la fase.
 
-- Devuelve **`202`** con el escaneo en `running` (`ScanStatus.RUNNING` ya
-  existe); el dashboard consulta `GET /scans/{id}` hasta que acabe.
-- **Validación y autorización antes de lanzar la tarea**: un dominio no
-  autorizado sigue dando `403` al momento, no un escaneo `failed` después.
-- **Hoy la fila del `Scan` se crea después de enumerar** (`create_scan` →
-  `save_subdomain_scan`): hay que crearla antes, en `running`.
-- La tarea abre **su propia sesión de BD**: la de la petición se cierra al
-  responder.
-- Al arrancar la API, los escaneos que quedaron en `running` (reinicio a
-  mitad) pasan a `failed` con la incidencia en `errors`.
-- **`?wait=true`** conserva el comportamiento síncrono actual, para no romper
-  `scripts/build_demo_data.py`, los `curl` del README ni los tests.
-- Commits separados: API y dashboard (consulta periódica del estado).
+**3b. Netlas como segunda fuente de subdominios** (propuesto por el usuario
+el 13/10/2026, **pendiente de decidir**) — Shodan exige un plan de pago para
+`/dns/domain` y el usuario no quiere pagarlo. Netlas tiene plan gratuito
+(Community: 50 peticiones/día, 2.500 resultados/mes, uso personal no
+comercial) con búsqueda DNS: `GET https://app.netlas.io/api/domains/?q=
+domain:*.ejemplo.com`, páginas de 20, clave en la cabecera `X-API-Key` (no en
+la URL, a diferencia de Shodan). **Sin confirmar** que el plan gratuito
+permita la API y el formato exacto de la respuesta: antes de escribir código,
+una prueba de 10 minutos con la clave real del usuario. Diseño si se hace:
+`discovery/netlas.py` con el patrón de `shodan.py` (opcional, en paralelo,
+sin reintentar 401/403), tope de resultados por escaneo para no agotar la
+cuota diaria en un dominio grande, `NETLAS_API_KEY` en `config.py` y
+`.env.example`, paso en `init`, comprobación en `doctor` y en
+`/config/status`, `DiscoverySource.NETLAS`.
 
 **4. Monitorización: escaneos programados con aviso por webhook** — la
 carencia más grande como ASM. Depende del bloque 3 (reutiliza la función de
@@ -847,9 +879,13 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ### Pendiente
 
-- **`GET /config/status` sin probar en el stack Docker real** (ver «Plan
-  acordado», bloque 1): verificado con la API real en local y simulando el
-  contenedor, no con Docker levantado.
+- **`GET /config/status` y el escaneo en segundo plano sin probar en el
+  stack Docker real**: verificados con la API real en local (y simulando el
+  contenedor para la configuración), no con Docker levantado.
+- **El escaneo en segundo plano vive en el proceso de la API**: con varios
+  procesos (`uvicorn --workers N`) sobre la misma base de datos, uno que
+  arranca cerraría como fallidos los escaneos que otro está ejecutando. Se
+  despliega con uno (ARQUITECTURA §11).
 - **`init` interactivo en Git Bash (mintty) exige `winpty atalaya init`**:
   mintty no ofrece a Python una consola de Windows y `getpass` no puede leer
   el teclado. `init` lo detecta (`MSYSTEM`) y lo explica en vez de colgarse;
@@ -866,11 +902,6 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   disparador (planificador + notificación cuando el diff no está vacío).
   **Planificado** como bloque 4 (diseño en «Plan acordado para las próximas
   sesiones»).
-- **`POST /scans` es síncrono.** El escaneo completo corre dentro de la
-  petición HTTP: 19 s para github.com, pero un dominio grande dejaría la
-  conexión abierta minutos. Lo normal sería lanzarlo como tarea en segundo
-  plano y consultar su estado. **Planificado** como bloque 3 (diseño en
-  «Plan acordado para las próximas sesiones»).
 - **Señal/ruido de los hallazgos.** En github.com, 194 de 211 hallazgos son
   `low`, casi todo higiene de cabeceras. La reutilización del triaje reduce
   el coste de triarlos, no su volumen ni el ruido para quien lee.
@@ -962,6 +993,15 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**`POST /scans` era síncrono**~~ (bloque 3) → responde 202 y el escaneo
+  corre en segundo plano (`core/scan_runner.py`); el dashboard lo sigue sin
+  bloquearse. Verificado en real: 202 en 0,27 s, API parada a mitad y
+  reiniciada → el escaneo pasa a `failed` con el motivo.
+- ~~**Cada petición del dashboard tardaba 2 s en Windows**~~ (encontrado al
+  prototipar el seguimiento, `c8043a0`) → usaba `http://localhost:8000`, que
+  prueba antes IPv6; uvicorn solo escucha en IPv4 y la conexión rechazada
+  tardaba unos 2 s en caer a `127.0.0.1`. Medido en Chromium: carga de 9,7 a
+  2,9 s y cambiar de escaneo de 6,4 a 0,3 s. En Docker no afectaba.
 - ~~**Al plegar la barra lateral del dashboard no se podía volver a
   abrir**~~ (lo encontró el usuario al probar la fase B; venía del rediseño
   visual) → el botón que la reabre vive dentro de `stToolbar`, que `_CSS`
@@ -1246,7 +1286,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
 atalaya init                         # configuración guiada: alcance, BD, claves (.env)
 atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
-pytest -q                            # tests (deben pasar los 583)
+pytest -q                            # tests (deben pasar los 605)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
