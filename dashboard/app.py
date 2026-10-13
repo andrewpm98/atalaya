@@ -157,6 +157,8 @@ _CSS = """
   --accent:        #00c8e8;
   --accent-soft:   rgba(0, 200, 232, 0.14);
   --accent-line:   rgba(0, 200, 232, 0.42);
+  /* Cian oscuro: solo las ondas de la baliza de la torre. */
+  --accent-dim:    #0a7f94;
 
   /* Severidad. El rojo NO aparece en ningún otro sitio: ni en botones, ni
      en bordes decorativos, ni en cabeceras. Solo severidad crítica. */
@@ -254,10 +256,10 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
 
 /* ── Marca: torre de celosía con baliza ───────────────────────────────── */
 /* La misma que pinta la terminal en atalaya init y doctor: una torre de
-   vigilancia que es también una A. Los colores salen de la paleta, no del
-   propio dibujo: los atributos de presentación del SVG no admiten var(). */
+   vigilancia que es también una A. Los colores los ponen estas clases, no
+   el propio dibujo: así salen de la paleta y se cambian en un solo sitio. */
 .atl-tower { display: block; overflow: visible; }
-.atl-tower .t-wave { fill: none; stroke: #0a7f94; stroke-width: 1.7; stroke-linecap: round; }
+.atl-tower .t-wave { fill: none; stroke: var(--accent-dim); stroke-width: 1.7; stroke-linecap: round; }
 .atl-tower .t-glow { fill: var(--accent-soft); }
 .atl-tower .t-beacon { fill: var(--accent); }
 .atl-tower .t-frame {
