@@ -171,7 +171,7 @@ def test_la_guarda_estructural_cubre_todas_las_rutas_conocidas() -> None:
     """Que la parametrización de arriba no quede vacía en silencio."""
     rutas = {path for _, path in _rutas_de_la_api()}
     assert {"/scans", "/scans/1", "/scans/1/diff/1", "/scans/1/triage", "/scans/1/report"} <= rutas
-    assert {"/assets", "/findings", "/findings/ask", "/"} <= rutas
+    assert {"/assets", "/findings", "/findings/ask", "/config/status", "/"} <= rutas
 
 
 def test_el_esquema_openapi_declara_la_clave_en_cada_ruta_protegida() -> None:

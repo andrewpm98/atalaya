@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from atalaya import __version__
-from atalaya.api.routes import assets, findings, scans
+from atalaya.api.routes import assets, config, findings, scans
 from atalaya.api.security import require_api_key
 from atalaya.config import settings
 from atalaya.core.exceptions import AIProviderError, InvalidTargetError, UnauthorizedTargetError
@@ -55,6 +55,7 @@ _auth = [Depends(require_api_key)]
 app.include_router(scans.router, dependencies=_auth)
 app.include_router(assets.router, dependencies=_auth)
 app.include_router(findings.router, dependencies=_auth)
+app.include_router(config.router, dependencies=_auth)
 
 
 @app.exception_handler(InvalidTargetError)

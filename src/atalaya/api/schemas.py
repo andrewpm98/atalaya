@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from atalaya.core.models import FindingSeverity, ScanStatus
 from atalaya.core.scoring import compute_risk_score
+from atalaya.onboarding.checks import CheckResult, Status
 
 
 class ScanRequest(BaseModel):
@@ -190,3 +191,27 @@ class ScanDiffOut(BaseModel):
     #: Valoración de `ai/diff_analyst.py`. `None` solo si se pidió
     #: `analysis=false`; por defecto, si el modelo falla, el endpoint da 502.
     analysis: str | None = None
+
+
+class ConfigStatusOut(BaseModel):
+    """Respuesta de `GET /config/status`: una entrada por comprobación.
+
+    Reutiliza `CheckResult` de `onboarding/checks.py` en vez de copiarlo: es
+    ya un modelo Pydantic de datos (no una tabla) y es el mismo resultado que
+    pinta `atalaya doctor`, así que la terminal y el dashboard no pueden
+    describir la misma configuración de dos formas distintas. `key` es
+    estable (`config`, `scope`, `database`, `ai`, `shodan`, `api`,
+    `secrets`): el dashboard elige por ella, no por el texto.
+    """
+
+    checks: list[CheckResult]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def errors(self) -> int:
+        return sum(check.status is Status.ERROR for check in self.checks)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def warnings(self) -> int:
+        return sum(check.status is Status.WARN for check in self.checks)
