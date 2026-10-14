@@ -47,6 +47,7 @@ from atalaya.core.models import Monitor, Scan, ScanStatus
 from atalaya.core.repository import ScanDiff, diff_scans
 from atalaya.core.scan_runner import run_scan
 from atalaya.core.webhooks import send_webhook
+from atalaya.discovery.models import DiscoverySource
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,40 @@ def _fallo_payload(
         "errors": errors,
         "sent_at": _now().isoformat(),
     }
+
+
+#: Fuentes de enumeración: las que descubren subdominios. DNS no lo es (solo
+#: confirma lo que otras encontraron, y el dominio raíz entra siempre).
+_ENUMERATION_SOURCES = (DiscoverySource.CRTSH.value, DiscoverySource.SHODAN.value)
+
+
+def _hosts_by_source(scan: Scan) -> dict[str, int]:
+    return {
+        fuente: sum(fuente in asset.sources for asset in scan.assets)
+        for fuente in _ENUMERATION_SOURCES
+    }
+
+
+def _fallen_sources(baseline: Scan, current: Scan) -> dict[str, int]:
+    """Fuentes que aportaron hosts a la línea base y ninguno al escaneo actual,
+    con cuántos aportaron. Vacío si ninguna cayó.
+
+    Una fuente caída deja el escaneo «completado» (degradación controlada) y
+    sin los hosts que ella aportaba; compararlo daría esos hosts por
+    desaparecidos, una falsa alarma. No sirve contar los activos: el dominio
+    raíz entra siempre aunque no responda ninguna fuente, así que con crt.sh
+    caído github.com sale con 1 activo frente a 117, no con 0 (se vio en la
+    prueba real). Tampoco mirar las incidencias: con clave de Shodan, su 403
+    sale en todo escaneo. Fuente a fuente, porque crt.sh puede caer con Shodan
+    respondiendo, y un 403 permanente de Shodan no cuenta: nunca aportó nada.
+
+    crt.sh es histórico: una fuente que aportaba hosts no vuelve a cero sin
+    más. Límite: si una fuente deja de responder para siempre (una
+    suscripción que caduca), cada ejecución avisará del fallo, y no se
+    compara, hasta que se corrija la configuración.
+    """
+    previos, actuales = _hosts_by_source(baseline), _hosts_by_source(current)
+    return {f: previos[f] for f in _ENUMERATION_SOURCES if previos[f] and not actuales[f]}
 
 
 async def _notify(
@@ -209,16 +244,15 @@ async def _compare_and_notify(
             logger.info(
                 "Vigilancia de %s: el escaneo #%d queda como línea base", monitor.domain, scan_id
             )
-        elif not current.assets and baseline.assets:
-            # crt.sh caído deja un escaneo «completado» (degradación controlada)
-            # sin ningún subdominio. Compararlo daría todo el dominio por
-            # desaparecido: una falsa alarma. crt.sh es histórico, así que un
-            # dominio real nunca vuelve con cero. No basta con mirar si hay
-            # incidencias: con clave de Shodan, su 403 sale en todo escaneo.
+        elif caidas := _fallen_sources(baseline, current):
             reason = (
-                f"el escaneo #{scan_id} no encontró ningún subdominio y la línea base "
-                f"(#{baseline.id}) tenía {len(baseline.assets)}: lo más probable es que "
-                "cayera la fuente de subdominios, no que desaparecieran todos"
+                "no se compara: "
+                + "; ".join(
+                    f"{fuente} no aportó ningún subdominio y en la línea base (#{baseline.id}) "
+                    f"aportó {n}"
+                    for fuente, n in caidas.items()
+                )
+                + ". Lo más probable es que la fuente cayera, no que desaparecieran esos hosts"
             )
             await _notify(
                 monitor,

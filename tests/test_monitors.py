@@ -25,7 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from atalaya.config import settings
-from atalaya.core import monitor_runner
+from atalaya.core import monitor_runner, repository
 from atalaya.core.audit import AUDIT_LOGGER_NAME
 from atalaya.core.database import Base
 from atalaya.core.exceptions import WebhookDeliveryError
@@ -46,10 +46,19 @@ SECRETO = "secreto-compartido-de-prueba"
 
 
 class _Descubrimiento:
-    """Lo que encontrará el próximo escaneo."""
+    """Lo que encontrará el próximo escaneo, por fuente.
+
+    Como la enumeración real (`discovery/subdomains.py`), el dominio raíz entra
+    siempre, aunque no responda ninguna fuente, y DNS se añade a todo host que
+    resuelve. Una versión anterior de este doble devolvía cero registros con
+    la fuente caída, algo que la enumeración real no hace nunca: el guardia de
+    falsas alarmas pasaba aquí y fallaba en la prueba real.
+    """
 
     def __init__(self) -> None:
-        self.hosts: list[str] = ["www.ejemplo.com"]
+        self.hosts: list[str] = ["www.ejemplo.com"]  # los que aporta crt.sh
+        self.shodan: list[str] = []  # los que aporta Shodan
+        self.caidas: set[DiscoverySource] = set()
         self.errors: list[str] = []
         self.falla: Exception | None = None
 
@@ -69,15 +78,21 @@ def descubrimiento(monkeypatch: pytest.MonkeyPatch) -> _Descubrimiento:
     async def fake_enumerate(domain: str, *, resolve: bool = True) -> SubdomainScanResult:
         if estado.falla is not None:
             raise estado.falla
+        fuentes: dict[str, set[DiscoverySource]] = {domain: set()}
+        for fuente, hosts in ((DiscoverySource.CRTSH, estado.hosts),
+                              (DiscoverySource.SHODAN, estado.shodan)):
+            if fuente not in estado.caidas:
+                for host in hosts:
+                    fuentes.setdefault(host, set()).add(fuente)
         result = SubdomainScanResult(domain=domain)
         result.records = [
             SubdomainRecord(
                 hostname=host,
                 status=ResolutionStatus.ACTIVE,
                 ip_addresses=["93.184.216.34"],
-                sources=[DiscoverySource.CRTSH, DiscoverySource.DNS],
+                sources=[*sorted(fuentes[host], key=lambda s: s.value), DiscoverySource.DNS],
             )
-            for host in estado.hosts
+            for host in sorted(fuentes)
         ]
         result.errors = list(estado.errors)
         result.finished_at = datetime.now(UTC)
@@ -288,25 +303,67 @@ async def test_un_escaneo_fallido_se_avisa_y_no_mueve_la_linea_base(
     assert monitor.last_error == payload["reason"]
 
 
-async def test_cero_subdominios_frente_a_una_base_con_activos_no_es_una_desaparicion(
+async def test_crt_sh_caido_no_se_avisa_como_desaparicion_de_sus_hosts(
     factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
 ) -> None:
-    """crt.sh caído deja un escaneo «completado» sin subdominios. Compararlo
-    daría todo el dominio por desaparecido: una falsa alarma."""
+    """crt.sh caído deja un escaneo «completado» con solo el dominio raíz.
+    Compararlo daría sus subdominios por desaparecidos: una falsa alarma."""
     descubrimiento.hosts = ["www.ejemplo.com", "api.ejemplo.com"]
     base = await _escaneo(factory)
     monitor_id = await _monitor(factory, baseline=base)
-    descubrimiento.hosts = []
+    descubrimiento.caidas = {DiscoverySource.CRTSH}
     descubrimiento.errors = ["crt.sh no disponible tras 3 intentos: ReadTimeout"]
 
     await run_monitor(factory, monitor_id)
 
     monitor = await _leer(factory, monitor_id)
+    async with factory() as session:
+        actual = await repository.get_scan(session, monitor.last_scan_id)
+    # Lo que se vio en la prueba real: no sale con 0 activos, sale con la raíz.
+    assert actual is not None
+    assert [a.hostname for a in actual.assets] == ["ejemplo.com"]
     [(evento, payload)] = webhook.avisos
     assert evento == "escaneo_fallido"
-    assert "fuente de subdominios" in payload["reason"]
+    assert "crt.sh no aportó ningún subdominio" in payload["reason"]
+    assert f"(#{base}) aportó 2" in payload["reason"]
     assert payload["errors"] == ["crt.sh no disponible tras 3 intentos: ReadTimeout"]
     assert monitor.baseline_scan_id == base
+
+
+async def test_crt_sh_caido_en_un_dominio_al_que_nunca_aporto_no_es_un_fallo(
+    factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
+) -> None:
+    """Como scanme.nmap.org: crt.sh no le aporta nada ni cuando funciona, así
+    que su caída no cambia el escaneo y no hay nada que avisar."""
+    descubrimiento.hosts = []
+    base = await _escaneo(factory)
+    monitor_id = await _monitor(factory, baseline=base)
+    descubrimiento.caidas = {DiscoverySource.CRTSH}
+
+    await run_monitor(factory, monitor_id)
+
+    monitor = await _leer(factory, monitor_id)
+    assert webhook.avisos == []
+    assert monitor.baseline_scan_id == monitor.last_scan_id != base
+
+
+async def test_caida_parcial_de_una_fuente_con_la_otra_respondiendo(
+    factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
+) -> None:
+    """Shodan cae y crt.sh responde: los hosts que solo daba Shodan no han
+    desaparecido. Se nombra la fuente caída, no la otra."""
+    descubrimiento.shodan = ["vpn.ejemplo.com"]
+    base = await _escaneo(factory)
+    monitor_id = await _monitor(factory, baseline=base)
+    descubrimiento.caidas = {DiscoverySource.SHODAN}
+
+    await run_monitor(factory, monitor_id)
+
+    [(evento, payload)] = webhook.avisos
+    assert evento == "escaneo_fallido"
+    assert "shodan no aportó ningún subdominio" in payload["reason"]
+    assert "crt.sh" not in payload["reason"]
+    assert (await _leer(factory, monitor_id)).baseline_scan_id == base
 
 
 async def test_las_incidencias_no_bloquean_un_aviso_de_cambios(
