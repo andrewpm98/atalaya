@@ -29,6 +29,10 @@ from atalaya.core.scoring import compute_risk_score
 #: fichero que llama, no contra el directorio de trabajo del proceso.
 _APP_PATH = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
 
+#: Posición de las pestañas que se buscan por índice (`at.tabs[...]`).
+_TAB_VIGILANCIA = 2
+_TAB_PREGUNTAR = 3
+
 
 class _Resp:
     """Doble de `httpx.Response`: solo lo que `dashboard/app.py` usa.
@@ -52,6 +56,8 @@ class _Resp:
 def _fake_client(
     get_map: dict[str, _Resp | list[_Resp]],
     post_map: dict[str, _Resp] | None = None,
+    send_map: dict[tuple[str, str], _Resp] | None = None,
+    enviadas: list[tuple[str, str, object]] | None = None,
 ) -> type:
     """Doble de `httpx.Client`.
 
@@ -60,11 +66,22 @@ def _fake_client(
     permite simular que una ruta cambia de resultado entre una petición y la
     siguiente -- necesario para probar que el botón de triaje refresca los
     datos tras la llamada a la API (ver `test_triage_refresca_sin_rerun`).
+
+    La pestaña «Vigilancia» pide `/monitors` en cada carga: sin un doble
+    explícito responde «ningún monitor», como una instalación nueva, para que
+    las pruebas de las otras pestañas no vean un error que no es suyo.
+
+    `request` es lo que usa la vigilancia para POST/PATCH/DELETE; responde con
+    `send_map[(método, ruta)]` (o `post_map` para un POST) y, si se pasa
+    `enviadas`, anota cada llamada con su cuerpo.
     """
     post_map = post_map or {}
+    send_map = send_map or {}
 
     def _get(path: str) -> _Resp:
         entry = get_map.get(path)
+        if entry is None and path == "/monitors":
+            return _Resp(200, [])
         if entry is None:
             return _Resp(404, {"detail": f"sin mock para GET {path}"})
         if isinstance(entry, list):
@@ -86,6 +103,14 @@ def _fake_client(
 
         def post(self, path: str, json: dict[str, object] | None = None) -> _Resp:
             return post_map.get(path, _Resp(404, {"detail": f"sin mock para POST {path}"}))
+
+        def request(
+            self, method: str, path: str, json: dict[str, object] | None = None
+        ) -> _Resp:
+            if enviadas is not None:
+                enviadas.append((method, path, json))
+            resp = send_map.get((method, path)) or (post_map.get(path) if method == "POST" else None)
+            return resp or _Resp(404, {"detail": f"sin mock para {method} {path}"})
 
     return _Client
 
@@ -575,12 +600,12 @@ def test_pregunta_muestra_la_respuesta() -> None:
     with patch("httpx.Client", _fake_client(get_map, post_map)):
         at = AppTest.from_file(_APP_PATH, default_timeout=15)
         at.run()
-        at.tabs[2].text_input[0].input("ejemplo.com").run()
-        at.tabs[2].text_area[0].input("¿algo filtra red interna?").run()
-        at.tabs[2].button[0].click().run()
+        at.tabs[_TAB_PREGUNTAR].text_input[0].input("ejemplo.com").run()
+        at.tabs[_TAB_PREGUNTAR].text_area[0].input("¿algo filtra red interna?").run()
+        at.tabs[_TAB_PREGUNTAR].button[0].click().run()
 
     assert not at.exception
-    textos = [m.value for m in at.tabs[2].markdown]
+    textos = [m.value for m in at.tabs[_TAB_PREGUNTAR].markdown]
     assert any("Escaneo #1" in t for t in textos)
     assert any("filtra direccionamiento interno" in t for t in textos)
 
@@ -594,12 +619,12 @@ def test_pregunta_sin_escaneo_previo_muestra_error() -> None:
     with patch("httpx.Client", _fake_client(get_map, post_map)):
         at = AppTest.from_file(_APP_PATH, default_timeout=15)
         at.run()
-        at.tabs[2].text_input[0].input("sin-escanear.com").run()
-        at.tabs[2].text_area[0].input("¿qué hay?").run()
-        at.tabs[2].button[0].click().run()
+        at.tabs[_TAB_PREGUNTAR].text_input[0].input("sin-escanear.com").run()
+        at.tabs[_TAB_PREGUNTAR].text_area[0].input("¿qué hay?").run()
+        at.tabs[_TAB_PREGUNTAR].button[0].click().run()
 
     assert not at.exception
-    assert any("No hay un escaneo completado" in e.value for e in at.tabs[2].error)
+    assert any("No hay un escaneo completado" in e.value for e in at.tabs[_TAB_PREGUNTAR].error)
 
 
 # ─── Autenticación (X-API-Key) ──────────────────────────────────────────────
@@ -1174,3 +1199,233 @@ def test_comparar_solo_ofrece_escaneos_completados() -> None:
     assert selector.label == "Comparar con"
     assert [o.split(" ")[0] for o in selector.options] == ["#1"]
 
+
+# ─── Vigilancia ─────────────────────────────────────────────────────────────
+
+_WEBHOOK = "https://hooks.ejemplo.com/…"
+
+
+def _monitor(monitor_id: int = 1, **campos: object) -> dict[str, Any]:
+    """Un monitor tal como lo devuelve `GET /monitors`, recién creado."""
+    base: dict[str, Any] = {
+        "id": monitor_id,
+        "domain": f"m{monitor_id}.ejemplo.com",
+        "interval_hours": 24,
+        "webhook": _WEBHOOK,
+        "signed": True,
+        "active": True,
+        "created_at": "2026-10-14T10:00:00",
+        "next_run_at": "2099-01-01T00:00:00",
+        "last_run_at": None,
+        "last_scan_id": None,
+        "baseline_scan_id": None,
+        "last_notified_at": None,
+        "last_error": None,
+    }
+    return {**base, **campos}
+
+
+def _vigilancia(
+    monitores: list[dict[str, Any]],
+    escaneos: list[dict[str, Any]] | None = None,
+    send_map: dict[tuple[str, str], _Resp] | None = None,
+    enviadas: list[tuple[str, str, object]] | None = None,
+) -> tuple[AppTest, Any]:
+    """Arranca el dashboard con esos monitores. Devuelve el `AppTest` y el
+    doble del cliente, para seguir interactuando dentro del mismo parche."""
+    get_map = {"/monitors": _Resp(200, monitores), "/scans": _Resp(200, escaneos or [])}
+    cliente = _fake_client(get_map, send_map=send_map, enviadas=enviadas)
+    with patch("httpx.Client", cliente):
+        at = AppTest.from_file(_APP_PATH, default_timeout=15)
+        at.run()
+    return at, cliente
+
+
+def _tabla(at: AppTest) -> str:
+    return next(
+        (m.value for m in at.tabs[_TAB_VIGILANCIA].markdown if "atl-mon-wrap" in m.value), ""
+    )
+
+
+def test_vigilancia_sin_monitores_invita_a_crear_el_primero() -> None:
+    at, _ = _vigilancia([])
+
+    assert not at.exception
+    assert any("Ningún dominio vigilado" in i.value for i in at.tabs[_TAB_VIGILANCIA].info)
+    assert _tabla(at) == ""
+    assert [b.label for b in at.tabs[_TAB_VIGILANCIA].button] == ["Vigilar"]
+
+
+def test_el_resultado_de_cada_monitor_se_deduce_de_sus_campos() -> None:
+    """Pendiente, escaneando, atención, avisado y sin cambios. Escaneando va
+    antes que el error (que aún es el de la ejecución anterior) y el error
+    antes que «avisado» (un aviso de fallo también deja `last_notified_at`)."""
+    hace = "2026-10-14T10:00:00"
+    despues = "2026-10-14T10:00:05"
+    monitores = [
+        _monitor(1),
+        _monitor(2, last_run_at=hace, last_scan_id=7, last_error="viejo"),
+        _monitor(3, last_run_at=hace, last_scan_id=8, last_notified_at=despues,
+                 last_error="aviso no entregado a https://hooks.ejemplo.com/…: HTTP 503"),
+        _monitor(4, last_run_at=hace, last_scan_id=9, baseline_scan_id=9, last_notified_at=despues),
+        _monitor(5, last_run_at=hace, last_scan_id=10, baseline_scan_id=10,
+                 last_notified_at="2026-10-13T10:00:00"),
+    ]
+    escaneos = [{**_scan_summary(7), "status": "running"}]
+    at, _ = _vigilancia(monitores, escaneos)
+
+    assert not at.exception
+    filas = _tabla(at).split("<tr")[2:]  # sin la cabecera
+    clases = [re.search(r"atl-mon-(pend|run|warn|ok|quiet)\b", f).group(1) for f in filas]
+    assert clases == ["pend", "run", "warn", "ok", "quiet"]
+    assert "Escaneo #7 en curso" in filas[1]
+    assert "HTTP 503" in filas[2]
+    assert "compara con el escaneo #9" in filas[3]
+    assert "el primero será la referencia" in filas[0]
+
+
+def test_un_monitor_en_pausa_lo_dice_y_ofrece_reanudar() -> None:
+    at, _ = _vigilancia([_monitor(1, active=False)])
+
+    assert "en pausa" in _tabla(at)
+    assert "atl-mon-paused" in _tabla(at)
+    assert "Reanudar" in [b.label for b in at.tabs[_TAB_VIGILANCIA].button]
+
+
+def test_la_tabla_escapa_lo_que_viene_de_la_api() -> None:
+    """El motivo de un fallo puede llevar texto del receptor o del DNS."""
+    malicioso = "<img src=x onerror=alert(1)>"
+    at, _ = _vigilancia(
+        [_monitor(1, domain=f"{malicioso}.ejemplo.com", last_run_at="2026-10-14T10:00:00",
+                  last_error=malicioso)]
+    )
+
+    assert malicioso not in _tabla(at)
+    assert "&lt;img src=x onerror=alert(1)&gt;" in _tabla(at)
+
+
+def _rellenar_alta(at: AppTest, dominio: str, webhook: str, secreto: str = "") -> None:
+    tab = at.tabs[_TAB_VIGILANCIA]
+    tab.text_input[0].input(dominio)
+    tab.text_input[1].input(webhook)
+    if secreto:
+        tab.text_input[2].input(secreto)
+
+
+def test_crear_un_monitor_genera_el_secreto_y_lo_ensena_una_vez() -> None:
+    enviadas: list[tuple[str, str, object]] = []
+    creado = _monitor(1, domain="ejemplo.com", baseline_scan_id=4)
+    at, cliente = _vigilancia(
+        [], send_map={("POST", "/monitors"): _Resp(201, creado)}, enviadas=enviadas
+    )
+    with patch("httpx.Client", cliente):
+        _rellenar_alta(at, " ejemplo.com ", "https://hooks.ejemplo.com/x")
+        _boton(at, "Vigilar").click().run()
+
+    assert not at.exception
+    [(metodo, ruta, cuerpo)] = enviadas
+    assert (metodo, ruta) == ("POST", "/monitors")
+    assert isinstance(cuerpo, dict)
+    assert cuerpo["domain"] == "ejemplo.com"
+    assert cuerpo["interval_hours"] == 24
+    assert len(cuerpo["secret"]) >= 16
+    tab = at.tabs[_TAB_VIGILANCIA]
+    assert any("Vigilando ejemplo.com" in s.value and "escaneo #4" in s.value for s in tab.success)
+    assert [c.value for c in tab.code] == [cuerpo["secret"]]
+    # El formulario vuelve vacío.
+    assert [w.value for w in tab.text_input] == ["", "", ""]
+
+
+def test_con_secreto_propio_no_se_vuelve_a_ensenar() -> None:
+    enviadas: list[tuple[str, str, object]] = []
+    at, cliente = _vigilancia(
+        [], send_map={("POST", "/monitors"): _Resp(201, _monitor(1))}, enviadas=enviadas
+    )
+    with patch("httpx.Client", cliente):
+        _rellenar_alta(at, "ejemplo.com", "https://hooks.ejemplo.com/x", "mi-secreto-de-dieciseis")
+        _boton(at, "Vigilar").click().run()
+
+    assert enviadas[0][2]["secret"] == "mi-secreto-de-dieciseis"  # type: ignore[index]
+    assert not at.tabs[_TAB_VIGILANCIA].code
+
+
+def test_sin_firma_no_se_envia_secreto() -> None:
+    enviadas: list[tuple[str, str, object]] = []
+    at, cliente = _vigilancia(
+        [], send_map={("POST", "/monitors"): _Resp(201, _monitor(1))}, enviadas=enviadas
+    )
+    with patch("httpx.Client", cliente):
+        _rellenar_alta(at, "ejemplo.com", "https://hooks.ejemplo.com/x")
+        at.tabs[_TAB_VIGILANCIA].checkbox[0].uncheck()
+        _boton(at, "Vigilar").click().run()
+
+    assert "secret" not in enviadas[0][2]  # type: ignore[operator]
+    assert not at.tabs[_TAB_VIGILANCIA].code
+
+
+def test_un_secreto_propio_corto_se_avisa_sin_llamar_a_la_api() -> None:
+    enviadas: list[tuple[str, str, object]] = []
+    at, cliente = _vigilancia([], enviadas=enviadas)
+    with patch("httpx.Client", cliente):
+        _rellenar_alta(at, "ejemplo.com", "https://hooks.ejemplo.com/x", "corto")
+        _boton(at, "Vigilar").click().run()
+
+    assert enviadas == []
+    assert any("16 caracteres" in w.value for w in at.tabs[_TAB_VIGILANCIA].warning)
+
+
+def test_el_rechazo_de_la_api_se_muestra_y_el_formulario_se_conserva() -> None:
+    """Un webhook hacia la red interna: el motivo es el de la API, y lo
+    escrito sigue ahí para corregirlo."""
+    motivo = "El webhook apunta a una dirección no enrutable (loopback)."
+    at, cliente = _vigilancia(
+        [], send_map={("POST", "/monitors"): _Resp(400, {"detail": motivo})}
+    )
+    with patch("httpx.Client", cliente):
+        _rellenar_alta(at, "ejemplo.com", "https://localhost/x")
+        _boton(at, "Vigilar").click().run()
+
+    tab = at.tabs[_TAB_VIGILANCIA]
+    assert [e.value for e in tab.error] == [motivo]
+    assert not tab.success
+    assert tab.text_input[1].value == "https://localhost/x"
+
+
+def test_pausar_envia_el_cambio_a_la_api() -> None:
+    enviadas: list[tuple[str, str, object]] = []
+    at, cliente = _vigilancia(
+        [_monitor(3)],
+        send_map={("PATCH", "/monitors/3"): _Resp(200, _monitor(3, active=False))},
+        enviadas=enviadas,
+    )
+    with patch("httpx.Client", cliente):
+        _boton(at, "Pausar").click().run()
+
+    assert enviadas == [("PATCH", "/monitors/3", {"active": False})]
+
+
+def test_borrar_pide_confirmacion_antes_de_llamar_a_la_api() -> None:
+    enviadas: list[tuple[str, str, object]] = []
+    at, cliente = _vigilancia(
+        [_monitor(3)],
+        send_map={("DELETE", "/monitors/3"): _Resp(204, None)},
+        enviadas=enviadas,
+    )
+    with patch("httpx.Client", cliente):
+        _boton(at, "Borrar…").click().run()
+        assert enviadas == []
+        assert any("Se dejará de vigilar" in w.value for w in at.tabs[_TAB_VIGILANCIA].warning)
+        _boton(at, "Borrar monitor").click().run()
+
+    assert enviadas == [("DELETE", "/monitors/3", None)]
+
+
+def test_cancelar_el_borrado_no_llama_a_la_api() -> None:
+    enviadas: list[tuple[str, str, object]] = []
+    at, cliente = _vigilancia([_monitor(3)], enviadas=enviadas)
+    with patch("httpx.Client", cliente):
+        _boton(at, "Borrar…").click().run()
+        _boton(at, "Cancelar").click().run()
+
+    assert enviadas == []
+    assert not at.tabs[_TAB_VIGILANCIA].warning

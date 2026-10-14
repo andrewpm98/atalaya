@@ -29,6 +29,7 @@ limitaciones al final de `_CSS`.
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from datetime import UTC, datetime
 from html import escape
@@ -936,6 +937,44 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
   font-family: var(--mono); font-size: 0.55rem; letter-spacing: 0.2em;
   color: var(--fg-faint); text-transform: uppercase; margin: 0.55rem 0 0.32rem 0;
 }
+
+/* ── Vigilancia ───────────────────────────────────────────────────────── */
+
+/* Tabla de monitores: HTML propio y no `st.dataframe`, porque el estado de
+   cada uno se lee de un vistazo por el color del chip, y el lienzo de la
+   tabla de Streamlit no admite estilos por celda. */
+.atl-mon-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 3px; }
+/* `.atl-mon-wrap table.atl-mon` y no `.atl-mon` suelta: la regla de Streamlit
+   para las tablas de un bloque markdown es más específica y le dejaba un
+   margen inferior que se veía como una franja vacía dentro del borde. */
+.atl-mon-wrap table.atl-mon { border-collapse: collapse; width: 100%; font-size: 0.74rem; margin: 0; }
+.atl-mon th {
+  font-family: var(--mono); font-weight: 500; font-size: 0.56rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--fg-faint); background: var(--bg-elev);
+  text-align: left; padding: 0.45rem 0.7rem; white-space: nowrap;
+}
+.atl-mon td {
+  border-top: 1px solid var(--line); padding: 0.5rem 0.7rem; vertical-align: top;
+  color: var(--fg-dim); font-family: var(--mono); font-size: 0.7rem;
+}
+.atl-mon td.atl-mon-dom { color: var(--fg); font-size: 0.76rem; white-space: nowrap; }
+.atl-mon td.atl-mon-nw { white-space: nowrap; }
+.atl-mon td.atl-mon-res { font-family: var(--sans); font-size: 0.74rem; min-width: 16rem; }
+.atl-mon small { display: block; color: var(--fg-faint); font-size: 0.62rem; margin-top: 0.15rem; }
+.atl-mon-paused td { opacity: 0.62; }
+/* Resultado de la última ejecución: verde si se avisó, ámbar si algo falló
+   (la vigilancia sigue, degradada: el rojo queda para `critical` y la API
+   caída), acento mientras escanea y apagado si no hubo nada que avisar. */
+.atl-mon-st {
+  display: inline-block; font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.08em;
+  text-transform: uppercase; border: 1px solid currentColor; border-radius: 2px;
+  padding: 0.02rem 0.35rem; margin-right: 0.4rem; white-space: nowrap;
+}
+.atl-mon-ok { color: var(--ok); }
+.atl-mon-warn { color: var(--sev-medium); }
+.atl-mon-run { color: var(--accent); }
+.atl-mon-quiet, .atl-mon-pend { color: var(--fg-faint); }
+.atl-mon-paused-tag { color: var(--fg-faint); border-style: dashed; }
 
 /* ── Tabla de escaneos ────────────────────────────────────────────────── */
 
@@ -1867,6 +1906,247 @@ def render_scan_detail(scan: dict[str, Any], otros: list[dict[str, Any]] | None 
         render_asset(asset, indice)
 
 
+# ─── Vigilancia ─────────────────────────────────────────────────────────────
+
+#: Segundos entre refrescos de la lista de monitores: lo bastante corto para
+#: ver un turno pasar de «escaneando» a su resultado sin recargar a mano.
+_VIGILANCIA_CADA = 10
+
+#: Intervalos que ofrece el formulario. Fijos y no un número libre: el mínimo
+#: de la API es 1 h (restricción #5) y así el formulario no puede dar un 422.
+_INTERVALOS = {"Cada hora": 1, "Cada 6 horas": 6, "Cada 12 horas": 12, "Cada día": 24,
+               "Cada semana": 168}
+
+
+def _api_send(method: str, path: str, json: dict[str, Any] | None = None) -> httpx.Response | None:
+    """PATCH/DELETE/POST devolviendo la respuesta cruda, para que quien llama
+    decida qué decir ante cada código (un 409 al crear un monitor no es un
+    fallo de la API, es «ese dominio ya se vigila»)."""
+    try:
+        with _client() as client:
+            return client.request(method, path, json=json)
+    except httpx.HTTPError as exc:
+        st.error(f"No se pudo contactar con la API ({path}): {exc}")
+        return None
+
+
+def _a_utc(iso: str) -> datetime:
+    momento = datetime.fromisoformat(iso)
+    return momento if momento.tzinfo else momento.replace(tzinfo=UTC)
+
+
+def _lapso(segundos: int) -> str:
+    """`3 min`, `5 h 12 min`, `2 d 4 h`: lo que cabe en una celda."""
+    minutos = segundos // 60
+    if minutos < 60:
+        return f"{max(minutos, 1)} min"
+    horas, minutos = divmod(minutos, 60)
+    if horas < 24:
+        return f"{horas} h {minutos:02d} min" if minutos else f"{horas} h"
+    dias, horas = divmod(horas, 24)
+    return f"{dias} d {horas} h" if horas else f"{dias} d"
+
+
+def _proximo_turno(monitor: dict[str, Any]) -> str:
+    if not monitor["active"]:
+        return "en pausa"
+    falta = int((_a_utc(monitor["next_run_at"]) - datetime.now(UTC)).total_seconds())
+    return "en el próximo minuto" if falta <= 60 else f"en {_lapso(falta)}"
+
+
+def _cada(horas: int) -> str:
+    return {1: "1 h", 24: "1 día", 168: "1 semana"}.get(horas, f"{horas} h")
+
+
+def resultado_monitor(monitor: dict[str, Any], estados: dict[int, str]) -> tuple[str, str, str]:
+    """Clase, etiqueta y texto del último resultado de un monitor.
+
+    La API no guarda «qué pasó en la última ejecución» como un campo: se
+    deduce de los que sí guarda. Mientras su escaneo corre, `last_error` aún
+    es el de la ejecución anterior, por eso lo primero es mirar si escanea.
+    Un aviso de fallo también deja `last_notified_at`, por eso `last_error`
+    va antes que «avisado».
+    """
+    if not monitor["last_run_at"]:
+        return "pend", "pendiente", "Primera ejecución en cuanto le toque el turno."
+    escaneo = monitor["last_scan_id"]
+    if escaneo is not None and estados.get(escaneo) == "running":
+        return "run", "escaneando", f"Escaneo #{escaneo} en curso."
+    if monitor["last_error"]:
+        return "warn", "atención", str(monitor["last_error"])
+    avisado = monitor["last_notified_at"]
+    if avisado and _a_utc(avisado) >= _a_utc(monitor["last_run_at"]):
+        return "ok", "avisado", "Hubo cambios y el aviso se entregó."
+    return "quiet", "sin cambios", "Nada que avisar en la última ejecución."
+
+
+def render_monitores(monitores: list[dict[str, Any]], estados: dict[int, str]) -> None:
+    filas = []
+    for m in monitores:
+        clase, etiqueta, texto = resultado_monitor(m, estados)
+        ultima = "—"
+        if m["last_run_at"]:
+            hace = _segundos_desde(m["last_run_at"])
+            ultima = "hace unos segundos" if hace < 60 else f"hace {_lapso(hace)}"
+            if m["last_scan_id"] is not None:
+                ultima += f"<small>escaneo #{int(m['last_scan_id'])}</small>"
+        base = (
+            f"<small>compara con el escaneo #{int(m['baseline_scan_id'])}</small>"
+            if m["baseline_scan_id"] is not None
+            else "<small>sin escaneo previo: el primero será la referencia</small>"
+        )
+        pausa = '<span class="atl-mon-st atl-mon-paused-tag">en pausa</span>' if not m["active"] else ""
+        firma = "<small>firmado (HMAC)</small>" if m["signed"] else "<small>sin firma</small>"
+        filas.append(
+            f'<tr class="{"" if m["active"] else "atl-mon-paused"}">'
+            f'<td class="atl-mon-dom">{escape(str(m["domain"]))}</td>'
+            f'<td class="atl-mon-nw">{_cada(int(m["interval_hours"]))}</td>'
+            f'<td class="atl-mon-nw">{pausa or escape(_proximo_turno(m))}</td>'
+            f'<td class="atl-mon-nw">{ultima}</td>'
+            f'<td class="atl-mon-res"><span class="atl-mon-st atl-mon-{clase}">{etiqueta}</span>'
+            f"{escape(texto)}{base}</td>"
+            f"<td>{escape(str(m['webhook']))}{firma}</td>"
+            "</tr>"
+        )
+    _html(
+        '<div class="atl-mon-wrap"><table class="atl-mon"><thead><tr>'
+        "<th>Dominio</th><th>Cada</th><th>Próximo turno</th><th>Última ejecución</th>"
+        "<th>Resultado</th><th>Avisos a</th></tr></thead><tbody>"
+        + "".join(filas)
+        + "</tbody></table></div>"
+    )
+
+
+@st.fragment(run_every=_VIGILANCIA_CADA)
+def lista_monitores() -> None:
+    """La tabla de monitores, que se refresca sola: los turnos corren en la
+    API, y así se ve un escaneo programado empezar y terminar."""
+    monitores = api_get("/monitors")
+    if monitores is None:
+        return
+    _seccion("Monitores", f"{len(monitores)}")
+    if not monitores:
+        st.info("Ningún dominio vigilado todavía. Crea el primer monitor más abajo.")
+        return
+    estados = {int(s["id"]): str(s["status"]) for s in api_get("/scans") or []}
+    render_monitores(monitores, estados)
+
+
+def gestionar_monitores() -> None:
+    """Pausar, reanudar o borrar. Borrar pide confirmación en la propia
+    página: el visor no muestra `confirm()` y un clic suelto no debe bastar."""
+    monitores = api_get("/monitors") or []
+    if not monitores:
+        return
+    opciones = {f"#{m['id']} — {m['domain']}": m for m in monitores}
+    col_sel, col_pausa, col_borrar = st.columns([3, 1, 1], vertical_alignment="bottom")
+    with col_sel:
+        elegido = opciones[st.selectbox("Gestionar", list(opciones), key="mon_sel")]
+    with col_pausa:
+        accion = "Pausar" if elegido["active"] else "Reanudar"
+        if st.button(accion, key="mon_pausa", width="stretch"):
+            resp = _api_send("PATCH", f"/monitors/{elegido['id']}", {"active": not elegido["active"]})
+            if resp is not None and resp.status_code == 200:
+                estado = "en pausa" if elegido["active"] else "reanudada"
+                st.toast(f"Vigilancia de {elegido['domain']} {estado}.")
+                st.rerun()
+    with col_borrar:
+        if st.button("Borrar…", key="mon_borrar", width="stretch"):
+            st.session_state["mon_confirmar"] = elegido["id"]
+    if st.session_state.get("mon_confirmar") == elegido["id"]:
+        st.warning(
+            f"Se dejará de vigilar {elegido['domain']}. Sus escaneos se conservan; "
+            "solo se borra el monitor."
+        )
+        c1, c2, _ = st.columns([1, 1, 3])
+        if c1.button("Borrar monitor", type="primary", key="mon_borrar_ok"):
+            st.session_state.pop("mon_confirmar", None)
+            resp = _api_send("DELETE", f"/monitors/{elegido['id']}")
+            if resp is not None and resp.status_code == 204:
+                st.toast(f"Monitor de {elegido['domain']} borrado. Sus escaneos se conservan.")
+                st.rerun()
+        if c2.button("Cancelar", key="mon_borrar_no"):
+            st.session_state.pop("mon_confirmar", None)
+            st.rerun()
+
+
+def formulario_monitor() -> None:
+    _seccion("Vigilar un dominio")
+    _html(
+        '<p class="atl-note">Repite el escaneo con la frecuencia elegida y lo compara, sin IA, '
+        "con el último escaneo avisado. Si aparecen, desaparecen o cambian activos, o si el "
+        "escaneo falla, envía un aviso a la URL. La vigilancia corre en la API: sigue aunque "
+        "cierres el panel.</p>"
+    )
+    # Claves con un contador que sube tras cada alta: borrar el valor del
+    # estado no vacía el campo (el navegador conserva el suyo); con una clave
+    # nueva, Streamlit lo pinta como un campo nuevo, vacío.
+    n = st.session_state.setdefault("mon_form", 0)
+    with st.form("nuevo_monitor"):
+        col_dom, col_cada = st.columns([3, 2])
+        dominio = col_dom.text_input("Dominio", placeholder="ejemplo.com", key=f"mon_dominio_{n}")
+        cada = col_cada.selectbox("Frecuencia", list(_INTERVALOS), index=3, key=f"mon_cada_{n}")
+        webhook = st.text_input(
+            "URL del webhook (https)", placeholder="https://hooks.ejemplo.com/atalaya",
+            key=f"mon_webhook_{n}",
+        )
+        col_firma, col_secreto = st.columns([2, 3], vertical_alignment="bottom")
+        firmar = col_firma.checkbox("Firmar los avisos (HMAC)", value=True, key=f"mon_firmar_{n}")
+        propio = col_secreto.text_input(
+            "Secreto propio (opcional)", type="password", key=f"mon_secreto_{n}",
+            placeholder="vacío: se genera uno",
+            help="Con firma, cada aviso lleva X-Atalaya-Signature (HMAC-SHA256 del cuerpo) "
+            "y el receptor puede comprobar que viene de Atalaya. Mínimo 16 caracteres.",
+        )
+        crear = st.form_submit_button("Vigilar", type="primary")
+
+    # El resultado del alta se guarda y se pinta tras recargar: así la lista de
+    # arriba ya incluye el monitor nuevo (se pintó antes de procesar el
+    # formulario) y el formulario vuelve vacío.
+    aviso = st.session_state.pop("mon_creado", None)
+    if aviso is not None:
+        st.success(aviso["texto"])
+        if aviso["secreto"]:
+            _html(
+                '<p class="atl-note">Secreto generado para firmar los avisos. Cópialo ahora en '
+                "el receptor: la API no lo vuelve a mostrar.</p>"
+            )
+            st.code(aviso["secreto"], language=None)
+
+    if not crear:
+        return
+    if not dominio.strip() or not webhook.strip():
+        st.warning("Indica el dominio y la URL del webhook.")
+        return
+    if firmar and propio and len(propio) < 16:
+        st.warning("El secreto propio debe tener al menos 16 caracteres.")
+        return
+    secreto = (propio or secrets.token_urlsafe(24)) if firmar else None
+    cuerpo: dict[str, Any] = {"domain": dominio.strip(), "webhook_url": webhook.strip(),
+                              "interval_hours": _INTERVALOS[cada]}
+    if secreto:
+        cuerpo["secret"] = secreto
+    resp = _api_send("POST", "/monitors", cuerpo)
+    if resp is None:
+        return
+    if resp.status_code != 201:
+        # 400 (dominio o webhook no válidos, SSRF), 403 (allowlist), 409 (ya
+        # vigilado): la API ya explica el motivo en español.
+        st.error(_detail(resp))
+        return
+    m = resp.json()
+    base = (f"el escaneo #{m['baseline_scan_id']}" if m["baseline_scan_id"] is not None
+            else "nada: ese primer escaneo quedará como referencia")
+    st.session_state["mon_creado"] = {
+        "texto": f"Vigilando {m['domain']} ({_cada(m['interval_hours']).lower()}). La primera "
+        f"ejecución será en el próximo minuto y comparará con {base}.",
+        # Solo el generado: uno propio ya lo tiene quien lo escribió.
+        "secreto": secreto if firmar and not propio else None,
+    }
+    st.session_state["mon_form"] = n + 1
+    st.rerun()
+
+
 # ─── Página ─────────────────────────────────────────────────────────────────
 
 _html(
@@ -1928,9 +2208,10 @@ with st.sidebar:
 # rellena desde la pestaña si la lista llega vacía.
 hueco_bienvenida = st.container()
 
-tab_nuevo, tab_escaneos, tab_preguntar = st.tabs(
-    ["Nuevo escaneo", "Escaneos", "Preguntar"]
+tab_nuevo, tab_escaneos, tab_vigilancia, tab_preguntar = st.tabs(
+    ["Nuevo escaneo", "Escaneos", "Vigilancia", "Preguntar"]
 )
+
 
 with tab_nuevo:
     _seccion("Lanzar un escaneo")
@@ -2021,6 +2302,11 @@ with tab_escaneos:
                 and s["status"] == "completed"
             ]
             render_scan_detail(detalle, otros)
+
+with tab_vigilancia:
+    lista_monitores()
+    gestionar_monitores()
+    formulario_monitor()
 
 with tab_preguntar:
     _seccion("Consulta en lenguaje natural")
