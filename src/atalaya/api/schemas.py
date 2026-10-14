@@ -12,8 +12,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from atalaya.core.models import FindingSeverity, ScanStatus
+from atalaya.core.models import FindingSeverity, Monitor, ScanStatus
+from atalaya.core.monitor_runner import MAX_INTERVAL_HOURS, MIN_INTERVAL_HOURS
 from atalaya.core.scoring import compute_risk_score
+from atalaya.core.webhooks import mask_webhook_url
 from atalaya.onboarding.checks import CheckResult, Status
 
 
@@ -215,3 +217,84 @@ class ConfigStatusOut(BaseModel):
     @property
     def warnings(self) -> int:
         return sum(check.status is Status.WARN for check in self.checks)
+
+
+class MonitorRequest(BaseModel):
+    """Cuerpo de `POST /monitors`: qué dominio vigilar, cada cuánto y a dónde avisar."""
+
+    domain: str = Field(description="Dominio a vigilar, p. ej. ejemplo.com")
+    webhook_url: str = Field(
+        description=(
+            "URL https que recibe cada aviso (POST con JSON). Solo direcciones públicas: "
+            "una URL hacia la red interna se rechaza (SSRF)."
+        )
+    )
+    interval_hours: int = Field(
+        default=24,
+        ge=MIN_INTERVAL_HOURS,
+        le=MAX_INTERVAL_HOURS,
+        description="Horas entre escaneos. Mínimo 1: un escaneo es intrusivo para el objetivo.",
+    )
+    secret: str | None = Field(
+        default=None,
+        min_length=16,
+        max_length=256,
+        description=(
+            "Opcional. Con él, cada aviso lleva `X-Atalaya-Signature: sha256=<HMAC-SHA256 del "
+            "cuerpo>` para que el receptor compruebe que viene de Atalaya. No se devuelve nunca."
+        ),
+    )
+
+
+class MonitorUpdate(BaseModel):
+    """Cuerpo de `PATCH /monitors/{id}`: pausar o reanudar la vigilancia."""
+
+    active: bool = Field(
+        description=(
+            "false la pausa; true la reanuda (si ya le tocaba, corre en el próximo minuto)."
+        )
+    )
+
+
+class MonitorOut(BaseModel):
+    """Un monitor tal como lo ve un cliente: sin la URL completa ni el secreto.
+
+    No se construye con `from_attributes` desde la fila: `webhook_url` puede
+    llevar un token en la ruta (Slack, Discord) y `webhook_secret` es la clave
+    de la firma. Se exponen enmascarada y como «firmado sí/no», con el mismo
+    criterio que `GET /config/status`: estado, nunca valores.
+    """
+
+    id: int
+    domain: str
+    interval_hours: int
+    webhook: str = Field(description="Destino del aviso, enmascarado: `https://host/…`")
+    signed: bool = Field(description="Si los avisos van firmados con HMAC")
+    active: bool
+    created_at: datetime
+    next_run_at: datetime
+    last_run_at: datetime | None
+    last_scan_id: int | None
+    baseline_scan_id: int | None = Field(
+        description="Escaneo contra el que se compara el siguiente (avanza al avisar)"
+    )
+    last_notified_at: datetime | None
+    last_error: str | None
+
+    @classmethod
+    def from_monitor(cls, monitor: Monitor) -> MonitorOut:
+        return cls(
+            id=monitor.id,
+            domain=monitor.domain,
+            interval_hours=monitor.interval_hours,
+            webhook=mask_webhook_url(monitor.webhook_url),
+            signed=bool(monitor.webhook_secret),
+            active=monitor.active,
+            created_at=monitor.created_at,
+            next_run_at=monitor.next_run_at,
+            last_run_at=monitor.last_run_at,
+            last_scan_id=monitor.last_scan_id,
+            baseline_scan_id=monitor.baseline_scan_id,
+            last_notified_at=monitor.last_notified_at,
+            last_error=monitor.last_error,
+        )

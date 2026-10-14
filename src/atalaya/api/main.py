@@ -7,19 +7,26 @@ esqueletos; cada fase posterior los va rellenando.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from atalaya import __version__
-from atalaya.api.routes import assets, config, findings, scans
+from atalaya.api.routes import assets, config, findings, monitors, scans
 from atalaya.api.security import require_api_key
 from atalaya.config import settings
 from atalaya.core.database import SessionLocal
-from atalaya.core.exceptions import AIProviderError, InvalidTargetError, UnauthorizedTargetError
+from atalaya.core.exceptions import (
+    AIProviderError,
+    InvalidTargetError,
+    InvalidWebhookError,
+    UnauthorizedTargetError,
+)
+from atalaya.core.monitor_runner import monitor_loop
 from atalaya.core.scan_runner import fail_interrupted_scans
 
 logger = logging.getLogger(__name__)
@@ -48,13 +55,19 @@ _configure_logging()
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Al arrancar, cierra como fallidos los escaneos que una parada dejó a medias.
+    """Al arrancar, cierra como fallidos los escaneos que una parada dejó a
+    medias y lanza el bucle de la vigilancia programada; al parar, lo cancela.
 
     Un escaneo corre en segundo plano dentro de este proceso: si se detiene
     (reinicio, despliegue), la tarea muere y el escaneo quedaría en `running`
     para siempre. Un fallo aquí (base de datos aún sin migrar o caída) se
     registra y no impide arrancar: la API debe poder responder para que se
     vea qué pasa (`/health`, `/config/status`).
+
+    El bucle de vigilancia (`core/monitor_runner.py`) se lanza después, para
+    que no ejecute un monitor antes de cerrar los escaneos interrumpidos. Si
+    la API se para a mitad de un escaneo programado, ese escaneo es uno más de
+    los que el siguiente arranque cierra como fallido.
     """
     try:
         async with SessionLocal() as session:
@@ -68,7 +81,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning(
                 "%d escaneo(s) en curso al detenerse la API pasan a fallidos", interrupted
             )
-    yield
+    vigilancia = asyncio.create_task(monitor_loop(SessionLocal), name="vigilancia")
+    try:
+        yield
+    finally:
+        vigilancia.cancel()
+        with suppress(asyncio.CancelledError):
+            await vigilancia
 
 
 app = FastAPI(
@@ -89,10 +108,16 @@ app.include_router(scans.router, dependencies=_auth)
 app.include_router(assets.router, dependencies=_auth)
 app.include_router(findings.router, dependencies=_auth)
 app.include_router(config.router, dependencies=_auth)
+app.include_router(monitors.router, dependencies=_auth)
 
 
 @app.exception_handler(InvalidTargetError)
 async def _invalid_target_handler(request: Request, exc: InvalidTargetError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(InvalidWebhookError)
+async def _invalid_webhook_handler(request: Request, exc: InvalidWebhookError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 

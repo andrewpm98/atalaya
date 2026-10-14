@@ -1,6 +1,7 @@
-"""Modelos ORM: Scan, Asset, Finding.
+"""Modelos ORM: Scan, Asset, Finding y Monitor.
 
-Relaciones: ``Scan 1─N Asset``, ``Asset 1─N Finding``. Los campos de `Asset`
+Relaciones: ``Scan 1─N Asset``, ``Asset 1─N Finding``. `Monitor` (vigilancia
+programada) solo referencia escaneos por id. Los campos de `Asset`
 reflejan los de `discovery.models.SubdomainRecord` para que persistir un
 resultado de descubrimiento sea una copia directa de campos, no una
 reinterpretación (ver `core/persistence.py`).
@@ -155,3 +156,50 @@ class Finding(Base):
     )
 
     asset: Mapped[Asset] = relationship(back_populates="findings")
+
+
+class Monitor(Base):
+    """Vigilancia programada de un dominio: un escaneo cada `interval_hours` y
+    un aviso por webhook cuando algo cambia (`core/monitor_runner.py`).
+
+    `domain` es único: dos monitores del mismo dominio lo escanearían dos
+    veces por intervalo, más carga sobre el objetivo sin ninguna información
+    nueva (restricción de seguridad #5).
+
+    Dos referencias a escaneos, con papeles distintos:
+
+    - `last_scan_id`: el último que lanzó este monitor, haya ido bien o mal.
+    - `baseline_scan_id`: contra el que se compara el siguiente. Solo avanza
+      cuando el aviso se entrega o no había nada que avisar; si el webhook
+      falla, la siguiente ejecución vuelve a comparar contra el mismo y el
+      cambio se avisa entonces. Comparando siempre con el escaneo anterior,
+      un aviso perdido no volvería a salir nunca.
+
+    `webhook_url` y `webhook_secret` son secretos (Slack y Discord llevan el
+    token en la ruta de la URL): la API nunca los devuelve enteros.
+    """
+
+    __tablename__ = "monitors"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    domain: Mapped[str] = mapped_column(unique=True)
+    interval_hours: Mapped[int] = mapped_column()
+    webhook_url: Mapped[str] = mapped_column(Text)
+    #: Clave del HMAC de cada aviso (`X-Atalaya-Signature`); `None` = sin firma.
+    webhook_secret: Mapped[str | None] = mapped_column(Text, default=None)
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), default=lambda: datetime.now(UTC)
+    )
+    next_run_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
+    last_scan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scans.id", ondelete="SET NULL"), default=None
+    )
+    baseline_scan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scans.id", ondelete="SET NULL"), default=None
+    )
+    last_notified_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
+    #: Problema de la última ejecución (escaneo fallido, aviso no entregado),
+    #: o `None` si fue bien.
+    last_error: Mapped[str | None] = mapped_column(Text, default=None)

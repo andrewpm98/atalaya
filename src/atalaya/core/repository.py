@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from atalaya.core.models import Asset, Finding, FindingSeverity, Scan, ScanStatus
+from atalaya.core.models import Asset, Finding, FindingSeverity, Monitor, Scan, ScanStatus
 
 
 async def get_scan(session: AsyncSession, scan_id: int) -> Scan | None:
@@ -116,6 +116,36 @@ async def list_triaged_findings(
         .options(selectinload(Finding.asset))
     )
     return list((await session.execute(stmt)).scalars().all())
+
+
+async def get_latest_completed_scan_id(session: AsyncSession, domain: str) -> int | None:
+    """Id del escaneo completado más reciente de `domain`, sin cargarlo.
+
+    Línea base inicial de un monitor nuevo (`POST /monitors`): solo hace
+    falta el id, y `get_latest_scan()` traería todos sus activos y hallazgos.
+    """
+    stmt = (
+        select(Scan.id)
+        .where(Scan.domain == domain, Scan.status == ScanStatus.COMPLETED)
+        .order_by(Scan.started_at.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def list_monitors(session: AsyncSession) -> list[Monitor]:
+    """Lista los monitores de vigilancia programada, por dominio."""
+    stmt = select(Monitor).order_by(Monitor.domain)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def get_monitor(session: AsyncSession, monitor_id: int) -> Monitor | None:
+    return await session.get(Monitor, monitor_id)
+
+
+async def get_monitor_by_domain(session: AsyncSession, domain: str) -> Monitor | None:
+    stmt = select(Monitor).where(Monitor.domain == domain)
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 @dataclass
