@@ -52,16 +52,25 @@ orquesta el resto de módulos. Endpoints principales:
   dashboard: las comprobaciones de `atalaya doctor` que no salen a la red
   (§2.9, §10.5). Estado y texto por comprobación, nunca valores. Solo
   lectura: configurar es cosa de `atalaya init`.
+- `POST/GET /monitors`, `GET/PATCH/DELETE /monitors/{id}` ✅ — vigilancia
+  programada: un escaneo del dominio cada `interval_hours` (mínimo 1) y un
+  aviso por **webhook** cuando aparecen, desaparecen o cambian activos, o
+  cuando el escaneo falla (§12). Al crear: dominio autorizado (400/403), un
+  monitor por dominio (409) y webhook `https` hacia una dirección pública
+  (400, protección contra SSRF). La respuesta nunca lleva la URL completa ni
+  el secreto de la firma: `webhook` sale enmascarado y `signed` dice si hay
+  firma. `PATCH` pausa o reanuda (`active`).
 
 `api/schemas.py` define la frontera Pydantic entre las tablas y la respuesta
-pública; `api/main.py` traduce `InvalidTargetError`/`UnauthorizedTargetError`
-a 400/403 y `AIProviderError` a 502 vía `exception_handler`, en vez de que
+pública; `api/main.py` traduce `InvalidTargetError`/`InvalidWebhookError`/
+`UnauthorizedTargetError` a 400/400/403 y `AIProviderError` a 502 vía
+`exception_handler`, en vez de que
 cada ruta gestione sus propios códigos de error. El triaje y el informe no
 llegan a ese 502 porque degradan antes (ver 2.4 y 2.5).
 
 **Autenticación opcional por `X-API-Key`** (`api/security.py`). Con `API_KEY`
 vacía (por defecto) no se exige nada y la API se comporta como antes. Con
-valor, `require_api_key()` se aplica a los cuatro routers y a `/`: sin la
+valor, `require_api_key()` se aplica a los cinco routers y a `/`: sin la
 cabecera, o con una clave distinta, 401 con `WWW-Authenticate: X-API-Key`,
 antes de ejecutar la ruta (un `POST /scans` rechazado no llega a tocar la red).
 Se deja fuera `/health`, que usan el healthcheck de Docker y la sonda del
@@ -118,6 +127,10 @@ Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
   como texto libre —sin enum de BD, así que un estado nuevo como `wildcard`
   no requiere migración—, puertos abiertos).
 - **Finding** — hallazgo (tipo, evidencia, severidad, remediación, `asset_id`).
+- **Monitor** — vigilancia programada de un dominio (único): intervalo,
+  webhook y su secreto, `next_run_at`, el último escaneo que lanzó y la
+  **línea base** contra la que compara el siguiente (§12). Solo referencia
+  escaneos por id (`ON DELETE SET NULL`).
 
 Las fechas se guardan como UTC *naive* (`TIMESTAMP WITHOUT TIME ZONE`) a
 través de `UtcDateTime`, que convierte al escribir: asyncpg rechaza un
@@ -134,7 +147,9 @@ resultados de descubrimiento a estas filas: `save_subdomain_scan()` (un
 `Finding`, con severidad `unknown` hasta el triaje).
 
 `core/repository.py` es la contraparte de lectura: `get_scan`, `list_scans`,
-`get_latest_scan`, `list_assets`, `list_findings` y `diff_scans()` (compara
+`get_latest_scan`, `list_assets`, `list_findings`, las de los monitores
+(`list_monitors`, `get_monitor`, `get_monitor_by_domain`,
+`get_latest_completed_scan_id`) y `diff_scans()` (compara
 dos escaneos del mismo dominio — la razón de ser de persistir escaneos en el
 tiempo). Además de los hostnames nuevos y desaparecidos, recorre los comunes
 y devuelve en `cambiados` los que cambiaron de estado, de puertos abiertos o
@@ -402,6 +417,9 @@ dominio
    │
    ├──▶ [Dashboard]  visualización, consulta NL, risk_score, «Comparar con» (diff)
    └──▶ [Informes]   PDF con portada + risk_score + resumen ejecutivo IA
+
+[Vigilancia]  cada monitor, cada N horas: mismo escaneo → diff SIN IA contra
+              su línea base → si cambia algo (o falla), POST al webhook (§12)
 ```
 
 ## 4. Decisiones de diseño
@@ -445,6 +463,13 @@ dominio
   pregunta, nunca a una parecida (mismo criterio que `replay`). No se agrupa
   por tipo de hallazgo, que ahorraría más, porque el modelo dejaría de ver el
   host — ver 2.4.
+- **Vigilancia: el aviso no se pierde y la URL no es un punto de entrada.**
+  La línea base de un monitor solo avanza cuando el aviso se entrega (un
+  webhook caído no hace perder el cambio); el diff va sin IA (no gasta
+  crédito); y el webhook, que es una petición del servidor a donde diga el
+  usuario, pasa la misma regla que los objetivos de escaneo: solo
+  direcciones enrutables, validadas al crear y al enviar, conectando a la IP
+  validada — ver §12.
 - **`st.html()`, no `st.markdown(unsafe_allow_html=True)`**, para CSS
   grande en el dashboard: el parser de Markdown de Streamlit no trata de
   forma fiable un bloque `<style>` grande con líneas en blanco dentro — bug
@@ -455,7 +480,7 @@ dominio
 | Requisito de la práctica | Dónde se resuelve                          |
 |--------------------------|--------------------------------------------|
 | Base de datos            | `core/models.py` + `core/persistence.py` (Paso 3 ✅) |
-| API / webhook            | `api/` (propia, Paso 4 ✅) + `discovery/`/`ai/` (consumo de crt.sh, Shodan, Anthropic/Gemini) |
+| API / webhook            | `api/` (propia, Paso 4 ✅) + `discovery/`/`ai/` (consumo de crt.sh, Shodan, Anthropic/Gemini) + avisos por webhook de la vigilancia (`core/webhooks.py`, §12) |
 | Aplicación web           | `dashboard/app.py`                         |
 | GitHub con historial     | Commits por fase                           |
 | Reporte con portada      | `reporting/generator.py`, `GET /scans/{id}/report` |
@@ -505,8 +530,9 @@ obligatorios:
     de la configuración en el dashboard (§2.6).
     *(`memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.)*
 15. **Escaneo en segundo plano y monitorización** 🚧 — `POST /scans` en
-    segundo plano con su seguimiento en el dashboard (§2.1, §2.6, §11).
-    Pendiente: monitorización programada con aviso por webhook.
+    segundo plano con su seguimiento en el dashboard (§2.1, §2.6, §11) y
+    vigilancia programada con aviso por webhook (§2.1, §12). Pendiente: el
+    panel de vigilancia en el dashboard y el cierre.
     *(`memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`, en curso.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
@@ -954,3 +980,106 @@ igual.
 **Límite.** El trabajo vive en el proceso de la API. Con varios procesos
 (`uvicorn --workers N`) sobre la misma base de datos, uno que arranca cerraría
 como fallidos los escaneos que otro está ejecutando. Se despliega con uno.
+
+## 12. Vigilancia programada
+
+```
+POST /monitors {domain, webhook_url, interval_hours, secret?}
+   │  ensure_authorized()        ── 400/403 · ya vigilado → 409
+   │  validate_webhook_url()     ── https, sin credenciales, todas sus IPs
+   │                                públicas → si no, 400 (y auditoría)
+   │  línea base = último escaneo completado del dominio (o ninguna)
+   └─ INSERT monitors (next_run_at = ahora) → 201
+
+lifespan de la API ── monitor_loop(): cada 60 s          core/monitor_runner.py
+   └─ run_due_monitors(): activos con next_run_at <= ahora, DE UNO EN UNO
+        ├─ reclamar: UPDATE … SET next_run_at = ahora + intervalo
+        │            WHERE id = … AND next_run_at = <leído>   (solo uno gana)
+        ├─ ensure_authorized() otra vez ── no → aviso «escaneo_fallido», sin escanear
+        ├─ Scan(running) → run_scan()   (el mismo de POST /scans)
+        └─ comparar con la línea base, SIN IA:
+             escaneo fallido                     → «escaneo_fallido»
+             sin línea base                      → este escaneo es la base
+             0 activos frente a una base con     → «escaneo_fallido» (fuente caída,
+               activos                              no «todo desaparecido»)
+             diff con nuevos/desaparecidos/      → «cambios»; la base avanza
+               cambiados                            SOLO si el aviso se entregó
+             sin cambios                         → la base avanza, sin aviso
+
+send_webhook()                                              core/webhooks.py
+   resolver otra vez → todas públicas → POST a la IP validada
+   (Host y SNI = nombre; certificado verificado contra el nombre)
+   sin redirecciones · cliente nuevo por intento · X-Atalaya-Event
+   · X-Atalaya-Signature: sha256=HMAC(secreto, cuerpo) si hay secreto
+   · auditoría de cada intento con la URL enmascarada
+```
+
+**Por qué existe.** Un ASM se define por vigilar en el tiempo; hasta aquí los
+escaneos se lanzaban a mano. El diff (`cambiados`, §2.3) ya decía qué cambió;
+esto es el disparador. Reutiliza `run_scan` (§11), así que un escaneo
+programado es exactamente uno lanzado a mano, con las mismas restricciones.
+
+**La línea base.** Cada monitor guarda el escaneo contra el que compara el
+siguiente, y solo la avanza si el aviso llegó o no había nada que avisar.
+Comparando siempre con el escaneo anterior, un aviso que falla (receptor
+caído, 503) se perdería: la siguiente ejecución compararía contra un escaneo
+que ya incluye el cambio. Así, el aviso fallido se repite acumulado. No hay
+reintentos inmediatos: el siguiente intento es la siguiente ejecución.
+
+**Falsas alarmas.** Con crt.sh caído, el escaneo termina «completado» (es
+degradación controlada) pero sin ningún subdominio, y el diff daría todo el
+dominio por desaparecido. crt.sh es histórico, así que un dominio real nunca
+vuelve con cero: si el escaneo trae 0 activos y la base tenía alguno, se
+avisa como escaneo fallido y la base no se mueve. No sirve mirar si hay
+incidencias: con clave de Shodan, su 403 aparece en todo escaneo (comprobado
+en la prueba real). El aviso de cambios incluye las incidencias del escaneo,
+para que el receptor sepa si un «desaparecido» viene de un escaneo degradado.
+
+**También se avisan los fallos** (`escaneo_fallido`): escaneo fallido, fuente
+caída o dominio que ya no está en la allowlist. En vigilancia, el peor fallo
+es el silencioso: una semana sin avisos se lee como «nada ha cambiado».
+
+**SSRF.** El webhook es una petición de la API a una URL que da el usuario.
+Mismo criterio que la restricción #2 para los objetivos: solo direcciones
+enrutables (`classify_ip`). Basta una dirección interna entre las del nombre
+para rechazarlo. Se valida al crear y otra vez al enviar, y al enviar se
+conecta a la IP validada en vez de dejar que httpx resuelva el nombre otra
+vez: entre dos resoluciones, un DNS con TTL 0 podría cambiar la respuesta a
+`127.0.0.1` (*DNS rebinding*). El nombre va en `Host` y en el SNI, y el
+certificado se verifica contra él (comprobado contra un servidor real: con un
+nombre que el certificado no cubre, la conexión se rechaza). Si una dirección
+no conecta, se prueba la siguiente de las validadas (sin esto, un host con
+IPv6 en primer lugar no recibiría avisos desde una máquina sin IPv6); una vez
+conectado, no se reintenta, porque el aviso pudo llegar. No se siguen
+redirecciones. El mensaje de rechazo dice el tipo de dirección, no la IP.
+
+**Secretos.** Las URL de Slack o Discord llevan el token en la ruta: la API
+devuelve `https://host/…`, la auditoría registra lo mismo, y de un error de
+httpx solo se guarda el tipo (su texto lleva la URL). El secreto de la firma
+no se devuelve nunca. Ambos se guardan en claro en la base de datos (los
+necesita para enviar y firmar), como las claves del `.env`. Solo `https`: el
+aviso es un mapa de la superficie de exposición.
+
+**Firma.** Con `secret` (mínimo 16 caracteres), cada aviso lleva
+`X-Atalaya-Signature: sha256=<HMAC-SHA256 del cuerpo>`, el esquema de los
+webhooks de GitHub. El cuerpo incluye `sent_at`, así que la firma cubre la
+fecha y un receptor puede rechazar un aviso antiguo reenviado.
+
+**Intrusividad.** Intervalo mínimo de 1 hora (restricción #5): un escaneo hace
+cientos de conexiones al objetivo, y repetirlo cada pocos minutos sería un
+barrido continuo. Un monitor por dominio, por la misma razón. Los monitores
+pendientes se ejecutan de uno en uno (crt.sh limita a quien le pide mucho a la
+vez), y tras una parada larga el siguiente turno se calcula desde ahora: un
+monitor horario se ejecuta una vez, no veinticuatro seguidas.
+
+**Varios procesos.** El bucle vive en el proceso de la API. Con varios, cada
+uno tendría el suyo, pero cada ejecución se reclama con un `UPDATE`
+condicional sobre el `next_run_at` leído y solo uno lo gana (probado con dos
+revisiones simultáneas). El límite de §11 (el arranque de un proceso cierra
+los escaneos en curso de otro) sigue en pie.
+
+**Límites.** El diff no distingue un cambio real de una fluctuación de DNS o
+un timeout: un dominio grande puede avisar en casi cada ejecución. Sin
+reintento inmediato de un aviso fallido. Los escaneos programados no se
+distinguen de los manuales en `GET /scans` (el monitor guarda su último
+escaneo). Sin panel en el dashboard todavía.

@@ -4,11 +4,12 @@
 **Asignatura:** Práctica 1 — Máster en Ciberseguridad e Inteligencia Artificial
 **Fase documentada:** Ampliación 14, iniciada el 13/10/2026. Prepara la
 defensa (dossier y guía de la herramienta), saca el escaneo de la petición
-HTTP y, en el siguiente bloque, añadirá la vigilancia programada.
+HTTP y añade la vigilancia programada.
 **Estado:** En curso. Bloques 2 y 3 completos y subidos a `origin/main` el
-13/10/2026: 605 tests, `ruff` y `mypy` a cero. Netlas (bloque 3b), evaluada y
-descartada el 14/10/2026. Pendientes la monitorización (bloque 4) y el cierre
-(bloque 5); ver §8.
+13/10/2026. Netlas (bloque 3b), evaluada y descartada el 14/10/2026. Bloque 4
+(vigilancia) completo por API el 14/10/2026: 669 tests, `ruff` y `mypy` a
+cero. Pendientes el panel de vigilancia en el dashboard y el cierre (bloque
+5); ver §9.
 
 ---
 
@@ -21,6 +22,12 @@ descartada el 14/10/2026. Pendientes la monitorización (bloque 4) y el cierre
    escaneo corre aparte; el dashboard lo sigue sin bloquearse.
 3. **Un defecto anterior**, encontrado al prototipar: en Windows, cada
    petición del dashboard a la API tardaba 2 segundos.
+4. **Netlas, medida y descartada** como segunda fuente de subdominios: más
+   ruido que activos con el plan gratuito.
+5. **Vigilancia programada.** Un monitor repite el escaneo de un dominio cada
+   cierto tiempo y avisa por webhook cuando cambia la superficie o cuando el
+   escaneo falla. Es la carencia más grande que tenía la herramienta como
+   ASM, y cumple de forma literal el requisito «API o webhook».
 
 ---
 
@@ -165,14 +172,85 @@ medición queda como respuesta a «¿por qué solo crt.sh?».
 
 ---
 
-## 6. Verificación
+## 6. Bloque 4: la vigilancia programada (`7de68a2`, `c8e03b1`)
 
-**Tests:** de 583 a 605 (+22): 17 del escaneo en segundo plano (202, 400 y
+**El problema.** Un ASM se define por vigilar en el tiempo, y Atalaya solo
+escaneaba cuando alguien lo pedía. El diff con `cambiados` ya decía qué había
+cambiado entre dos escaneos; faltaba el disparador.
+
+**El diseño acordado** (12/10/2026): una tabla `monitors`, un bucle en el
+arranque de la API que lanza los escaneos que tocan con el mismo `run_scan`
+de `POST /scans`, un diff **sin IA** (no gasta crédito ni depende del
+proveedor) y un `POST` al webhook si hay nuevos, desaparecidos o cambiados.
+Autorización al crear y en cada ejecución, protección contra SSRF, mínimo de
+una hora entre escaneos y auditoría de cada aviso.
+
+**Tres decisiones del usuario** sobre lo que el diseño no cubría: avisar
+también de los fallos (evento `escaneo_fallido`, porque en vigilancia el peor
+fallo es el silencioso), firmar los avisos con HMAC si el monitor tiene
+secreto, y hacer la API primero y el panel del dashboard después, con maqueta.
+
+**Lo que salió al pensarlo con datos:**
+
+- **Un aviso perdido no debe perder el cambio.** Si cada ejecución comparase
+  con la anterior, un webhook caído haría que el cambio no se avisara nunca:
+  la siguiente compararía contra un escaneo que ya lo incluye. Cada monitor
+  guarda una **línea base** que solo avanza cuando el aviso llega.
+- **crt.sh caído no es «todo desapareció».** Una fuente caída deja un escaneo
+  «completado» sin subdominios, y el diff daría el dominio entero por
+  desaparecido. Como crt.sh es histórico, un dominio real nunca vuelve con
+  cero: ese caso se avisa como fallo de la fuente. No servía mirar si el
+  escaneo tenía incidencias: con clave de Shodan, su 403 aparece en todos
+  (se vio en la prueba real).
+- **El límite de varios procesos se resolvió en vez de documentarse.** Cada
+  ejecución se «reclama» actualizando su próxima hora solo si nadie lo hizo
+  antes; de dos procesos, solo uno gana.
+
+**SSRF, más allá de lo que pedía el plan.** El plan pedía resolver el host
+del webhook y rechazar direcciones internas. Eso solo no basta: si se valida
+resolviendo el nombre y luego el cliente HTTP lo resuelve otra vez, un DNS
+malicioso puede responder una IP pública la primera vez y `127.0.0.1` la
+segunda (*DNS rebinding*). Por eso, al enviar, se conecta a la IP ya validada
+y el nombre va en la cabecera `Host` y en el SNI, con el certificado
+verificado contra él. Antes de escribirlo se comprobó contra un servidor real
+que la verificación sigue funcionando: con un nombre que el certificado no
+cubre, la conexión se rechaza.
+
+**Dos trampas encontradas al comprobarlo:**
+
+- La primera prueba negativa «pasó» por la razón equivocada: httpx reutiliza
+  las conexiones por IP aunque cambie el SNI, y la segunda petición viajó por
+  la conexión de la primera, ya verificada. Con un cliente nuevo, falla como
+  debe. De ahí la regla del código: un cliente nuevo por intento.
+- Fijar la IP desactiva el *happy eyeballs* de httpx. Si el resolvedor da
+  primero una IPv6 y la máquina no tiene IPv6, el aviso no llegaría nunca.
+  Ahora se prueban las direcciones validadas en orden, pero solo si la
+  anterior no llegó a conectar (una vez conectado, repetir podría duplicar el
+  aviso). Es el mismo tipo de fallo que el de `localhost` en Windows (§4).
+
+**La URL del webhook es un secreto.** Las de Slack o Discord llevan el token
+en la ruta. La API la devuelve como `https://host/…`, el log de auditoría
+igual, y de un error de red solo se guarda el tipo (su texto lleva la URL).
+
+---
+
+## 7. Verificación
+
+**Tests:** de 583 a 669. Bloque 3, +22: 17 del escaneo en segundo plano (202, 400 y
 403 sin crear nada, fallo con motivo y sin secretos, autorización al ejecutar,
 409 en triaje, informe, comparación y preguntas, atomicidad, recuperación al
 arrancar y arranque con la base de datos caída) y 5 del dashboard (aviso en
 curso, resumen, fallo, detalle en curso y fallido, comparación solo entre
 completados). Cinco mutaciones hacen fallar los tests que las cubren.
+Bloque 4, +64: 34 del webhook (SSRF con ocho tipos de dirección interna,
+IP fijada con `Host` y SNI, revalidación al enviar, sin redirecciones, firma,
+paso a la siguiente dirección solo sin conexión, token fuera de errores y
+auditoría), 25 de los monitores (línea base, aviso repetido, fallos, 0
+activos, allowlist al ejecutar, planificación, reclamo concurrente, bucle,
+`lifespan` y rutas) y 5 del test de autenticación, que recorre las rutas
+nuevas. Seis mutaciones (avanzar la base sin entregar, quitar el guardia de
+0 activos, reclamar sin condición, no reautorizar, no fijar la IP, seguir
+redirecciones) hacen fallar cada una su test.
 
 **Pruebas reales:**
 
@@ -186,29 +264,54 @@ completados). Cinco mutaciones hacen fallar los tests que las cubren.
 | Comparar con el escaneo interrumpido | 409 «está fallido» |
 | Dashboard en Chromium con escaneos reales | Aviso en 0,2 s; el detalle pasa solo de «en curso» a completo |
 
+**Pruebas reales del bloque 4** (14/10/2026), con `scanme.nmap.org` y un
+receptor público (webhook.site). Para que hubiera un cambio que avisar, se
+alteró a mano la línea base: el puerto 80 dejó de constar como abierto.
+
+| Prueba | Resultado |
+|---|---|
+| Webhook a `https://localhost/…` y a `https://169.254.169.254/…` | 400 (`loopback`, `link_local`) y auditoría «Webhook rechazado (SSRF)» |
+| Webhook `http://` · dominio fuera de la allowlist | 400 · 403 |
+| Monitor nuevo (local, SQLite) | Ejecutado 37 s después; un solo `POST` con evento `cambios`, puerto 80 en `puertos_nuevos`, firma HMAC válida, `Host: webhook.site` |
+| Segunda ejecución sin cambios | Escaneo #3, línea base al #3, ningún aviso nuevo |
+| Log de la API | Creación y entrega auditadas con `https://webhook.site/…`; el token, 0 veces |
+| Stack Docker (PostgreSQL 16.15) | Migración aplicada al arrancar; mismo aviso, firmado; reclamo concurrente `[True, False]` |
+| `GET /config/status` en Docker (pendiente del bloque 3) | «sin .env · 29 campos desde variables de entorno», «PostgreSQL 16.15 · migraciones al día» |
+| `POST /scans` en Docker (pendiente del bloque 3) | 202 en 0,06 s; `completed` a los 11 s |
+
 ---
 
-## 7. Límites
+## 8. Límites
 
+- **Vigilancia: el diff no separa señal de ruido.** Un timeout o una
+  fluctuación de DNS sale como cambio: un dominio grande puede avisar en casi
+  cada ejecución.
+- **Un aviso fallido no se reintenta al momento**; se repite, acumulado, en la
+  siguiente ejecución.
+- **La URL del webhook y su secreto se guardan en claro** en la base de datos
+  (hacen falta para enviar y firmar), como las claves en `.env`.
+- **Sin panel de vigilancia** en el dashboard todavía; por API y `/docs`.
 - **El trabajo vive en el proceso de la API.** Con varios procesos sobre la
   misma base de datos, uno que arranca cerraría los escaneos de otro. Se
-  despliega con uno.
-- **Sin probar en el stack Docker real**, como `GET /config/status`.
+  despliega con uno. (La vigilancia no repite ejecuciones entre procesos:
+  cada una se reclama, §6.)
+- ~~**Sin probar en el stack Docker real**, como `GET /config/status`.~~
+  *Estado posterior:* ambos verificados con el stack levantado el
+  14/10/2026 (§7).
 - **El seguimiento depende de tener el panel abierto**; si se cierra, el
   escaneo termina igual y aparece en «Escaneos».
 
 ---
 
-## 8. Lo que queda de la fase
+## 9. Lo que queda de la fase
 
-1. **Bloque 4: monitorización** con escaneos programados y aviso por webhook,
-   protegido contra SSRF. Reutilizará `run_scan`.
-2. **Verificar en Docker** el escaneo en segundo plano y `/config/status`.
-3. **Cierre**: documentación, preguntas de defensa y guion de la demo.
+1. **El panel de vigilancia en el dashboard**, con maqueta aprobada antes.
+2. **Cierre**: dossier y guía al día (con la restricción #7), guion de la
+   demo recorrido en `replay` y `push`.
 
 ---
 
-## 9. Commits
+## 10. Commits
 
 | Commit | Contenido |
 |---|---|
@@ -218,11 +321,14 @@ completados). Cinco mutaciones hacen fallar los tests que las cubren.
 | `35cb462` | feat(dashboard): seguimiento del escaneo en segundo plano |
 | `2ff066c` | style(dashboard): aviso de `ruff` que entró en el anterior |
 | `1fc0e7f` | docs: el bloque 3 en CLAUDE.md, ARQUITECTURA, README y esta memoria |
-| (este) | docs: Netlas, evaluada y descartada como segunda fuente |
+| `5acc66f` | docs: Netlas, evaluada y descartada como segunda fuente |
+| `7de68a2` | feat(core): avisos por webhook protegidos contra SSRF |
+| `c8e03b1` | feat(api): vigilancia programada con aviso por webhook (`/monitors`) |
+| (este) | docs: la vigilancia en CLAUDE.md, ARQUITECTURA, README y esta memoria |
 
 ---
 
-## 10. Bloque de defensa: preguntas previsibles
+## 11. Bloque de defensa: preguntas previsibles
 
 **¿Por qué el escaneo va en segundo plano?**
 Porque dura de segundos a minutos. Dentro de la petición, la conexión quedaba
@@ -257,3 +363,47 @@ github.com tiene 38.000 nombres, pero los que miré no resolvían a ninguna
 dirección, y el plan gratuito da como mucho 200 por consulta y 2.500 al mes.
 Habría metido más ruido que activos, así que preferí dedicar el tiempo a la
 vigilancia programada.
+
+**¿La herramienta vigila sola o hay que lanzarla a mano?**
+Vigila sola. Le dices un dominio, cada cuánto y a qué dirección avisar, y
+repite el escaneo con esa frecuencia. Si aparece un subdominio, desaparece
+otro o uno que ya existía abre un puerto, manda un aviso. En la prueba real
+detectó un puerto nuevo en scanme.nmap.org y el aviso llegó en segundos.
+
+**¿Y si falla el escaneo? ¿Me entero?**
+Sí, con un aviso distinto. Una vigilancia que falla en silencio es peor que
+no tenerla: una semana sin avisos se leería como «nada ha cambiado».
+
+**¿Y si el receptor del aviso está caído?**
+El cambio no se pierde. La herramienta solo da un cambio por avisado cuando
+el aviso llega; si no, lo vuelve a mandar en la siguiente ejecución, junto con
+lo que haya cambiado entretanto.
+
+**¿No puede dar falsas alarmas?**
+La más grave sí la evita: si la fuente de subdominios se cae, el escaneo sale
+vacío y parecería que ha desaparecido todo el dominio. Eso se avisa como fallo
+de la fuente, no como cambio. Lo que no distingue es una fluctuación pequeña
+(un servidor que no respondió a tiempo) de un cambio real; por eso lo ausente
+se llama «desaparecido» y no «cerrado».
+
+**¿Usa IA para los avisos?**
+No, a propósito. El aviso dice qué cambió, que es un cálculo exacto; no
+depende de que el proveedor de IA responda ni gasta crédito. La valoración con
+IA del cambio sigue disponible desde el panel, a demanda.
+
+**Si me dejan poner una URL de aviso, ¿no puedo hacer que la herramienta ataque
+su propia red?**
+Es el riesgo principal de un webhook (SSRF) y está cubierto. Solo se admiten
+direcciones públicas y con cifrado: una URL hacia la propia máquina, la red
+interna o el servicio de metadatos de la nube se rechaza, y queda registrado.
+Se comprueba al crear el monitor y otra vez al enviar, y al enviar se conecta
+a la dirección que se comprobó, para que no se pueda cambiar entre medias.
+
+**¿Cómo sabe el receptor que el aviso viene de verdad de Atalaya?**
+Si se configura un secreto, cada aviso va firmado, como hacen GitHub o Stripe.
+El receptor recalcula la firma y descarta lo que no cuadre.
+
+**¿Cada cuánto se puede escanear?**
+Como mucho una vez por hora, y un solo monitor por dominio. Un escaneo hace
+cientos de conexiones al objetivo: repetirlo cada pocos minutos sería un
+barrido continuo, que el objetivo no distinguiría de un ataque.

@@ -29,6 +29,9 @@ consultar la superficie de exposición **en lenguaje natural**.
 5. **Informa** — genera un informe ejecutivo con portada, `risk_score` y
    resumen en lenguaje natural, en PDF, descargable desde la API y desde
    el dashboard.
+6. **Vigila** — escanea un dominio cada cierto tiempo y avisa por
+   **webhook** cuando aparecen, desaparecen o cambian activos (o cuando el
+   escaneo falla). Avisos firmados con HMAC y protegidos contra SSRF.
 
 ## Puesta en marcha
 
@@ -308,6 +311,58 @@ portada (dominio y fecha), `risk_score`, resumen ejecutivo con IA (opcional
 detalle de cada activo y hallazgo con su impacto y remediación. También se
 descarga desde la pestaña «Escaneos» del dashboard.
 
+## Uso rápido: vigilancia programada (webhook)
+
+Un **monitor** escanea un dominio cada `interval_hours` (mínimo 1) y hace un
+`POST` con JSON al webhook cuando algo cambia. La primera ejecución es en el
+minuto siguiente a crearlo, y compara con el último escaneo completado del
+dominio (si no hay ninguno, queda como referencia y no avisa). Sin IA: no
+gasta crédito.
+
+```bash
+curl -X POST http://localhost:8000/monitors \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "scanme.nmap.org", "webhook_url": "https://hooks.ejemplo.com/atalaya",
+       "interval_hours": 24, "secret": "un-secreto-de-al-menos-16-caracteres"}'
+curl http://localhost:8000/monitors          # resultado de la última ejecución de cada uno
+curl -X PATCH http://localhost:8000/monitors/1 \
+  -H "Content-Type: application/json" -d '{"active": false}'   # pausar
+curl -X DELETE http://localhost:8000/monitors/1                 # dejar de vigilar
+```
+
+Dos tipos de aviso (cabecera `X-Atalaya-Event`):
+
+- **`cambios`** — `nuevos`, `desaparecidos` y `cambiados` (puertos o
+  hallazgos de los activos que ya existían), con `summary` en una línea y las
+  incidencias del escaneo en `errors`.
+- **`escaneo_fallido`** — el escaneo falló, la fuente de subdominios no
+  devolvió nada (no se avisa como «todo desaparecido») o el dominio ya no
+  está en `SCAN_ALLOWLIST`. Una vigilancia que falla en silencio parece una
+  vigilancia sin cambios.
+
+Si el aviso no se entrega, el cambio se vuelve a avisar en la siguiente
+ejecución: el monitor no avanza su escaneo de referencia hasta que llega.
+
+**Comprobar la firma** (solo si el monitor tiene `secret`): HMAC-SHA256 del
+cuerpo exacto, como los webhooks de GitHub.
+
+```python
+import hashlib, hmac
+
+def es_de_atalaya(cuerpo: bytes, firma: str, secreto: str) -> bool:
+    esperada = "sha256=" + hmac.new(secreto.encode(), cuerpo, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(esperada, firma)  # firma = cabecera X-Atalaya-Signature
+```
+
+**Seguridad.** El webhook tiene que ser `https` y apuntar a una dirección
+pública: una URL hacia `localhost`, la red interna o el servicio de metadatos
+de la nube se rechaza con 400 (protección contra SSRF), al crear el monitor y
+otra vez en cada aviso. La API nunca devuelve la URL completa (las de Slack o
+Discord llevan un token en la ruta) ni el secreto, y cada aviso queda en el
+log de auditoría. Detalle en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md)
+(§12).
+
+
 ## Demo sin red: datos de reserva
 
 Para enseñar la herramienta aunque crt.sh o el proveedor de IA no respondan,
@@ -368,7 +423,7 @@ Detalle completo en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 | Requisito              | En Atalaya                                              |
 |------------------------|--------------------------------------------------------|
 | Base de datos          | PostgreSQL con modelos de activos / escaneos / hallazgos |
-| API o webhook          | API REST propia **y** consumo de APIs externas (crt.sh, Shodan, Anthropic/Gemini) |
+| API o webhook          | API REST propia, consumo de APIs externas (crt.sh, Shodan, Anthropic/Gemini) **y** avisos por webhook de la vigilancia programada |
 | Aplicación web         | Dashboard Streamlit (local o desplegado)               |
 | GitHub con historial   | Commits por fase, historial real                       |
 | Reporte con portada    | PDF generado por la propia herramienta (`GET /scans/{id}/report`) |
@@ -422,6 +477,10 @@ Ampliación posterior, más allá de los requisitos obligatorios:
       995, 8443)
 - [x] `atalaya init` (configuración guiada) y `atalaya doctor`
       (diagnóstico), con identidad visual propia en la terminal
+- [x] Escaneo en segundo plano (`POST /scans` responde 202) con su
+      seguimiento en el dashboard
+- [x] Vigilancia programada: escaneos periódicos con aviso por webhook
+      (firmado con HMAC, protegido contra SSRF), por API
 
 La memoria técnica de cada fase está en [`memorias/`](memorias/).
 

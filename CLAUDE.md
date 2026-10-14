@@ -13,7 +13,7 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 | Requisito | Cómo se cubre | Estado |
 |---|---|---|
 | Base de datos | PostgreSQL + SQLAlchemy async | ✅ Modelos Scan/Asset/Finding + migraciones Alembic. Persiste subdominios, puertos abiertos y hallazgos de cabeceras/TLS/takeover |
-| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL vía agentes (`POST /findings/ask`), diff entre escaneos (`GET /scans/{id}/diff/{other_id}`) e informe (`GET /scans/{id}/report`) reales, estado de la configuración (`GET /config/status`), con autenticación opcional por `X-API-Key`. Consume crt.sh, Shodan y (Anthropic o Gemini, configurable) |
+| API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL vía agentes (`POST /findings/ask`), diff entre escaneos (`GET /scans/{id}/diff/{other_id}`) e informe (`GET /scans/{id}/report`) reales, estado de la configuración (`GET /config/status`) y vigilancia programada (`/monitors`), con autenticación opcional por `X-API-Key`. Consume crt.sh, Shodan y (Anthropic o Gemini, configurable). **Webhook** literal: la vigilancia avisa con un `POST` firmado a la URL del usuario |
 | Aplicación web | Dashboard Streamlit | ✅ Escaneos, comparación entre escaneos (diff), triaje IA, consulta NL, descarga de informe, bienvenida con el estado de la configuración — rediseño visual profesional (ver "Dashboard: diseño visual" más abajo) |
 | GitHub con historial | Commits por unidad lógica | ✅ commits por fase |
 | Reporte con portada | Informe generado por la herramienta | ✅ PDF con portada, resumen ejecutivo en lenguaje natural (IA), `risk_score` y hallazgos (`reporting/generator.py`) |
@@ -39,6 +39,10 @@ Recibe un dominio y ejecuta cuatro fases:
 4. **Consulta e informe** — preguntas en lenguaje natural (a través de un
    sistema de agentes especializados, ver más abajo) e informe ejecutivo
    con resumen en lenguaje natural.
+
+Y, sobre las cuatro, la **vigilancia programada** (`/monitors`): repite el
+escaneo de un dominio cada cierto tiempo y avisa por webhook cuando el diff
+contra su línea base no está vacío, o cuando el escaneo falla.
 
 ### Sistema de agentes de IA
 
@@ -74,18 +78,26 @@ src/atalaya/
 ├── core/
 │   ├── database.py              Engine async + Base declarativa + get_session,
 │   │                             get_session_factory (trabajo en segundo plano)
-│   ├── models.py                Scan, Asset, Finding (SQLAlchemy 2.0)
+│   ├── models.py                Scan, Asset, Finding, Monitor (SQLAlchemy 2.0)
 │   ├── persistence.py           save_subdomain_scan(), apply_port_scan(),
 │   │                             apply_discovery_findings() — descubrimiento → BD
 │   ├── scan_runner.py           run_scan() — el escaneo completo en segundo
 │   │                             plano, con su propia sesión: completed o
 │   │                             failed, nunca running para siempre;
 │   │                             fail_interrupted_scans() al arrancar la API
+│   ├── monitor_runner.py        Vigilancia programada: monitor_loop() en el
+│   │                             lifespan, run_due_monitors() (reclamo con
+│   │                             UPDATE condicional), run_monitor() — escanea,
+│   │                             diff SIN IA contra la línea base y avisa
+│   ├── webhooks.py              validate_webhook_url()/send_webhook() — SSRF
+│   │                             (solo IPs públicas, conecta a la IP validada),
+│   │                             firma HMAC, URL enmascarada (es un secreto)
 │   ├── repository.py            Lectura: get_scan, list_scans, get_latest_scan,
 │   │                             list_assets, list_findings, diff_scans() —
 │   │                             hostnames y cambios de los activos comunes —,
 │   │                             list_triaged_findings() (fuente de la
-│   │                             reutilización del triaje)
+│   │                             reutilización del triaje), lecturas de
+│   │                             monitores y get_latest_completed_scan_id()
 │   ├── exceptions.py            AtalayaError, UnauthorizedTargetError, ...
 │   ├── authorization.py         ensure_authorized() — SCAN_ALLOWLIST
 │   ├── audit.py                 get_audit_logger() — traza de auditoría
@@ -178,10 +190,13 @@ src/atalaya/
         ├── assets.py              GET /assets?scan_id= — real
         ├── findings.py            GET /findings, POST /findings/ask
         │                           (vía ai/prompter.py) — reales
-        └── config.py              GET /config/status — estado de la
-                                    configuración sin red ni valores (fase 13)
+        ├── config.py              GET /config/status — estado de la
+        │                           configuración sin red ni valores (fase 13)
+        └── monitors.py            POST/GET /monitors, GET/PATCH/DELETE
+                                    /monitors/{id} — vigilancia programada
 
-migrations/                      Alembic (async); URL desde settings.database_url
+migrations/                      Alembic (async); URL desde settings.database_url.
+                                  Dos revisiones: modelos iniciales y `monitors`
 dashboard/app.py                 Dashboard Streamlit — escaneos, «Comparar
                                   con» (diff), triaje IA, consulta NL,
                                   descarga de informe, bienvenida y estado
@@ -337,7 +352,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **605 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **669 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -348,7 +363,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +64 en la vigilancia programada: 34 del webhook, 25 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -427,7 +442,11 @@ pide evitar explícitamente ("los stubs no son código muerto").
     no completado) y su seguimiento en el dashboard, con maqueta aprobada; de
     paso, el dashboard llama a la API en `127.0.0.1` (con `localhost`, 2 s por
     petición en Windows). Netlas, evaluada y descartada (14/10/2026).
-    Pendiente: monitorización con webhook y cierre. Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
+    **Bloque 4** ✅ (API, 14/10/2026): vigilancia programada con aviso por
+    webhook (`/monitors`), verificada en local y en el stack Docker; con ella
+    se verificaron en Docker `/config/status` y el escaneo en segundo plano.
+    Pendiente: el panel de vigilancia en el dashboard (maqueta antes) y el
+    cierre. Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -439,18 +458,18 @@ defensa oral.
 
 ---
 
-## Estado al 13/10/2026 y próxima sesión
+## Estado al 14/10/2026 y próxima sesión
 
-**Dónde se quedó (cierre de la sesión del 13/10/2026):** **todo subido** a
-`origin/main`. Hecho en la sesión: la fase B (cierra la fase 13), el dossier
-de defensa y la guía de la herramienta (Claude Docs), el bloque 3 (`POST
-/scans` en segundo plano y su seguimiento en el dashboard) y tres defectos
-anteriores encontrados al probar: la barra lateral plegada sin forma de
-reabrirla, 2 s por petición del dashboard con `localhost` en Windows y la
-configuración por variables de entorno en Docker. 605 tests; `ruff` (también
-sobre `dashboard/`) y `mypy` a cero. Ningún prompt ha cambiado: la demo en
-`replay` sigue intacta (`tests/test_demo_data.py`). Al retomar, comprobar
-con `git status -sb` y `git log --oneline -5`.
+**Dónde se quedó (sesión del 14/10/2026):** commits locales **sin subir**
+(el usuario dice cuándo hacer `push`). Hecho en la sesión: Netlas medida y
+descartada (`5acc66f`); el **bloque 4 por API**, vigilancia programada con
+aviso por webhook (`7de68a2` el envío con su protección SSRF, `c8e03b1` los
+monitores), verificado en real contra webhook.site en local y en el stack
+Docker (PostgreSQL 16); y, con el stack levantado, el pendiente de verificar
+en Docker `GET /config/status` y el escaneo en segundo plano. 669 tests;
+`ruff` (también sobre `dashboard/`) y `mypy` a cero. Ningún prompt ha
+cambiado: la demo en `replay` sigue intacta. Al retomar, comprobar con
+`git status -sb` y `git log --oneline -5`.
 
 - Dossier de defensa: https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91
 - Guía de la herramienta (funcionalidad, para quien llega de fuera):
@@ -458,13 +477,13 @@ con `git status -sb` y `git log --oneline -5`.
 - Maquetas aprobadas: fase B https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4
   y bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b
 
-**Pendiente, en este orden:** (1) bloque 4, monitorización con webhook
-(Netlas, el antiguo punto 1, se descartó el 14/10/2026: bloque 3b abajo); (2)
-verificar en el stack Docker real `GET /config/status` y el escaneo en segundo
-plano; (3) cierre de la fase (bloque 5) y actualizar el dossier con lo que
-cambie; (4) decidir si
-se fija `streamlit==1.64.0` en `pyproject.toml` (hoy `>=1.37`: una versión
-nueva puede romper el CSS, como pasó con la barra lateral; recomendado, sin
+**Pendiente, en este orden:** (1) el **panel de vigilancia** en el dashboard
+(decidido el 14/10/2026: API primero, panel después, con **maqueta aprobada
+antes** de programarlo); (2) cierre de la fase (bloque 5) y actualizar el
+dossier y la guía con la vigilancia (y la restricción de seguridad #7, nueva:
+el dossier habla de seis); (3) decidir si se fija
+`streamlit==1.64.0` en `pyproject.toml` (hoy `>=1.37`: una versión nueva
+puede romper el CSS, como pasó con la barra lateral; recomendado, sin
 respuesta del usuario todavía).
 
 **Calendario:** a 12/10/2026, «hay algo de margen», sin fecha de defensa
@@ -535,24 +554,30 @@ quedó sin probar (exige cuenta). Detalle y respuesta de defensa en la memoria
 de la fase (§5). No reabrir salvo que cambie el plan gratuito o aparezca otra
 fuente.
 
-**4. Monitorización: escaneos programados con aviso por webhook** — la
-carencia más grande como ASM. Depende del bloque 3 (reutiliza la función de
-escaneo en segundo plano).
+**4. Monitorización: escaneos programados con aviso por webhook** ✅ por API
+(14/10/2026; `7de68a2`, `c8e03b1`; ARQUITECTURA §12) — hecho con el diseño
+acordado (tabla `monitors`, bucle en el `lifespan`, `run_scan`, diff sin IA,
+autorización al crear y en cada ejecución, SSRF con `classify_ip()`, mínimo
+1 h, auditoría de cada aviso). Lo que el diseño no cubría, decidido con el
+usuario el 14/10/2026:
 
-- Tabla nueva **`monitors`** (dominio, intervalo, `webhook_url`, último
-  escaneo, activo) con su migración, y rutas `POST`/`GET`/`DELETE /monitors`.
-- Un bucle en el `lifespan` de la API lanza los escaneos que tocan; al
-  terminar, `diff_scans()` **sin IA** (no gasta crédito) y, si `nuevos`,
-  `desaparecidos` o `cambiados` no están vacíos, `POST` del diff al webhook.
-- **Seguridad, que se evalúa:** el dominio pasa `ensure_authorized()` al
-  crear el monitor **y en cada ejecución**; el webhook es un vector de
-  **SSRF**: resolver su host y rechazar direcciones no enrutables con
-  `classify_ip()` (mismo criterio que la restricción #2); intervalo mínimo
-  (p. ej. 1 h) por la restricción #5; cada aviso enviado, al log de
-  auditoría (`core/audit.py`).
-- **Límite a documentar:** el planificador vive en el proceso de la API; con
-  varios workers de uvicorn, cada escaneo se lanzaría varias veces.
-- Cumple de forma literal el requisito «API o webhook».
+- **También se avisan los fallos** (evento `escaneo_fallido`), y la firma
+  **HMAC** es opcional (`secret`). El panel del dashboard va **después** de
+  la API, con maqueta antes.
+- **Línea base** por monitor, que solo avanza si el aviso se entrega; **0
+  activos** frente a una base con activos es un fallo de la fuente (crt.sh
+  caído), no «todo desaparecido»; un monitor por dominio (409);
+  `PATCH /monitors/{id}` para pausar (el plan tenía el campo «activo» sin
+  ruta que lo cambiara).
+- **El límite de varios workers no se documentó: se resolvió.** Cada
+  ejecución se reclama con un `UPDATE` condicional (probado en PostgreSQL:
+  dos reclamos simultáneos dan `[True, False]`).
+- Al enviar se conecta a la **IP validada** (*DNS rebinding*), con SNI y
+  verificación contra el nombre, y se prueba la siguiente dirección solo si
+  la anterior no conectó (sin IPv6, un host con IPv6 primero no recibiría
+  avisos). Dos trampas comprobadas en real: el pool de httpx reutiliza una
+  conexión TLS por IP aunque cambie el SNI (cliente nuevo por intento), y
+  `getaddrinfo` puede dar la IPv6 primero.
 
 **5. Cierre de la fase** — docs de cada bloque (CLAUDE.md, ARQUITECTURA,
 README, `.env.example` si hay campos nuevos), memoria de la fase con su bloque
@@ -685,6 +710,14 @@ cómo trata esto.
    estrictamente pasivo (solo DNS, sin `httpx`) y su test estático lo garantiza:
    la petición HTTP vive solo en el módulo de verificación, separado.
 
+7. **Un webhook es una petición del servidor: solo a direcciones públicas.**
+   Toda URL a la que la API envíe algo por indicación del usuario (hoy, los
+   webhooks de `/monitors`) pasa `core/webhooks.py`: `https`, todas las
+   direcciones del host enrutables (`classify_ip`, mismo criterio que la #2),
+   validación al guardar **y** al enviar, conexión a la IP validada (no se
+   vuelve a resolver: *DNS rebinding*) y sin seguir redirecciones. Sin esto,
+   la API sería una puerta a su propia red (`127.0.0.1`, `169.254.169.254`).
+
 ---
 
 ## Decisiones ya tomadas (no reabrir sin motivo)
@@ -711,6 +744,11 @@ cómo trata esto.
 | Modo no interactivo: secretos desde variables de entorno, nunca como argumentos | Un argumento queda en el historial de la shell y en la lista de procesos |
 | `rich` para la terminal; menús numerados, no con flechas | `questionary`/`prompt_toolkit` fallan en Git Bash (mintty) por no ser una consola de Windows. Con salida no UTF-8, iconos y logo en ASCII en vez de romper con `UnicodeEncodeError` (reproducido al maquetar) |
 | `init` no toca nada hasta confirmar el resumen: las migraciones se aplican al final | La maqueta las mostraba en el paso 2, pero eso rompería la promesa de que Ctrl+C sale sin cambios. En el paso 2 solo se conecta y se informa de lo pendiente |
+| Netlas descartada como segunda fuente de subdominios (14/10/2026) | Medida sin clave: 38.035 nombres para `*.github.com`, pero los 7 primeros no resolvían a ninguna dirección; 200 por descarga y 2.500/mes en el plan gratuito. Más ruido que activos (bloque 3b) |
+| Vigilancia: la línea base solo avanza si el aviso se entrega | Comparando siempre con el escaneo anterior, un aviso perdido no volvería a salir: la siguiente ejecución compararía contra un escaneo que ya tiene el cambio |
+| Vigilancia: también se avisan los fallos (`escaneo_fallido`), y 0 activos frente a una base con activos es un fallo de la fuente, no «todo desaparecido» | El peor fallo de una vigilancia es el silencioso. Mirar si hay incidencias no sirve: con clave de Shodan, su 403 sale en todo escaneo |
+| Vigilancia: diff sin IA, un monitor por dominio, intervalo mínimo de 1 h, de uno en uno | Sin crédito ni dependencia del proveedor; dos monitores o un intervalo corto serían más carga sobre el objetivo sin información nueva (restricción #5); crt.sh limita a quien le pide mucho a la vez |
+| Webhook: solo `https`, firma HMAC opcional, URL y secreto nunca devueltos | El aviso es un mapa de la superficie; la firma es el esquema de GitHub; las URL de Slack/Discord llevan el token en la ruta |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
 
 ---
@@ -876,13 +914,19 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ### Pendiente
 
-- **`GET /config/status` y el escaneo en segundo plano sin probar en el
-  stack Docker real**: verificados con la API real en local (y simulando el
-  contenedor para la configuración), no con Docker levantado.
 - **El escaneo en segundo plano vive en el proceso de la API**: con varios
   procesos (`uvicorn --workers N`) sobre la misma base de datos, uno que
   arranca cerraría como fallidos los escaneos que otro está ejecutando. Se
-  despliega con uno (ARQUITECTURA §11).
+  despliega con uno (ARQUITECTURA §11). La vigilancia no tiene este problema
+  para sus ejecuciones: cada una se reclama con un `UPDATE` condicional.
+- **Vigilancia: el diff no separa señal de ruido.** Un timeout o una
+  fluctuación de DNS sale como cambio, así que un dominio grande puede avisar
+  en casi cada ejecución. Un aviso fallido no se reintenta al momento (se
+  repite, acumulado, en la siguiente ejecución). La URL del webhook y su
+  secreto se guardan en claro en la BD (los necesita para enviar y firmar),
+  como las claves en `.env`. Los escaneos programados no se distinguen de
+  los manuales en `GET /scans`. **Sin panel en el dashboard** todavía:
+  siguiente paso del bloque 4, con maqueta antes.
 - **`init` interactivo en Git Bash (mintty) exige `winpty atalaya init`**:
   mintty no ofrece a Python una consola de Windows y `getpass` no puede leer
   el teclado. `init` lo detecta (`MSYSTEM`) y lo explica en vez de colgarse;
@@ -892,13 +936,6 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   `init` verifica el texto antes de escribirlo y se niega, en vez de guardar
   un valor que la aplicación leería distinto.
 
-- **Sin monitorización continua.** Los escaneos se lanzan a mano: no hay
-  escaneos programados ni alertas. Es la carencia más grande como producto
-  de ASM, que se define por vigilar en el tiempo. El diff con `cambiados` es
-  la pieza que permitiría alertar («ayer no tenía el 22 abierto»); falta el
-  disparador (planificador + notificación cuando el diff no está vacío).
-  **Planificado** como bloque 4 (diseño en «Plan acordado para las próximas
-  sesiones»).
 - **Señal/ruido de los hallazgos.** En github.com, 194 de 211 hallazgos son
   `low`, casi todo higiene de cabeceras. La reutilización del triaje reduce
   el coste de triarlos, no su volumen ni el ruido para quien lee.
@@ -991,6 +1028,16 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   preguntas anteriores.
 
 ### Resuelta (se deja constancia para la defensa)
+
+- ~~**Sin monitorización continua**~~ (bloque 4) → `/monitors`: un escaneo
+  programado cada `interval_hours` y un aviso por webhook cuando el diff no
+  está vacío o el escaneo falla (`7de68a2`, `c8e03b1`; ARQUITECTURA §12).
+  Por API; el panel del dashboard queda pendiente.
+- ~~**`GET /config/status` y el escaneo en segundo plano sin probar en el
+  stack Docker real**~~ → verificados el 14/10/2026 con el stack levantado:
+  la configuración sale «sin .env · 29 campos desde variables de entorno» y
+  «PostgreSQL 16.15 · migraciones al día»; `POST /scans` responde 202 en
+  0,06 s y el escaneo pasa a `completed` a los 11 s.
 
 - ~~**`POST /scans` era síncrono**~~ (bloque 3) → responde 202 y el escaneo
   corre en segundo plano (`core/scan_runner.py`); el dashboard lo sigue sin
@@ -1285,7 +1332,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
 atalaya init                         # configuración guiada: alcance, BD, claves (.env)
 atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
-pytest -q                            # tests (deben pasar los 605)
+pytest -q                            # tests (deben pasar los 669)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
@@ -1356,6 +1403,7 @@ que despacharlos como `general-purpose` pegando el contenido completo del
 `.md` correspondiente como instrucciones.
 
 Ninguno de los cuatro toca `ai/triage.py` — instrucción explícita, se
-mantiene igual desde el Paso 5. `onboarding/` (fase 13) no tiene subagente
+mantiene igual desde el Paso 5. `core/monitor_runner.py` y `core/webhooks.py`
+(bloque 4) tampoco: se hicieron desde la sesión principal. `onboarding/` (fase 13) no tiene subagente
 propio: la fase B (`GET /config/status` y la bienvenida) se hizo desde la
 sesión principal con las reglas de `atalaya-api` y `atalaya-dashboard`.
