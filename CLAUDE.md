@@ -352,7 +352,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **669 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **671 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -363,7 +363,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +64 en la vigilancia programada: 34 del webhook, 25 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +66 en la vigilancia programada: 34 del webhook, 27 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -466,7 +466,10 @@ descartada (`5acc66f`); el **bloque 4 por API**, vigilancia programada con
 aviso por webhook (`7de68a2` el envío con su protección SSRF, `c8e03b1` los
 monitores), verificado en real contra webhook.site en local y en el stack
 Docker (PostgreSQL 16); y, con el stack levantado, el pendiente de verificar
-en Docker `GET /config/status` y el escaneo en segundo plano. 669 tests;
+en Docker `GET /config/status` y el escaneo en segundo plano. Después, la
+**prueba completa** que pidió el usuario (stack Docker, 9 fases, evidencias en
+una página publicada) destapó un defecto del guardia de falsas alarmas,
+corregido en `f541101` (criterio por fuente, no por «0 activos»). 671 tests;
 `ruff` (también sobre `dashboard/`) y `mypy` a cero. Ningún prompt ha
 cambiado: la demo en `replay` sigue intacta. Al retomar, comprobar con
 `git status -sb` y `git log --oneline -5`.
@@ -476,6 +479,8 @@ cambiado: la demo en `replay` sigue intacta. Al retomar, comprobar con
   https://claude.ai/code/artifact/1ff455ae-dbc0-4019-b0a9-10222c195a20
 - Maquetas aprobadas: fase B https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4
   y bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b
+- Evidencias de la prueba completa de la vigilancia (14/10/2026, stack Docker,
+  9 fases, capturas y avisos reales): https://claude.ai/artifact/9xemMd7makz8RuyUJSNtjw
 
 **Pendiente, en este orden:** (1) el **panel de vigilancia** en el dashboard
 (decidido el 14/10/2026: API primero, panel después, con **maqueta aprobada
@@ -564,9 +569,11 @@ usuario el 14/10/2026:
 - **También se avisan los fallos** (evento `escaneo_fallido`), y la firma
   **HMAC** es opcional (`secret`). El panel del dashboard va **después** de
   la API, con maqueta antes.
-- **Línea base** por monitor, que solo avanza si el aviso se entrega; **0
-  activos** frente a una base con activos es un fallo de la fuente (crt.sh
-  caído), no «todo desaparecido»; un monitor por dominio (409);
+- **Línea base** por monitor, que solo avanza si el aviso se entrega; una
+  **fuente que aportó hosts a la base y ninguno ahora** es una fuente caída,
+  no «sus hosts desaparecieron» (`f541101`: la primera versión miraba «0
+  activos», que nunca ocurre porque el dominio raíz entra siempre; lo
+  destapó la prueba real con crt.sh inaccesible); un monitor por dominio (409);
   `PATCH /monitors/{id}` para pausar (el plan tenía el campo «activo» sin
   ruta que lo cambiara).
 - **El límite de varios workers no se documentó: se resolvió.** Cada
@@ -746,7 +753,7 @@ cómo trata esto.
 | `init` no toca nada hasta confirmar el resumen: las migraciones se aplican al final | La maqueta las mostraba en el paso 2, pero eso rompería la promesa de que Ctrl+C sale sin cambios. En el paso 2 solo se conecta y se informa de lo pendiente |
 | Netlas descartada como segunda fuente de subdominios (14/10/2026) | Medida sin clave: 38.035 nombres para `*.github.com`, pero los 7 primeros no resolvían a ninguna dirección; 200 por descarga y 2.500/mes en el plan gratuito. Más ruido que activos (bloque 3b) |
 | Vigilancia: la línea base solo avanza si el aviso se entrega | Comparando siempre con el escaneo anterior, un aviso perdido no volvería a salir: la siguiente ejecución compararía contra un escaneo que ya tiene el cambio |
-| Vigilancia: también se avisan los fallos (`escaneo_fallido`), y 0 activos frente a una base con activos es un fallo de la fuente, no «todo desaparecido» | El peor fallo de una vigilancia es el silencioso. Mirar si hay incidencias no sirve: con clave de Shodan, su 403 sale en todo escaneo |
+| Vigilancia: también se avisan los fallos (`escaneo_fallido`), y una fuente (crt.sh, Shodan) que aportó hosts a la línea base y ninguno al escaneo actual es una fuente caída, no una desaparición | El peor fallo de una vigilancia es el silencioso. Contar activos no sirve (el dominio raíz entra siempre: crt.sh caído deja 1, no 0) ni mirar las incidencias (el 403 de Shodan sale en todo escaneo) |
 | Vigilancia: diff sin IA, un monitor por dominio, intervalo mínimo de 1 h, de uno en uno | Sin crédito ni dependencia del proveedor; dos monitores o un intervalo corto serían más carga sobre el objetivo sin información nueva (restricción #5); crt.sh limita a quien le pide mucho a la vez |
 | Webhook: solo `https`, firma HMAC opcional, URL y secreto nunca devueltos | El aviso es un mapa de la superficie; la firma es el esquema de GitHub; las URL de Slack/Discord llevan el token en la ruta |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
@@ -1332,7 +1339,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
 atalaya init                         # configuración guiada: alcance, BD, claves (.env)
 atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
-pytest -q                            # tests (deben pasar los 669)
+pytest -q                            # tests (deben pasar los 671)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

@@ -1000,8 +1000,9 @@ lifespan de la API ── monitor_loop(): cada 60 s          core/monitor_runner
         └─ comparar con la línea base, SIN IA:
              escaneo fallido                     → «escaneo_fallido»
              sin línea base                      → este escaneo es la base
-             0 activos frente a una base con     → «escaneo_fallido» (fuente caída,
-               activos                              no «todo desaparecido»)
+             una fuente (crt.sh, Shodan) que     → «escaneo_fallido» (fuente caída,
+               aportó hosts a la base y ahora       no «sus hosts desaparecieron»)
+               ninguno
              diff con nuevos/desaparecidos/      → «cambios»; la base avanza
                cambiados                            SOLO si el aviso se entregó
              sin cambios                         → la base avanza, sin aviso
@@ -1027,12 +1028,20 @@ que ya incluye el cambio. Así, el aviso fallido se repite acumulado. No hay
 reintentos inmediatos: el siguiente intento es la siguiente ejecución.
 
 **Falsas alarmas.** Con crt.sh caído, el escaneo termina «completado» (es
-degradación controlada) pero sin ningún subdominio, y el diff daría todo el
-dominio por desaparecido. crt.sh es histórico, así que un dominio real nunca
-vuelve con cero: si el escaneo trae 0 activos y la base tenía alguno, se
-avisa como escaneo fallido y la base no se mueve. No sirve mirar si hay
-incidencias: con clave de Shodan, su 403 aparece en todo escaneo (comprobado
-en la prueba real). El aviso de cambios incluye las incidencias del escaneo,
+degradación controlada) pero sin los hosts que aportaba crt.sh, y el diff los
+daría por desaparecidos. El criterio es **por fuente**: si crt.sh o Shodan
+aportaron hosts a la línea base (`Asset.sources`) y ninguno al escaneo
+actual, esa fuente cayó; se avisa como escaneo fallido y la base no se mueve.
+crt.sh es histórico: una fuente que aportaba hosts no vuelve a cero sin más.
+No sirve contar activos: el dominio raíz entra siempre aunque no responda
+ninguna fuente, así que crt.sh caído deja 1 activo, no 0. La primera versión
+usaba «0 activos» y la prueba completa lo destapó (`f541101`): en github.com
+habría avisado de 116 «desaparecidos». Tampoco sirve mirar las incidencias:
+con clave de Shodan, su 403 aparece en todo escaneo. Fuente a fuente cubre la
+caída parcial (crt.sh cae, Shodan responde), y una fuente que nunca aportó
+(crt.sh a `scanme.nmap.org`) no cuenta. Límite: si una fuente deja de
+responder para siempre (una suscripción que caduca), cada ejecución avisa del
+fallo, y no compara, hasta que se corrija la configuración. El aviso de cambios incluye las incidencias del escaneo,
 para que el receptor sepa si un «desaparecido» viene de un escaneo degradado.
 
 **También se avisan los fallos** (`escaneo_fallido`): escaneo fallido, fuente

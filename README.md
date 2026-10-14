@@ -335,8 +335,9 @@ Dos tipos de aviso (cabecera `X-Atalaya-Event`):
 - **`cambios`** — `nuevos`, `desaparecidos` y `cambiados` (puertos o
   hallazgos de los activos que ya existían), con `summary` en una línea y las
   incidencias del escaneo en `errors`.
-- **`escaneo_fallido`** — el escaneo falló, la fuente de subdominios no
-  devolvió nada (no se avisa como «todo desaparecido») o el dominio ya no
+- **`escaneo_fallido`** — el escaneo falló, una fuente de subdominios
+  (crt.sh, Shodan) dejó de aportar los hosts que aportaba (no se avisan como
+  «desaparecidos») o el dominio ya no
   está en `SCAN_ALLOWLIST`. Una vigilancia que falla en silencio parece una
   vigilancia sin cambios.
 

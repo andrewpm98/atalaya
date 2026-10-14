@@ -7,7 +7,7 @@ defensa (dossier y guía de la herramienta), saca el escaneo de la petición
 HTTP y añade la vigilancia programada.
 **Estado:** En curso. Bloques 2 y 3 completos y subidos a `origin/main` el
 13/10/2026. Netlas (bloque 3b), evaluada y descartada el 14/10/2026. Bloque 4
-(vigilancia) completo por API el 14/10/2026: 669 tests, `ruff` y `mypy` a
+(vigilancia) completo por API el 14/10/2026: 671 tests, `ruff` y `mypy` a
 cero. Pendientes el panel de vigilancia en el dashboard y el cierre (bloque
 5); ver §9.
 
@@ -196,12 +196,13 @@ secreto, y hacer la API primero y el panel del dashboard después, con maqueta.
   con la anterior, un webhook caído haría que el cambio no se avisara nunca:
   la siguiente compararía contra un escaneo que ya lo incluye. Cada monitor
   guarda una **línea base** que solo avanza cuando el aviso llega.
-- **crt.sh caído no es «todo desapareció».** Una fuente caída deja un escaneo
-  «completado» sin subdominios, y el diff daría el dominio entero por
-  desaparecido. Como crt.sh es histórico, un dominio real nunca vuelve con
-  cero: ese caso se avisa como fallo de la fuente. No servía mirar si el
-  escaneo tenía incidencias: con clave de Shodan, su 403 aparece en todos
-  (se vio en la prueba real).
+- **crt.sh caído no es «sus hosts desaparecieron».** Una fuente caída deja
+  un escaneo «completado» sin los hosts que aportaba, y el diff los daría por
+  desaparecidos. Se mira fuente a fuente: si crt.sh o Shodan aportaron hosts
+  a la línea base y ninguno ahora, esa fuente cayó y se avisa como fallo. La
+  primera versión miraba «0 activos» y era un error, que destapó la prueba
+  completa (ver más abajo). No servía mirar si el escaneo tenía incidencias:
+  con clave de Shodan, su 403 aparece en todos (se vio en la prueba real).
 - **El límite de varios procesos se resolvió en vez de documentarse.** Cada
   ejecución se «reclama» actualizando su próxima hora solo si nadie lo hizo
   antes; de dos procesos, solo uno gana.
@@ -242,15 +243,16 @@ igual, y de un error de red solo se guarda el tipo (su texto lleva la URL).
 arrancar y arranque con la base de datos caída) y 5 del dashboard (aviso en
 curso, resumen, fallo, detalle en curso y fallido, comparación solo entre
 completados). Cinco mutaciones hacen fallar los tests que las cubren.
-Bloque 4, +64: 34 del webhook (SSRF con ocho tipos de dirección interna,
+Bloque 4, +66: 34 del webhook (SSRF con ocho tipos de dirección interna,
 IP fijada con `Host` y SNI, revalidación al enviar, sin redirecciones, firma,
 paso a la siguiente dirección solo sin conexión, token fuera de errores y
-auditoría), 25 de los monitores (línea base, aviso repetido, fallos, 0
-activos, allowlist al ejecutar, planificación, reclamo concurrente, bucle,
+auditoría), 27 de los monitores (línea base, aviso repetido, fallos, fuente
+caída total o parcial, fuente que nunca aportó, allowlist al ejecutar,
+planificación, reclamo concurrente, bucle,
 `lifespan` y rutas) y 5 del test de autenticación, que recorre las rutas
-nuevas. Seis mutaciones (avanzar la base sin entregar, quitar el guardia de
-0 activos, reclamar sin condición, no reautorizar, no fijar la IP, seguir
-redirecciones) hacen fallar cada una su test.
+nuevas. Siete mutaciones (avanzar la base sin entregar, quitar el guardia de
+fuente caída, volver al criterio de «0 activos», reclamar sin condición, no
+reautorizar, no fijar la IP, seguir redirecciones) hacen fallar su test.
 
 **Pruebas reales:**
 
@@ -278,6 +280,30 @@ alteró a mano la línea base: el puerto 80 dejó de constar como abierto.
 | Stack Docker (PostgreSQL 16.15) | Migración aplicada al arrancar; mismo aviso, firmado; reclamo concurrente `[True, False]` |
 | `GET /config/status` en Docker (pendiente del bloque 3) | «sin .env · 29 campos desde variables de entorno», «PostgreSQL 16.15 · migraciones al día» |
 | `POST /scans` en Docker (pendiente del bloque 3) | 202 en 0,06 s; `completed` a los 11 s |
+
+**La prueba completa** (14/10/2026, a petición del usuario): stack Docker con
+`SCAN_ALLOWLIST=scanme.nmap.org` por un override fuera del repositorio, 9
+fases y evidencias publicadas en una página
+(https://claude.ai/artifact/9xemMd7makz8RuyUJSNtjw). Los cambios se simularon en la
+línea base (puerto 80 cerrado, hosts `simulado-*`) y se deshicieron al acabar;
+el turno de cada ejecución se adelantó en la base de datos para no esperar
+una hora.
+
+| Fase | Resultado |
+|---|---|
+| A · rechazos | 10 de 10 con su motivo: `http`, `localhost`, `127.0.0.1.nip.io` (resuelve de verdad a `127.0.0.1` en el contenedor), metadatos `169.254.169.254`, `10.0.0.5.nip.io`, credenciales en la URL, host inexistente (400); dominio fuera de la allowlist (403); intervalo 0 y secreto corto (422) |
+| B · primera ejecución | 16 s tras crearlo; aviso `cambios` (1 desaparecido, 1 con cambios), firma válida |
+| C · sin cambios | Ningún aviso; la base avanza |
+| D · receptor caído | Con 503: `last_error` y la base quieta (#7); con 200: aviso del **#9 frente al #7**, el cambio no se perdió |
+| E · crt.sh caído | **Destapó el defecto**: el escaneo sale con 1 activo (la raíz), no con 0, y el guardia no saltaba. Corregido (`f541101`) y repetido: `escaneo_fallido` «crt.sh no aportó ningún subdominio y en la línea base aportó 1» |
+| F · fuera de la allowlist | Ningún escaneo creado (11 → 11); `escaneo_fallido` con `scan_id: null` |
+| G · pausa | 75 s con el turno vencido sin ejecutarse; al reanudar, ejecución en la siguiente vuelta; reclamo concurrente `[True, False]` |
+| H/I · auditoría | 10 líneas en un solo contenedor (SSRF, creación, NO entregado 503, entregado, borrado); token y secreto, 0 veces en el log; 7 avisos recibidos, 7 firmas válidas |
+
+**Un error de método, también.** Recrear el contenedor de la API para
+cambiar su configuración (fases E y F) borra sus logs, y con ellos la
+auditoría de las fases anteriores. Se repitió lo necesario en una fase sin
+reinicios (I) y se guardó el log al momento.
 
 ---
 
@@ -324,7 +350,9 @@ alteró a mano la línea base: el puerto 80 dejó de constar como abierto.
 | `5acc66f` | docs: Netlas, evaluada y descartada como segunda fuente |
 | `7de68a2` | feat(core): avisos por webhook protegidos contra SSRF |
 | `c8e03b1` | feat(api): vigilancia programada con aviso por webhook (`/monitors`) |
-| (este) | docs: la vigilancia en CLAUDE.md, ARQUITECTURA, README y esta memoria |
+| `6d171c4` | docs: la vigilancia en CLAUDE.md, ARQUITECTURA, README y esta memoria |
+| `f541101` | fix(monitor): la fuente caída, por lo que aporta y no por 0 activos |
+| (este) | docs: la prueba completa y la corrección del guardia |
 
 ---
 
@@ -381,8 +409,9 @@ lo que haya cambiado entretanto.
 
 **¿No puede dar falsas alarmas?**
 La más grave sí la evita: si la fuente de subdominios se cae, el escaneo sale
-vacío y parecería que ha desaparecido todo el dominio. Eso se avisa como fallo
-de la fuente, no como cambio. Lo que no distingue es una fluctuación pequeña
+sin sus subdominios y parecería que han desaparecido. Eso se avisa como fallo
+de la fuente, no como cambio. Y lo sé porque la prueba real me pilló una
+primera versión que no lo hacía bien: la corregí y la volví a probar. Lo que no distingue es una fluctuación pequeña
 (un servidor que no respondió a tiempo) de un cambio real; por eso lo ausente
 se llama «desaparecido» y no «cerrado».
 
