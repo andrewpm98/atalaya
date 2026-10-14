@@ -111,6 +111,13 @@ class Settings(BaseSettings):
     #: de conexiones simultáneas sin control.
     enrichment_host_concurrency: int = 10
 
+    # ─── Vigilancia programada ──────────────────────────────────────────
+    #: Timeout (segundos) del POST de cada aviso al webhook de un monitor
+    #: (`core/webhooks.py`). Sin reintentos: si falla, la línea base del
+    #: monitor no avanza y el cambio se vuelve a avisar en la siguiente
+    #: ejecución.
+    webhook_timeout: float = 10.0
+
     # ─── Aplicación ───────────────────────────────────────────────────
     #: Nivel de los logs de la aplicación bajo la API (`api/main.py`). La
     #: auditoría de `core/audit.py` se emite siempre, con independencia de él.

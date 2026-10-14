@@ -19,6 +19,15 @@ class InvalidTargetError(AtalayaError):
     """El objetivo solicitado no es un nombre de dominio válido."""
 
 
+class InvalidWebhookError(AtalayaError):
+    """La URL de un webhook no es válida o apunta a una dirección no enrutable
+    (protección contra SSRF, `core/webhooks.py`)."""
+
+
+class WebhookDeliveryError(AtalayaError):
+    """Un aviso no llegó al webhook: error de red o respuesta que no es 2xx."""
+
+
 class DiscoveryError(AtalayaError):
     """Fallo irrecuperable durante una fase de descubrimiento."""
 
