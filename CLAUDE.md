@@ -426,8 +426,8 @@ pide evitar explícitamente ("los stubs no son código muerto").
     `completed`/`failed`; recuperación al arrancar; 409 para usar un escaneo
     no completado) y su seguimiento en el dashboard, con maqueta aprobada; de
     paso, el dashboard llama a la API en `127.0.0.1` (con `localhost`, 2 s por
-    petición en Windows). Pendiente: decidir Netlas, monitorización con
-    webhook y cierre. Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
+    petición en Windows). Netlas, evaluada y descartada (14/10/2026).
+    Pendiente: monitorización con webhook y cierre. Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -458,10 +458,11 @@ con `git status -sb` y `git log --oneline -5`.
 - Maquetas aprobadas: fase B https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4
   y bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b
 
-**Pendiente, en este orden:** (1) decidir si se añade Netlas (abajo, bloque
-3b); (2) bloque 4, monitorización con webhook; (3) verificar en el stack
-Docker real `GET /config/status` y el escaneo en segundo plano; (4) cierre de
-la fase (bloque 5) y actualizar el dossier con lo que cambie; (5) decidir si
+**Pendiente, en este orden:** (1) bloque 4, monitorización con webhook
+(Netlas, el antiguo punto 1, se descartó el 14/10/2026: bloque 3b abajo); (2)
+verificar en el stack Docker real `GET /config/status` y el escaneo en segundo
+plano; (3) cierre de la fase (bloque 5) y actualizar el dossier con lo que
+cambie; (4) decidir si
 se fija `streamlit==1.64.0` en `pyproject.toml` (hoy `>=1.37`: una versión
 nueva puede romper el CSS, como pasó con la barra lateral; recomendado, sin
 respuesta del usuario todavía).
@@ -523,20 +524,16 @@ no preveía y destapó revisar los consumidores del estado. Commits
 `ce2a048` (API), `35cb462` (dashboard). Detalle en ARQUITECTURA §11 y en la
 memoria de la fase.
 
-**3b. Netlas como segunda fuente de subdominios** (propuesto por el usuario
-el 13/10/2026, **pendiente de decidir**) — Shodan exige un plan de pago para
-`/dns/domain` y el usuario no quiere pagarlo. Netlas tiene plan gratuito
-(Community: 50 peticiones/día, 2.500 resultados/mes, uso personal no
-comercial) con búsqueda DNS: `GET https://app.netlas.io/api/domains/?q=
-domain:*.ejemplo.com`, páginas de 20, clave en la cabecera `X-API-Key` (no en
-la URL, a diferencia de Shodan). **Sin confirmar** que el plan gratuito
-permita la API y el formato exacto de la respuesta: antes de escribir código,
-una prueba de 10 minutos con la clave real del usuario. Diseño si se hace:
-`discovery/netlas.py` con el patrón de `shodan.py` (opcional, en paralelo,
-sin reintentar 401/403), tope de resultados por escaneo para no agotar la
-cuota diaria en un dominio grande, `NETLAS_API_KEY` en `config.py` y
-`.env.example`, paso en `init`, comprobación en `doctor` y en
-`/config/status`, `DiscoverySource.NETLAS`.
+**3b. Netlas como segunda fuente de subdominios** ❌ **descartada** (14/10/
+2026, decisión del usuario tras medirla sin clave). Para `*.github.com` tiene
+38.035 nombres (crt.sh, 117), pero los 7 primeros que devolvió no resolvían a
+ninguna dirección (`NoAnswer`), salen ordenados por fecha de indexación y el
+plan gratuito da 200 por descarga, 50 peticiones/día y 2.500 resultados/mes;
+sin clave, la cuota se agotó en 4 peticiones. Habría añadido sobre todo ruido
+(`no_answer` que además pasan por el CNAME del takeover). El filtro `a:*`
+quedó sin probar (exige cuenta). Detalle y respuesta de defensa en la memoria
+de la fase (§5). No reabrir salvo que cambie el plan gratuito o aparezca otra
+fuente.
 
 **4. Monitorización: escaneos programados con aviso por webhook** — la
 carencia más grande como ASM. Depende del bloque 3 (reutiliza la función de
@@ -919,6 +916,8 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   con un plan de pago. **En la práctica, crt.sh es la única fuente
   efectiva**, frente a las decenas de fuentes de herramientas como subfinder
   o amass: la calidad del inventario limita todo lo que viene después.
+  Netlas, la alternativa gratuita, se midió y se descartó el 14/10/2026
+  (ruido y cuota; ver el bloque 3b en «Plan acordado»).
 - **Tabla de patrones de takeover no exhaustiva.** `discovery/takeover.py`
   cubre ~20 proveedores citados habitualmente (GitHub Pages, Heroku, S3,
   Azure...), no una lista cerrada — mismo criterio de honestidad que

@@ -6,8 +6,9 @@
 defensa (dossier y guía de la herramienta), saca el escaneo de la petición
 HTTP y, en el siguiente bloque, añadirá la vigilancia programada.
 **Estado:** En curso. Bloques 2 y 3 completos y subidos a `origin/main` el
-13/10/2026: 605 tests, `ruff` y `mypy` a cero. Pendientes la decisión sobre
-Netlas, la monitorización (bloque 4) y el cierre (bloque 5); ver §7.
+13/10/2026: 605 tests, `ruff` y `mypy` a cero. Netlas (bloque 3b), evaluada y
+descartada el 14/10/2026. Pendientes la monitorización (bloque 4) y el cierre
+(bloque 5); ver §8.
 
 ---
 
@@ -131,7 +132,40 @@ código de salida. Se corrigió en un commit aparte (`2ff066c`).
 
 ---
 
-## 5. Verificación
+## 5. Bloque 3b: Netlas, evaluada y descartada (14/10/2026)
+
+**La propuesta.** crt.sh es en la práctica la única fuente de subdominios:
+Shodan exige un plan de pago para `/dns/domain` y el usuario no quiere
+pagarlo. Netlas tiene un plan gratuito (Community) con búsqueda de dominios
+por API, y se propuso como segunda fuente.
+
+**Antes de escribir código, se midió.** Peticiones sin clave a
+`app.netlas.io/api/domains/` el 14/10/2026:
+
+| Prueba | Resultado |
+|---|---|
+| Nombres bajo `*.github.com` (`domains_count`) | 38.035, frente a 117 de crt.sh |
+| Los 7 primeros devueltos (`smpp`, `mylive`, `myname`, `myme`, `mgmg`, `kanri`, `www.upload`) | Ninguno resuelve a una dirección (`NoAnswer` los 7) |
+| Orden | Por fecha de indexación, no por relevancia |
+| Sin clave | Responde, pero la cuota diaria se agotó en 4 peticiones (`daily_request_limit_exceeded`) |
+| Plan Community (página de precios y licencia) | 50 peticiones/día, 2.500 resultados/mes, 200 por descarga; solo uso personal no comercial |
+
+**Por qué se descartó.** En un dominio grande, Netlas no aporta 38.000
+subdominios sino, como mucho, los 200 más recientes, y la muestra apunta a
+nombres recogidos por DNS pasivo (erratas, intentos de fuerza bruta de
+terceros) más que a activos. Cada uno entraría en el inventario como
+`no_answer` y pasaría por la consulta de CNAME del takeover: más volumen y
+más ruido, justo la carencia de señal/ruido que ya tiene la herramienta. Con
+2.500 resultados al mes caben unos doce escaneos de un dominio grande. Filtrar
+en la consulta por nombres con registro A (`a:*`) podría limpiar el ruido,
+pero exigía una cuenta para comprobarlo y no cambiaba la cuota.
+
+Se priorizó la monitorización (bloque 4), la carencia más grande como ASM. La
+medición queda como respuesta a «¿por qué solo crt.sh?».
+
+---
+
+## 6. Verificación
 
 **Tests:** de 583 a 605 (+22): 17 del escaneo en segundo plano (202, 400 y
 403 sin crear nada, fallo con motivo y sin secretos, autorización al ejecutar,
@@ -154,7 +188,7 @@ completados). Cinco mutaciones hacen fallar los tests que las cubren.
 
 ---
 
-## 6. Límites
+## 7. Límites
 
 - **El trabajo vive en el proceso de la API.** Con varios procesos sobre la
   misma base de datos, uno que arranca cerraría los escaneos de otro. Se
@@ -165,19 +199,16 @@ completados). Cinco mutaciones hacen fallar los tests que las cubren.
 
 ---
 
-## 7. Lo que queda de la fase
+## 8. Lo que queda de la fase
 
-1. **Decidir Netlas** como segunda fuente de subdominios (el usuario no quiere
-   pagar el plan de Shodan). Plan gratuito con búsqueda DNS, pero sin
-   confirmar que permita la API: antes, una prueba con su clave real.
-2. **Bloque 4: monitorización** con escaneos programados y aviso por webhook,
+1. **Bloque 4: monitorización** con escaneos programados y aviso por webhook,
    protegido contra SSRF. Reutilizará `run_scan`.
-3. **Verificar en Docker** el escaneo en segundo plano y `/config/status`.
-4. **Cierre**: documentación, preguntas de defensa y guion de la demo.
+2. **Verificar en Docker** el escaneo en segundo plano y `/config/status`.
+3. **Cierre**: documentación, preguntas de defensa y guion de la demo.
 
 ---
 
-## 8. Commits
+## 9. Commits
 
 | Commit | Contenido |
 |---|---|
@@ -186,11 +217,12 @@ completados). Cinco mutaciones hacen fallar los tests que las cubren.
 | `c8043a0` | fix(dashboard): la API en `127.0.0.1` y no en `localhost` |
 | `35cb462` | feat(dashboard): seguimiento del escaneo en segundo plano |
 | `2ff066c` | style(dashboard): aviso de `ruff` que entró en el anterior |
-| (este) | docs: el bloque 3 en CLAUDE.md, ARQUITECTURA, README y esta memoria |
+| `1fc0e7f` | docs: el bloque 3 en CLAUDE.md, ARQUITECTURA, README y esta memoria |
+| (este) | docs: Netlas, evaluada y descartada como segunda fuente |
 
 ---
 
-## 9. Bloque de defensa: preguntas previsibles
+## 10. Bloque de defensa: preguntas previsibles
 
 **¿Por qué el escaneo va en segundo plano?**
 Porque dura de segundos a minutos. Dentro de la petición, la conexión quedaba
@@ -217,3 +249,11 @@ ve vacío y «en curso».
 Por un detalle de red: `localhost` prueba antes IPv6 y la API solo escucha en
 IPv4, así que cada petición perdía 2 segundos. Se midió y se corrigió: la
 carga bajó de 9,7 a 2,9 segundos.
+
+**¿Por qué solo crt.sh? ¿No probaste otras fuentes?**
+Sí. Shodan está integrada, pero su búsqueda de subdominios exige un plan de
+pago. Netlas tiene un plan gratuito y la medí antes de integrarla: para
+github.com tiene 38.000 nombres, pero los que miré no resolvían a ninguna
+dirección, y el plan gratuito da como mucho 200 por consulta y 2.500 al mes.
+Habría metido más ruido que activos, así que preferí dedicar el tiempo a la
+vigilancia programada.
