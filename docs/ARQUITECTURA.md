@@ -299,6 +299,21 @@ IA falla (502), repite con `?analysis=false` y muestra los cambios con un
 aviso del motivo: los hostnames son puro cálculo y no deben perderse porque
 falte el proveedor (Docker sin `.env`, o `replay` con una pareja no grabada).
 
+**Vigilancia.** La pestaña «Vigilancia» es el cliente de `/monitors` (§12):
+una tabla de monitores (HTML propio, no `st.dataframe`, para colorear el
+resultado por celda) que se refresca sola cada 10 s en un fragmento, con el
+resultado de la última ejecución deducido de los campos del monitor
+(escaneando, si su último escaneo sigue en curso; atención, si hay
+`last_error`; avisado, si `last_notified_at` es posterior a `last_run_at`;
+si no, sin cambios o pendiente). Atención va en ámbar: el rojo sigue siendo
+solo de `critical` y de la API caída. Pausar/reanudar (`PATCH`), borrar con
+confirmación en la página (el visor no tiene `confirm()`) y un formulario de
+alta con la frecuencia entre opciones fijas (mínimo 1 h, así no puede dar
+422) y la firma activada: sin secreto propio, el panel genera uno
+(`secrets.token_urlsafe`) y lo enseña una sola vez, porque la API no lo
+devuelve nunca. Los rechazos de la API (SSRF, allowlist, duplicado) se
+muestran con su motivo.
+
 **Puesta en marcha (fase B).** La cabecera lleva la torre de celosía de
 `atalaya init`/`doctor` en SVG en línea, sin colores propios (los pone
 `_CSS`). Cuando la API responde a `/scans` con la lista vacía, encima de las
@@ -531,8 +546,8 @@ obligatorios:
     *(`memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.)*
 15. **Escaneo en segundo plano y monitorización** 🚧 — `POST /scans` en
     segundo plano con su seguimiento en el dashboard (§2.1, §2.6, §11) y
-    vigilancia programada con aviso por webhook (§2.1, §12). Pendiente: el
-    panel de vigilancia en el dashboard y el cierre.
+    vigilancia programada con aviso por webhook (§2.1, §12) y su panel en el
+    dashboard (§2.6). Pendiente: el cierre.
     *(`memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`, en curso.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
@@ -1091,4 +1106,5 @@ los escaneos en curso de otro) sigue en pie.
 un timeout: un dominio grande puede avisar en casi cada ejecución. Sin
 reintento inmediato de un aviso fallido. Los escaneos programados no se
 distinguen de los manuales en `GET /scans` (el monitor guarda su último
-escaneo). Sin panel en el dashboard todavía.
+escaneo). El panel no edita un monitor (se borra y se crea otro) ni guarda un
+historial de avisos.

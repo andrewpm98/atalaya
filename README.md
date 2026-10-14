@@ -313,6 +313,9 @@ descarga desde la pestaña «Escaneos» del dashboard.
 
 ## Uso rápido: vigilancia programada (webhook)
 
+Desde el dashboard, en la pestaña **«Vigilancia»** (crear, pausar, borrar y
+ver el resultado de cada monitor), o por la API:
+
 Un **monitor** escanea un dominio cada `interval_hours` (mínimo 1) y hace un
 `POST` con JSON al webhook cuando algo cambia. La primera ejecución es en el
 minuto siguiente a crearlo, y compara con el último escaneo completado del
@@ -481,7 +484,7 @@ Ampliación posterior, más allá de los requisitos obligatorios:
 - [x] Escaneo en segundo plano (`POST /scans` responde 202) con su
       seguimiento en el dashboard
 - [x] Vigilancia programada: escaneos periódicos con aviso por webhook
-      (firmado con HMAC, protegido contra SSRF), por API
+      (firmado con HMAC, protegido contra SSRF), por API y desde el dashboard
 
 La memoria técnica de cada fase está en [`memorias/`](memorias/).
 

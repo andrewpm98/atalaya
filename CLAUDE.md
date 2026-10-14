@@ -14,7 +14,7 @@ suspensa**. Cualquier decisión de diseño debe respetarlos.
 |---|---|---|
 | Base de datos | PostgreSQL + SQLAlchemy async | ✅ Modelos Scan/Asset/Finding + migraciones Alembic. Persiste subdominios, puertos abiertos y hallazgos de cabeceras/TLS/takeover |
 | API o webhook | API REST propia **y** consumo de APIs externas | ✅ `scans`/`assets`/`findings`, triaje (`POST /scans/{id}/triage`), consulta NL vía agentes (`POST /findings/ask`), diff entre escaneos (`GET /scans/{id}/diff/{other_id}`) e informe (`GET /scans/{id}/report`) reales, estado de la configuración (`GET /config/status`) y vigilancia programada (`/monitors`), con autenticación opcional por `X-API-Key`. Consume crt.sh, Shodan y (Anthropic o Gemini, configurable). **Webhook** literal: la vigilancia avisa con un `POST` firmado a la URL del usuario |
-| Aplicación web | Dashboard Streamlit | ✅ Escaneos, comparación entre escaneos (diff), triaje IA, consulta NL, descarga de informe, bienvenida con el estado de la configuración — rediseño visual profesional (ver "Dashboard: diseño visual" más abajo) |
+| Aplicación web | Dashboard Streamlit | ✅ Escaneos, comparación entre escaneos (diff), triaje IA, consulta NL, descarga de informe, vigilancia programada (pestaña «Vigilancia»), bienvenida con el estado de la configuración — rediseño visual profesional (ver "Dashboard: diseño visual" más abajo) |
 | GitHub con historial | Commits por unidad lógica | ✅ commits por fase |
 | Reporte con portada | Informe generado por la herramienta | ✅ PDF con portada, resumen ejecutivo en lenguaje natural (IA), `risk_score` y hallazgos (`reporting/generator.py`) |
 
@@ -198,7 +198,8 @@ src/atalaya/
 migrations/                      Alembic (async); URL desde settings.database_url.
                                   Dos revisiones: modelos iniciales y `monitors`
 dashboard/app.py                 Dashboard Streamlit — escaneos, «Comparar
-                                  con» (diff), triaje IA, consulta NL,
+                                  con» (diff), triaje IA, vigilancia
+                                  (monitores), consulta NL,
                                   descarga de informe, bienvenida y estado
                                   de la configuración. Rediseño
                                   visual profesional (ver sección dedicada)
@@ -352,7 +353,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **671 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **683 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -363,7 +364,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +66 en la vigilancia programada: 34 del webhook, 27 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +66 en la vigilancia programada: 34 del webhook, 27 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas; +12 en el panel de vigilancia). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -445,8 +446,8 @@ pide evitar explícitamente ("los stubs no son código muerto").
     **Bloque 4** ✅ (API, 14/10/2026): vigilancia programada con aviso por
     webhook (`/monitors`), verificada en local y en el stack Docker; con ella
     se verificaron en Docker `/config/status` y el escaneo en segundo plano.
-    Pendiente: el panel de vigilancia en el dashboard (maqueta antes) y el
-    cierre. Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
+    Panel de vigilancia en el dashboard ✅ (`88bc65d`, con maqueta aprobada).
+    Pendiente: el cierre (bloque 5). Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -460,36 +461,44 @@ defensa oral.
 
 ## Estado al 14/10/2026 y próxima sesión
 
-**Dónde se quedó (sesión del 14/10/2026):** commits locales **sin subir**
-(el usuario dice cuándo hacer `push`). Hecho en la sesión: Netlas medida y
-descartada (`5acc66f`); el **bloque 4 por API**, vigilancia programada con
-aviso por webhook (`7de68a2` el envío con su protección SSRF, `c8e03b1` los
-monitores), verificado en real contra webhook.site en local y en el stack
-Docker (PostgreSQL 16); y, con el stack levantado, el pendiente de verificar
-en Docker `GET /config/status` y el escaneo en segundo plano. Después, la
-**prueba completa** que pidió el usuario (stack Docker, 9 fases, evidencias en
-una página publicada) destapó un defecto del guardia de falsas alarmas,
-corregido en `f541101` (criterio por fuente, no por «0 activos»). 671 tests;
-`ruff` (también sobre `dashboard/`) y `mypy` a cero. Ningún prompt ha
-cambiado: la demo en `replay` sigue intacta. Al retomar, comprobar con
-`git status -sb` y `git log --oneline -5`.
+**Dónde se quedó (cierre de la sesión del 14/10/2026):** 8 commits locales
+**sin subir** (el usuario dice cuándo hacer `push`). Hecho en la sesión:
+Netlas medida y descartada (`5acc66f`); el **bloque 4 completo**: vigilancia
+programada con aviso por webhook (`7de68a2` el envío con su protección SSRF,
+`c8e03b1` los monitores), la prueba completa en el stack Docker que destapó
+un defecto del guardia de falsas alarmas (`f541101`, criterio por fuente) y
+el **panel de vigilancia** del dashboard (`88bc65d`, maqueta aprobada); de
+paso, verificados en Docker `GET /config/status` y el escaneo en segundo
+plano. 683 tests; `ruff` (también sobre `dashboard/`) y `mypy` a cero. Ningún
+prompt ha cambiado: la demo en `replay` sigue intacta. Al retomar, comprobar
+con `git status -sb` (debería decir `ahead 8`) y `git log --oneline -9`.
 
 - Dossier de defensa: https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91
 - Guía de la herramienta (funcionalidad, para quien llega de fuera):
   https://claude.ai/code/artifact/1ff455ae-dbc0-4019-b0a9-10222c195a20
-- Maquetas aprobadas: fase B https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4
-  y bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b
+- Maquetas aprobadas: fase B https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4,
+  bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b y panel de
+  vigilancia https://claude.ai/artifact/EnvuSwUbnQ71ukn97VyaZz
 - Evidencias de la prueba completa de la vigilancia (14/10/2026, stack Docker,
   9 fases, capturas y avisos reales): https://claude.ai/artifact/9xemMd7makz8RuyUJSNtjw
 
-**Pendiente, en este orden:** (1) el **panel de vigilancia** en el dashboard
-(decidido el 14/10/2026: API primero, panel después, con **maqueta aprobada
-antes** de programarlo); (2) cierre de la fase (bloque 5) y actualizar el
-dossier y la guía con la vigilancia (y la restricción de seguridad #7, nueva:
-el dossier habla de seis); (3) decidir si se fija
-`streamlit==1.64.0` en `pyproject.toml` (hoy `>=1.37`: una versión nueva
-puede romper el CSS, como pasó con la barra lateral; recomendado, sin
-respuesta del usuario todavía).
+**Pendiente, en este orden:** (1) **`push`** de los 8 commits cuando el
+usuario lo diga; (2) **cierre de la fase (bloque 5)**: dossier y guía al día
+(vigilancia, restricción de seguridad #7 —el dossier habla de seis—, cifras:
+683 tests), guion de la demo recorrido en `replay` por HTTP sin grabaciones
+faltantes, decidir si la vigilancia entra en la demo (necesita red: escanea y
+avisa a un receptor externo; webhook.site sirve de receptor) y cerrar la
+memoria de la fase; (3) decidir si se fija `streamlit==1.64.0` en
+`pyproject.toml` (hoy `>=1.37`: una versión nueva puede romper el CSS, como
+pasó con la barra lateral; recomendado, sin respuesta del usuario todavía).
+
+**En la máquina del usuario, fuera del código:** su base de datos local de
+desarrollo (`atalaya.sqlite3`) no tiene la tabla `monitors`: antes de
+arrancar la API en local, `alembic upgrade head` (`atalaya doctor` lo
+señala). Su `.env` sigue con `API_HOST`/`API_PORT`/`ENVIRONMENT` y
+`SCAN_ALLOWLIST` vacía. El stack Docker se paró al cerrar la sesión (los
+datos siguen en el volumen: 14 escaneos reales de scanme.nmap.org, ningún
+monitor).
 
 **Calendario:** a 12/10/2026, «hay algo de margen», sin fecha de defensa
 concreta. El usuario trabaja **bloque a bloque**: se cierra uno (código,
@@ -579,6 +588,11 @@ usuario el 14/10/2026:
 - **El límite de varios workers no se documentó: se resolvió.** Cada
   ejecución se reclama con un `UPDATE` condicional (probado en PostgreSQL:
   dos reclamos simultáneos dan `[True, False]`).
+- **Panel de vigilancia** ✅ (`88bc65d`, maqueta https://claude.ai/artifact/EnvuSwUbnQ71ukn97VyaZz): pestaña
+  «Vigilancia» con la tabla de monitores (resultado en chip, refresco cada
+  10 s), pausar/reanudar, borrar con confirmación y alta con firma por
+  defecto; el secreto, si no se da uno propio, lo genera el panel y lo enseña
+  una vez (añadido fuera del plan, aprobado en la maqueta).
 - Al enviar se conecta a la **IP validada** (*DNS rebinding*), con SNI y
   verificación contra el nombre, y se prueba la siguiente dirección solo si
   la anterior no conectó (sin IPv6, un host con IPv6 primero no recibiría
@@ -797,6 +811,8 @@ ningún error, simplemente el resultado sale mal):
 | Streamlit 1.63 migró los widgets de BaseWeb a **react-aria** | Los selectores `[data-baseweb="tab"]`, `[data-baseweb="input"]`… dejaron de existir; las reglas no daban error, simplemente no pintaban | Selectores contra el DOM real (`[data-testid="stTab"]`, `*RootElement`, `[role="group"]`), revisados con el navegador abierto |
 | El tipo de aviso (`success`/`warning`/`error`) se pinta en un hijo, no en el contenedor con borde | Los cuatro tipos se veían como la misma caja gris: un error y un éxito eran indistinguibles | `[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"])`, etc. |
 | Con la barra lateral plegada, el botón que la reabre (`stExpandSidebarButton`) vive **dentro** de `stToolbar` (Streamlit 1.64) | El rediseño ocultaba `stToolbar` con `display: none`: al plegar la barra lateral no había forma de volver a abrirla. Y su ancho forzado con `!important` la mantenía ocupando 268 px ya plegada | `stToolbar` con `visibility: hidden` y el botón con `visibility: visible` (un hijo puede revertirla); el ancho, solo con `aria-expanded="true"`. Guarda estática en `tests/test_dashboard.py` (`912e6c5`) |
+| Borrar de `st.session_state` el valor de un campo no lo vacía en el navegador | Tras crear un monitor, el formulario conservaba dominio y URL aunque el estado se había borrado: el frontend reenvía su propio valor | Claves con un contador que sube tras cada alta (`mon_dominio_{n}`): Streamlit lo pinta como un campo nuevo, vacío |
+| Una regla `.clase` sobre una tabla HTML propia pierde contra la de Streamlit para las tablas de markdown | Quedaba una franja vacía dentro del borde de la tabla de monitores (el margen inferior de Streamlit) | Más especificidad: `.atl-mon-wrap table.atl-mon`, igual que la «doble clase» de `p.atl-note` |
 | Un elemento escrito en un `st.container()` reservado arriba se pinta cuando el script llega a escribirlo, no cuando se reservó | La bienvenida va encima de las pestañas pero se rellena desde la de «Escaneos»: una captura que solo esperaba a las pestañas salía sin ella y parecía que no se pintaba | Al capturar, esperar al elemento concreto o a que termine el script, no solo a las pestañas |
 
 La torre de la cabecera y de la bienvenida es SVG en línea pintado con
@@ -932,8 +948,9 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   repite, acumulado, en la siguiente ejecución). La URL del webhook y su
   secreto se guardan en claro en la BD (los necesita para enviar y firmar),
   como las claves en `.env`. Los escaneos programados no se distinguen de
-  los manuales en `GET /scans`. **Sin panel en el dashboard** todavía:
-  siguiente paso del bloque 4, con maqueta antes.
+  los manuales en `GET /scans`. El panel no edita un monitor (se borra y se
+  crea otro) ni guarda un historial de avisos (la API solo guarda el último
+  resultado).
 - **`init` interactivo en Git Bash (mintty) exige `winpty atalaya init`**:
   mintty no ofrece a Python una consola de Windows y `getpass` no puede leer
   el teclado. `init` lo detecta (`MSYSTEM`) y lo explica en vez de colgarse;
@@ -1339,7 +1356,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
 atalaya init                         # configuración guiada: alcance, BD, claves (.env)
 atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
-pytest -q                            # tests (deben pasar los 671)
+pytest -q                            # tests (deben pasar los 683)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)

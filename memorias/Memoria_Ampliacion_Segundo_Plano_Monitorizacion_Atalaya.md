@@ -7,9 +7,8 @@ defensa (dossier y guía de la herramienta), saca el escaneo de la petición
 HTTP y añade la vigilancia programada.
 **Estado:** En curso. Bloques 2 y 3 completos y subidos a `origin/main` el
 13/10/2026. Netlas (bloque 3b), evaluada y descartada el 14/10/2026. Bloque 4
-(vigilancia) completo por API el 14/10/2026: 671 tests, `ruff` y `mypy` a
-cero. Pendientes el panel de vigilancia en el dashboard y el cierre (bloque
-5); ver §9.
+(vigilancia) completo el 14/10/2026, por API y con su panel en el dashboard:
+683 tests, `ruff` y `mypy` a cero. Pendiente el cierre (bloque 5); ver §9.
 
 ---
 
@@ -233,6 +232,22 @@ cubre, la conexión se rechaza.
 en la ruta. La API la devuelve como `https://host/…`, el log de auditoría
 igual, y de un error de red solo se guarda el tipo (su texto lleva la URL).
 
+**El panel del dashboard** (`88bc65d`), con maqueta de capturas reales
+aprobada antes de cerrarlo (https://claude.ai/artifact/EnvuSwUbnQ71ukn97VyaZz): una pestaña «Vigilancia» con la tabla
+de monitores, que se refresca sola cada 10 s y muestra el resultado de la
+última ejecución en un chip (pendiente, escaneando, sin cambios, avisado,
+atención), pausar/reanudar, borrar con confirmación y un formulario de alta.
+La firma va activada por defecto y, si no se da un secreto propio, el panel
+genera uno y lo enseña una sola vez: añadido fuera del plan y aprobado en la
+maqueta, porque si no firmar exigía inventarse 16 caracteres a mano.
+
+La maqueta pasó por tres rondas antes de enseñarse, por fallos vistos en las
+propias capturas: tras crear un monitor, la lista seguía diciendo «0
+monitores» (se pintaba antes de procesar el formulario) y el formulario no se
+vaciaba. Lo segundo es una trampa de Streamlit: borrar el valor del estado no
+vacía el campo, porque el navegador reenvía el suyo; hacen falta claves
+nuevas tras cada alta.
+
 ---
 
 ## 7. Verificación
@@ -252,7 +267,12 @@ planificación, reclamo concurrente, bucle,
 `lifespan` y rutas) y 5 del test de autenticación, que recorre las rutas
 nuevas. Siete mutaciones (avanzar la base sin entregar, quitar el guardia de
 fuente caída, volver al criterio de «0 activos», reclamar sin condición, no
-reautorizar, no fijar la IP, seguir redirecciones) hacen fallar su test.
+reautorizar, no fijar la IP, seguir redirecciones) hacen fallar su test. Panel, +12 (estados de la tabla, escape
+de lo que llega de la API, alta con secreto generado o propio o sin firma,
+rechazo de la API conservando el formulario, pausa, borrado con
+confirmación y cancelación); cuatro mutaciones (sin escape, borrar sin
+confirmar, el error antes que «escaneando», no recargar tras el alta) hacen
+fallar cada una su test.
 
 **Pruebas reales:**
 
@@ -316,7 +336,8 @@ reinicios (I) y se guardó el log al momento.
   siguiente ejecución.
 - **La URL del webhook y su secreto se guardan en claro** en la base de datos
   (hacen falta para enviar y firmar), como las claves en `.env`.
-- **Sin panel de vigilancia** en el dashboard todavía; por API y `/docs`.
+- **El panel no edita un monitor** (se borra y se crea otro) ni guarda un
+  historial de avisos: la API solo guarda el último resultado.
 - **El trabajo vive en el proceso de la API.** Con varios procesos sobre la
   misma base de datos, uno que arranca cerraría los escaneos de otro. Se
   despliega con uno. (La vigilancia no repite ejecuciones entre procesos:
@@ -331,9 +352,9 @@ reinicios (I) y se guardó el log al momento.
 
 ## 9. Lo que queda de la fase
 
-1. **El panel de vigilancia en el dashboard**, con maqueta aprobada antes.
-2. **Cierre**: dossier y guía al día (con la restricción #7), guion de la
-   demo recorrido en `replay` y `push`.
+1. **Cierre**: dossier y guía al día (con la restricción #7), guion de la
+   demo recorrido en `replay`, decidir si la vigilancia entra en la demo y
+   `push`.
 
 ---
 
@@ -352,7 +373,9 @@ reinicios (I) y se guardó el log al momento.
 | `c8e03b1` | feat(api): vigilancia programada con aviso por webhook (`/monitors`) |
 | `6d171c4` | docs: la vigilancia en CLAUDE.md, ARQUITECTURA, README y esta memoria |
 | `f541101` | fix(monitor): la fuente caída, por lo que aporta y no por 0 activos |
-| (este) | docs: la prueba completa y la corrección del guardia |
+| `ddb0ccd` | docs: la prueba completa y la corrección del guardia |
+| `88bc65d` | feat(dashboard): panel de vigilancia (pestaña «Vigilancia») |
+| (este) | docs: el panel de vigilancia y el estado al cierre del 14/10/2026 |
 
 ---
 
