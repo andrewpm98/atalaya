@@ -13,13 +13,15 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atalaya.config import settings
-from atalaya.core.models import Finding, FindingSeverity, Scan
+from atalaya.core.database import Base
+from atalaya.core.models import Finding, FindingSeverity, Monitor, Scan
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -73,6 +75,55 @@ async def test_seed_con_reset_sustituye_todo_y_reinicia_ids(db_session: AsyncSes
     total = sum(len(_findings(s)) for s in FIXTURE["scans"])
     stored = (await db_session.execute(Finding.__table__.select())).all()
     assert len(stored) == total
+
+
+def _monitor(scan_id: int | None = None) -> Monitor:
+    return Monitor(
+        domain="scanme.nmap.org",
+        interval_hours=24,
+        webhook_url="https://hooks.example.com/t/secreto",
+        next_run_at=datetime.now(UTC),
+        baseline_scan_id=scan_id,
+        last_scan_id=scan_id,
+    )
+
+
+async def test_seed_se_niega_si_hay_monitores(db_session: AsyncSession) -> None:
+    """Un monitor de un ensayo anterior escanearía de verdad en mitad de la demo."""
+    db_session.add(_monitor())
+    await db_session.commit()
+    with pytest.raises(seed_demo_data.SeedError, match=r"1 monitor\(es\).*--reset"):
+        await seed_demo_data.seed(db_session, FIXTURE, reset=False)
+    assert await seed_demo_data.count_monitors(db_session) == 1
+
+
+async def test_seed_con_reset_borra_tambien_los_monitores(db_session: AsyncSession) -> None:
+    scan = Scan(domain="scanme.nmap.org")
+    db_session.add(scan)
+    await db_session.flush()
+    db_session.add(_monitor(scan.id))
+    await db_session.commit()
+    # El reset borra por SQL: la sesión no debe conservar el escaneo #1 viejo.
+    db_session.expunge_all()
+
+    scans = await seed_demo_data.seed(db_session, FIXTURE, reset=True)
+    assert [s.id for s in scans] == [1, 2]
+    assert await seed_demo_data.count_monitors(db_session) == 0
+
+
+def test_el_reset_vacia_toda_tabla_que_apunta_a_las_que_vacia() -> None:
+    """PostgreSQL rechaza `TRUNCATE scans` si otra tabla le apunta con una
+    clave foránea, aunque esté vacía: pasó con `monitors` y la siembra falló
+    en Docker incluso sobre una BD nueva. La suite corre en SQLite, que no
+    aplica claves foráneas, así que la única forma de verlo aquí es mirar el
+    esquema: toda tabla que referencie a una de la lista debe estar en ella,
+    y antes (hijos antes que padres, para el `DELETE` de SQLite)."""
+    tables = seed_demo_data._TABLES
+    for table in Base.metadata.sorted_tables:
+        for fk in table.foreign_keys:
+            if fk.column.table.name in tables:
+                assert table.name in tables, f"{table.name} → {fk.column.table.name}"
+                assert tables.index(table.name) < tables.index(fk.column.table.name)
 
 
 async def test_la_demo_completa_se_reproduce_sin_red(

@@ -11,8 +11,10 @@ lenguaje natural, informe y diff — funciona sin red. Ver "Datos de reserva
 para la demo" en CLAUDE.md.
 
 Usa el `DATABASE_URL` configurado (SQLite local o el PostgreSQL de Docker) y
-aplica antes las migraciones. **`--reset` borra todos los escaneos de esa
-BD**: sin él, el script se niega a sembrar sobre una BD que ya tenga datos.
+aplica antes las migraciones. **`--reset` borra todos los escaneos y
+monitores de esa BD**: sin él, el script se niega a sembrar sobre una BD que
+ya tenga datos. Los monitores se borran porque uno que sobreviviera lanzaría
+escaneos reales en mitad de la demo, contra una línea base que ya no existe.
 Reiniciar también las secuencias de ids no es cosmético: el prompt del diff
 incluye los ids de ambos escaneos, así que las respuestas grabadas solo
 coinciden si el seed produce siempre los mismos (#1 y #2).
@@ -35,7 +37,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atalaya.core.models import Asset, Finding, FindingSeverity, Scan, ScanStatus
+from atalaya.core.models import Asset, Finding, FindingSeverity, Monitor, Scan, ScanStatus
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = ROOT / "demo" / "github.com.json"
@@ -43,7 +45,11 @@ FIXTURE_FORMAT = 1
 
 #: Orden de borrado: hijos antes que padres. SQLite no aplica `ON DELETE
 #: CASCADE` sin `PRAGMA foreign_keys=ON`, así que no se confía en la cascada.
-_TABLES = ("findings", "assets", "scans")
+#: Toda tabla con una clave foránea hacia otra de la lista tiene que estar en
+#: ella: PostgreSQL rechaza el `TRUNCATE` de una tabla referenciada aunque la
+#: que la referencia esté vacía (`monitors` → `scans` rompió la siembra en
+#: Docker; SQLite no lo ve). `tests/test_demo_data.py` lo comprueba.
+_TABLES = ("monitors", "findings", "assets", "scans")
 
 
 class SeedError(Exception):
@@ -105,6 +111,10 @@ async def count_scans(session: AsyncSession) -> int:
     return int((await session.execute(select(func.count()).select_from(Scan))).scalar_one())
 
 
+async def count_monitors(session: AsyncSession) -> int:
+    return int((await session.execute(select(func.count()).select_from(Monitor))).scalar_one())
+
+
 async def reset_database(session: AsyncSession) -> None:
     """Vacía las tablas y reinicia las secuencias de ids (ver docstring del módulo)."""
     if session.get_bind().dialect.name == "postgresql":
@@ -123,15 +133,23 @@ async def reset_database(session: AsyncSession) -> None:
 
 
 async def seed(session: AsyncSession, fixture: dict[str, Any], *, reset: bool) -> list[Scan]:
-    """Siembra el fixture. Se niega si la BD tiene escaneos y `reset` es falso.
+    """Siembra el fixture. Se niega si la BD tiene escaneos o monitores y
+    `reset` es falso.
 
     Cada escaneo se vuelca (`flush`) antes de añadir el siguiente para que
     los ids sigan el orden del fixture: el previo recibe el id menor.
     """
-    existing = await count_scans(session)
+    existing = [
+        f"{count} {name}"
+        for count, name in (
+            (await count_scans(session), "escaneo(s)"),
+            (await count_monitors(session), "monitor(es)"),
+        )
+        if count
+    ]
     if existing and not reset:
         raise SeedError(
-            f"la BD ya tiene {existing} escaneo(s); usa --reset para borrarlos y sembrar la demo"
+            f"la BD ya tiene {' y '.join(existing)}; usa --reset para borrarlos y sembrar la demo"
         )
     await reset_database(session)
 
@@ -200,7 +218,9 @@ async def _main(fixture_path: Path, reset: bool) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--reset", action="store_true", help="borra TODOS los escaneos de la BD antes de sembrar"
+        "--reset",
+        action="store_true",
+        help="borra TODOS los escaneos y monitores de la BD antes de sembrar",
     )
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     args = parser.parse_args(argv)
