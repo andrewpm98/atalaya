@@ -1021,15 +1021,22 @@ lifespan de la API ── monitor_loop(): cada 60 s          core/monitor_runner
         │            WHERE id = … AND next_run_at = <leído>   (solo uno gana)
         ├─ ensure_authorized() otra vez ── no → aviso «escaneo_fallido», sin escanear
         ├─ Scan(running) → run_scan()   (el mismo de POST /scans)
-        └─ comparar con la línea base, SIN IA:
+        └─ comparar con lo ya avisado, SIN IA:          core/change_confirmation.py
              escaneo fallido                     → «escaneo_fallido»
-             sin línea base                      → este escaneo es la base
+             sin escaneo anterior                → este escaneo es la referencia
              una fuente (crt.sh, Shodan) que     → «escaneo_fallido» (fuente caída,
                aportó hosts a la base y ahora       no «sus hosts desaparecieron»)
                ninguno
-             diff con nuevos/desaparecidos/      → «cambios»; la base avanza
-               cambiados                            SOLO si el aviso se entregó
-             sin cambios                         → la base avanza, sin aviso
+             si no, cambio a cambio (un host, su estado, un puerto, un tipo
+             de hallazgo), frente a la referencia:
+               visto también en la ejecución     → confirmado → «cambios»
+                 anterior
+               visto por primera vez             → por confirmar, sin aviso; si no
+                                                    había nada pendiente, el siguiente
+                                                    escaneo se adelanta a 1 h
+               pendiente que ya no se ve         → descartado como ruido
+             la base pasa a este escaneo; lo no avisado (por confirmar, o
+             confirmado con el aviso fallido) queda en pending_changes
 
 send_webhook()                                              core/webhooks.py
    resolver otra vez → todas públicas → POST a la IP validada
@@ -1044,12 +1051,44 @@ escaneos se lanzaban a mano. El diff (`cambiados`, §2.3) ya decía qué cambió
 esto es el disparador. Reutiliza `run_scan` (§11), así que un escaneo
 programado es exactamente uno lanzado a mano, con las mismas restricciones.
 
-**La línea base.** Cada monitor guarda el escaneo contra el que compara el
-siguiente, y solo la avanza si el aviso llegó o no había nada que avisar.
-Comparando siempre con el escaneo anterior, un aviso que falla (receptor
-caído, 503) se perdería: la siguiente ejecución compararía contra un escaneo
-que ya incluye el cambio. Así, el aviso fallido se repite acumulado. No hay
-reintentos inmediatos: el siguiente intento es la siguiente ejecución.
+**Confirmación en dos escaneos.** Un escaneo es una medición, y una medición
+falla: un puerto que no contesta a tiempo «desaparece», un host cuyo DNS da
+timeout pierde sus puertos y hallazgos, y si HTTPS no responde pero HTTP sí
+*aparece* un `sin_https` que no existe (`discovery/headers.py`). El ruido va
+en las dos direcciones, así que no basta con desconfiar de lo que desaparece:
+un cambio solo se avisa cuando se ve en **dos ejecuciones seguidas** del
+monitor. El diff se descompone en cambios atómicos (un host que aparece o
+desaparece, un cambio de estado, un puerto, un tipo de hallazgo) y cada uno
+se confirma por separado: un timeout que tumba un puerto no retrasa el aviso
+de un subdominio nuevo. Un cambio se confirma si la ejecución anterior vio el
+mismo cambio frente al mismo valor avisado; lo visto una sola vez queda «por
+confirmar» (`monitors.pending_changes`), y si la ejecución siguiente no lo
+repite se descarta sin avisar (`monitors.last_discarded`). El diff que se pide
+a mano (`GET /scans/{id}/diff/{other_id}`) no cambia: compara exactamente
+esos dos escaneos.
+
+**Confirmación adelantada.** Esperar al turno normal retrasaría un día cada
+aviso de un monitor diario. Si una ejecución deja cambios nuevos por
+confirmar y antes no había ninguno pendiente, el siguiente escaneo se
+adelanta a una hora, el intervalo mínimo (la restricción #5 no cambia). Solo
+en esa transición: en un dominio que fluctúa sin parar, lo pendiente nunca
+llega a vaciarse y la confirmación espera al turno normal, así que como mucho
+hay un escaneo de más por turno.
+
+**La referencia: lo ya avisado.** Se compara contra lo que el receptor ya
+sabe: el último escaneo comparado (`baseline_scan_id`) con los cambios
+pendientes deshechos (cada uno guarda su valor anterior). La base pasa a cada
+escaneo comparado y lo no avisado se queda en `pending_changes`, también lo
+confirmado cuyo aviso falló (receptor caído, 503): en la siguiente ejecución
+se confirma otra vez y se reenvía. Es la regla del bloque 4 —un aviso perdido
+no pierde el cambio— sin atar la base a un solo escaneo: con la base fija,
+lo que solo se vio una vez quedaría absorbido en ella o se avisaría dos veces.
+No hay reintentos inmediatos de un aviso fallido.
+
+**Lo que cuesta.** Cada aviso llega una ejecución más tarde que el cambio
+(una hora con la confirmación adelantada), y una fluctuación que dure dos
+escaneos seguidos sí se avisa. El aviso dice cuántos cambios quedan por
+confirmar y cuántos se descartaron como ruido.
 
 **Falsas alarmas.** Con crt.sh caído, el escaneo termina «completado» (es
 degradación controlada) pero sin los hosts que aportaba crt.sh, y el diff los
@@ -1111,9 +1150,9 @@ condicional sobre el `next_run_at` leído y solo uno lo gana (probado con dos
 revisiones simultáneas). El límite de §11 (el arranque de un proceso cierra
 los escaneos en curso de otro) sigue en pie.
 
-**Límites.** El diff no distingue un cambio real de una fluctuación de DNS o
-un timeout: un dominio grande puede avisar en casi cada ejecución. Sin
-reintento inmediato de un aviso fallido. Los escaneos programados no se
+**Límites.** Una fluctuación que dure dos ejecuciones seguidas se avisa como
+un cambio, y cada aviso llega una ejecución tarde. Sin reintento inmediato de
+un aviso fallido. Los escaneos programados no se
 distinguen de los manuales en `GET /scans` (el monitor guarda su último
 escaneo). El panel no edita un monitor (se borra y se crea otro) ni guarda un
 historial de avisos.

@@ -451,6 +451,13 @@ pide evitar explícitamente ("los stubs no son código muerto").
     fijado (`e59c27e`); demo re-verificada en local y en Docker, con la
     vigilancia como paso opcional; dossier y guía al día. Memoria:
     `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
+15. **Ampliación — Vigilancia con menos ruido** 🚧 (desde el 15/10/2026,
+    pedida por el usuario: «reduce el ruido») — un cambio solo se avisa si se
+    ve en dos escaneos seguidos, en las dos direcciones y cambio a cambio; lo
+    visto una vez se descarta como ruido, y la confirmación se adelanta a 1 h.
+    Diseño en ARQUITECTURA §12. Plan: (1) núcleo y API, (2) prueba real con
+    timeouts provocados sobre `scanme.nmap.org`, (3) el panel, con maqueta
+    antes, (4) cierre (docs, dossier, memoria).
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -781,7 +788,8 @@ cómo trata esto.
 | `rich` para la terminal; menús numerados, no con flechas | `questionary`/`prompt_toolkit` fallan en Git Bash (mintty) por no ser una consola de Windows. Con salida no UTF-8, iconos y logo en ASCII en vez de romper con `UnicodeEncodeError` (reproducido al maquetar) |
 | `init` no toca nada hasta confirmar el resumen: las migraciones se aplican al final | La maqueta las mostraba en el paso 2, pero eso rompería la promesa de que Ctrl+C sale sin cambios. En el paso 2 solo se conecta y se informa de lo pendiente |
 | Netlas descartada como segunda fuente de subdominios (14/10/2026) | Medida sin clave: 38.035 nombres para `*.github.com`, pero los 7 primeros no resolvían a ninguna dirección; 200 por descarga y 2.500/mes en el plan gratuito. Más ruido que activos (bloque 3b) |
-| Vigilancia: la línea base solo avanza si el aviso se entrega | Comparando siempre con el escaneo anterior, un aviso perdido no volvería a salir: la siguiente ejecución compararía contra un escaneo que ya tiene el cambio |
+| Vigilancia: se compara contra lo ya avisado; lo no entregado se repite | Comparando siempre con el escaneo anterior, un aviso perdido no volvería a salir: la siguiente ejecución compararía contra un escaneo que ya tiene el cambio. Hasta la fase 15, la base solo avanzaba si el aviso llegaba; desde ella pasa a cada escaneo comparado y lo no avisado (por confirmar o con el aviso fallido) queda en `pending_changes`, con su valor anterior |
+| Vigilancia: un cambio se avisa cuando se ve en dos ejecuciones seguidas, en las dos direcciones, cambio a cambio; la confirmación se adelanta a 1 h si no había nada pendiente (fase 15) | Un timeout hace desaparecer puertos y hallazgos, pero también aparecer un `sin_https` falso (HTTPS no contesta y HTTP sí): desconfiar solo de lo que desaparece no basta. Cambio a cambio, para que un puerto que fluctúa no retrase un subdominio nuevo. Esperar al turno normal retrasaría un día cada aviso; adelantar siempre haría de un dominio que fluctúa un escaneo por hora (restricción #5) |
 | Vigilancia: también se avisan los fallos (`escaneo_fallido`), y una fuente (crt.sh, Shodan) que aportó hosts a la línea base y ninguno al escaneo actual es una fuente caída, no una desaparición | El peor fallo de una vigilancia es el silencioso. Contar activos no sirve (el dominio raíz entra siempre: crt.sh caído deja 1, no 0) ni mirar las incidencias (el 403 de Shodan sale en todo escaneo) |
 | Vigilancia: diff sin IA, un monitor por dominio, intervalo mínimo de 1 h, de uno en uno | Sin crédito ni dependencia del proveedor; dos monitores o un intervalo corto serían más carga sobre el objetivo sin información nueva (restricción #5); crt.sh limita a quien le pide mucho a la vez |
 | Webhook: solo `https`, firma HMAC opcional, URL y secreto nunca devueltos | El aviso es un mapa de la superficie; la firma es el esquema de GitHub; las URL de Slack/Discord llevan el token en la ruta |
