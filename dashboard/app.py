@@ -974,6 +974,9 @@ h1, h2, h3, h4, h5 { font-family: var(--sans); letter-spacing: -0.01em; }
 .atl-mon-warn { color: var(--sev-medium); }
 .atl-mon-run { color: var(--accent); }
 .atl-mon-quiet, .atl-mon-pend { color: var(--fg-faint); }
+/* Por confirmar: el acento, pero discontinuo. No es una alerta (el ámbar) ni
+   un escaneo en marcha (el acento continuo): es provisional. */
+.atl-mon-hold { color: var(--accent); border-style: dashed; }
 .atl-mon-paused-tag { color: var(--fg-faint); border-style: dashed; }
 
 /* ── Tabla de escaneos ────────────────────────────────────────────────── */
@@ -1958,6 +1961,10 @@ def _cada(horas: int) -> str:
     return {1: "1 h", 24: "1 día", 168: "1 semana"}.get(horas, f"{horas} h")
 
 
+def _cambios(n: int) -> str:
+    return "1 cambio visto" if n == 1 else f"{n} cambios vistos"
+
+
 def resultado_monitor(monitor: dict[str, Any], estados: dict[int, str]) -> tuple[str, str, str]:
     """Clase, etiqueta y texto del último resultado de un monitor.
 
@@ -1974,9 +1981,26 @@ def resultado_monitor(monitor: dict[str, Any], estados: dict[int, str]) -> tuple
         return "run", "escaneando", f"Escaneo #{escaneo} en curso."
     if monitor["last_error"]:
         return "warn", "atención", str(monitor["last_error"])
+    pendientes = int(monitor.get("pending_changes") or 0)
+    descartados = int(monitor.get("last_discarded") or 0)
     avisado = monitor["last_notified_at"]
     if avisado and _a_utc(avisado) >= _a_utc(monitor["last_run_at"]):
-        return "ok", "avisado", "Hubo cambios y el aviso se entregó."
+        texto = "Cambios confirmados en dos escaneos; el aviso se entregó."
+        if pendientes:
+            texto += f" {_cambios(pendientes)} más, por confirmar."
+        return "ok", "avisado", texto
+    if pendientes:
+        return (
+            "hold",
+            "por confirmar",
+            f"{_cambios(pendientes)} en un solo escaneo: se avisa si el siguiente lo repite.",
+        )
+    if descartados:
+        texto = (
+            f"Nada que avisar: {_cambios(descartados)} en un solo escaneo, "
+            "descartados como ruido."
+        )
+        return "quiet", "sin cambios", texto
     return "quiet", "sin cambios", "Nada que avisar en la última ejecución."
 
 
@@ -1990,18 +2014,27 @@ def render_monitores(monitores: list[dict[str, Any]], estados: dict[int, str]) -
             ultima = "hace unos segundos" if hace < 60 else f"hace {_lapso(hace)}"
             if m["last_scan_id"] is not None:
                 ultima += f"<small>escaneo #{int(m['last_scan_id'])}</small>"
-        base = (
-            f"<small>compara con el escaneo #{int(m['baseline_scan_id'])}</small>"
-            if m["baseline_scan_id"] is not None
-            else "<small>sin escaneo previo: el primero será la referencia</small>"
-        )
+        # Con cambios por confirmar, la referencia no es ese escaneo tal cual
+        # sino ese escaneo sin esos cambios: decir «compara con el #N» engañaría.
+        if m.get("pending_changes"):
+            base = ""
+        elif m["baseline_scan_id"] is not None:
+            base = f"<small>compara con el escaneo #{int(m['baseline_scan_id'])}</small>"
+        else:
+            base = "<small>sin escaneo previo: el primero será la referencia</small>"
         pausa = '<span class="atl-mon-st atl-mon-paused-tag">en pausa</span>' if not m["active"] else ""
         firma = "<small>firmado (HMAC)</small>" if m["signed"] else "<small>sin firma</small>"
+        # El turno se adelanta para confirmar lo pendiente: que se vea por qué.
+        confirma = (
+            "<small>confirma lo pendiente</small>"
+            if m["active"] and m.get("pending_changes")
+            else ""
+        )
         filas.append(
             f'<tr class="{"" if m["active"] else "atl-mon-paused"}">'
             f'<td class="atl-mon-dom">{escape(str(m["domain"]))}</td>'
             f'<td class="atl-mon-nw">{_cada(int(m["interval_hours"]))}</td>'
-            f'<td class="atl-mon-nw">{pausa or escape(_proximo_turno(m))}</td>'
+            f'<td class="atl-mon-nw">{pausa or escape(_proximo_turno(m))}{confirma}</td>'
             f'<td class="atl-mon-nw">{ultima}</td>'
             f'<td class="atl-mon-res"><span class="atl-mon-st atl-mon-{clase}">{etiqueta}</span>'
             f"{escape(texto)}{base}</td>"

@@ -1221,6 +1221,8 @@ def _monitor(monitor_id: int = 1, **campos: object) -> dict[str, Any]:
         "baseline_scan_id": None,
         "last_notified_at": None,
         "last_error": None,
+        "pending_changes": 0,
+        "last_discarded": 0,
     }
     return {**base, **campos}
 
@@ -1282,6 +1284,35 @@ def test_el_resultado_de_cada_monitor_se_deduce_de_sus_campos() -> None:
     assert "HTTP 503" in filas[2]
     assert "compara con el escaneo #9" in filas[3]
     assert "el primero será la referencia" in filas[0]
+
+
+def test_lo_pendiente_de_confirmar_y_lo_descartado_se_ven_en_el_resultado() -> None:
+    """La vigilancia solo avisa de lo visto en dos escaneos: el panel tiene que
+    decir que hay algo esperando (y que por eso el turno se adelantó) y cuánto
+    ruido se descartó, o «sin cambios» escondería las dos cosas."""
+    hace = "2026-10-14T10:00:00"
+    despues = "2026-10-14T10:00:05"
+    monitores = [
+        _monitor(1, last_run_at=hace, last_scan_id=9, baseline_scan_id=9, pending_changes=3),
+        _monitor(2, last_run_at=hace, last_scan_id=10, baseline_scan_id=10, last_discarded=9),
+        _monitor(3, last_run_at=hace, last_scan_id=11, baseline_scan_id=11,
+                 last_notified_at=despues, pending_changes=1),
+        _monitor(4, last_run_at=hace, last_scan_id=12, baseline_scan_id=12, pending_changes=2,
+                 active=False),
+    ]
+    at, _ = _vigilancia(monitores)
+
+    assert not at.exception
+    filas = _tabla(at).split("<tr")[2:]
+    clases = [re.search(r"atl-mon-(hold|ok|quiet)\b", f).group(1) for f in filas]
+    assert clases == ["hold", "quiet", "ok", "hold"]
+    assert "3 cambios vistos en un solo escaneo: se avisa si el siguiente lo repite" in filas[0]
+    assert "confirma lo pendiente" in filas[0]
+    assert "compara con el escaneo" not in filas[0]  # la referencia no es el #9 tal cual
+    assert "compara con el escaneo #10" in filas[1]
+    assert "9 cambios vistos en un solo escaneo, descartados como ruido" in filas[1]
+    assert "1 cambio visto más, por confirmar" in filas[2]
+    assert "confirma lo pendiente" not in filas[3]  # en pausa no se adelanta nada
 
 
 def test_un_monitor_en_pausa_lo_dice_y_ofrece_reanudar() -> None:
