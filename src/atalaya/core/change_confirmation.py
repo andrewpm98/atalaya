@@ -226,7 +226,9 @@ def as_scan_diff(changes: list[Change], ref: Snapshot, current: Snapshot) -> Sca
         elif change.after is not None:
             asset.hallazgos_nuevos.append(FindingRef(cast("str", change.item), change.after))
         else:
-            asset.hallazgos_desaparecidos.append(FindingRef(cast("str", change.item), change.before))
+            asset.hallazgos_desaparecidos.append(
+                FindingRef(cast("str", change.item), change.before)
+            )
     for asset in por_host.values():
         asset.puertos_nuevos.sort()
         asset.puertos_desaparecidos.sort()
