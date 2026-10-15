@@ -88,6 +88,14 @@ def test_imagen_dashboard_incluye_el_tema() -> None:
     assert (ROOT / ".streamlit" / "config.toml").is_file()
 
 
+def test_streamlit_fijado_a_una_version_exacta() -> None:
+    """El CSS del dashboard apunta al DOM interno de Streamlit, que cambia entre
+    versiones sin aviso: de 1.63 a 1.64 dejó la barra lateral plegada sin forma
+    de reabrirla. Con un rango, la imagen o un clon limpio instalarían otra
+    versión que nadie ha mirado en el navegador."""
+    assert re.search(r'^\s*"streamlit==\d+\.\d+\.\d+",', _read("pyproject.toml"), re.MULTILINE)
+
+
 # --- docker-compose.yml ------------------------------------------------------
 
 

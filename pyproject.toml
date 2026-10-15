@@ -29,8 +29,10 @@ dependencies = [
     # IA
     "anthropic>=0.34",
     "google-genai>=1.0",
-    # Dashboard
-    "streamlit>=1.37",
+    # Dashboard. Versión exacta: el CSS de dashboard/app.py apunta al DOM
+    # interno de Streamlit, que cambia sin aviso (de 1.63 a 1.64 se rompió la
+    # barra lateral). Subirla exige mirar el dashboard en el navegador.
+    "streamlit==1.64.0",
     # El dashboard lee API_KEY del .env (dashboard/app.py::_api_key). Ya
     # llegaba como dependencia de pydantic-settings; se declara porque se
     # importa directamente (mismo motivo que greenlet).
