@@ -322,6 +322,14 @@ minuto siguiente a crearlo, y compara con el último escaneo completado del
 dominio (si no hay ninguno, queda como referencia y no avisa). Sin IA: no
 gasta crédito.
 
+**Solo avisa de lo confirmado.** Un timeout hace desaparecer puertos y
+hallazgos, o aparecer un `sin_https` que no existe; para no convertir cada
+uno en una alerta, un cambio solo se avisa cuando se ve en **dos escaneos
+seguidos**, y cada cambio (un host, un puerto, un tipo de hallazgo) por
+separado. Lo visto una vez queda por confirmar, y el siguiente escaneo se
+adelanta a una hora para confirmarlo; si no se repite, se descarta como
+ruido. El coste: cada aviso llega un escaneo más tarde que el cambio.
+
 ```bash
 curl -X POST http://localhost:8000/monitors \
   -H "Content-Type: application/json" \
@@ -336,8 +344,10 @@ curl -X DELETE http://localhost:8000/monitors/1                 # dejar de vigil
 Dos tipos de aviso (cabecera `X-Atalaya-Event`):
 
 - **`cambios`** — `nuevos`, `desaparecidos` y `cambiados` (puertos o
-  hallazgos de los activos que ya existían), con `summary` en una línea y las
-  incidencias del escaneo en `errors`.
+  hallazgos de los activos que ya existían), todos confirmados en los
+  escaneos `previous_scan_id` y `current_scan_id`; `por_confirmar` (vistos
+  una vez, llegarán en otro aviso si se repiten) y `descartados` (ruido),
+  `summary` en una línea y las incidencias del escaneo en `errors`.
 - **`escaneo_fallido`** — el escaneo falló, una fuente de subdominios
   (crt.sh, Shodan) dejó de aportar los hosts que aportaba (no se avisan como
   «desaparecidos») o el dominio ya no
@@ -345,7 +355,9 @@ Dos tipos de aviso (cabecera `X-Atalaya-Event`):
   vigilancia sin cambios.
 
 Si el aviso no se entrega, el cambio se vuelve a avisar en la siguiente
-ejecución: el monitor no avanza su escaneo de referencia hasta que llega.
+ejecución: el monitor lo guarda como pendiente hasta que llega
+(`pending_changes` y `last_discarded` en `GET /monitors` cuentan lo
+pendiente y lo descartado).
 
 **Comprobar la firma** (solo si el monitor tiene `secret`): HMAC-SHA256 del
 cuerpo exacto, como los webhooks de GitHub.
