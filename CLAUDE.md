@@ -353,7 +353,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **703 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **704 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -364,7 +364,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +66 en la vigilancia programada: 34 del webhook, 27 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas; +12 en el panel de vigilancia; +4 en el cierre de la fase 14: 3 de la siembra con monitores y 1 de la versión exacta de Streamlit; +16 en la confirmación de cambios de la vigilancia, fase 15). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +66 en la vigilancia programada: 34 del webhook, 27 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas; +12 en el panel de vigilancia; +4 en el cierre de la fase 14: 3 de la siembra con monitores y 1 de la versión exacta de Streamlit; +16 en la confirmación de cambios de la vigilancia y +1 en su panel, fase 15). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -455,9 +455,10 @@ pide evitar explícitamente ("los stubs no son código muerto").
     pedida por el usuario: «reduce el ruido») — un cambio solo se avisa si se
     ve en dos escaneos seguidos, en las dos direcciones y cambio a cambio; lo
     visto una vez se descarta como ruido, y la confirmación se adelanta a 1 h.
-    Diseño en ARQUITECTURA §12. Plan: (1) núcleo y API, (2) prueba real con
-    timeouts provocados sobre `scanme.nmap.org`, (3) el panel, con maqueta
-    antes, (4) cierre (docs, dossier, memoria).
+    Diseño en ARQUITECTURA §12. Hecho y subido: (1) núcleo y API
+    (`f3abebb`), (2) prueba real con timeouts provocados sobre
+    `scanme.nmap.org`, (3) el panel, con maqueta aprobada (`835ad18`).
+    Pendiente: (4) cierre (memoria, dossier y guía).
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
@@ -471,44 +472,40 @@ ASM (vigilancia programada) de cara a la defensa oral.
 
 ## Estado al 15/10/2026 y próxima sesión
 
-**Dónde se quedó (15/10/2026, segunda parte de la sesión):** la fase 14 se
-cerró y se subió (`51fd5f5`, `push` a petición del usuario: «haz lo
-oportuno»). Después, **fase 15 en curso** («reduce el ruido»), todo
-**subido** el 15/10 a petición del usuario: `5f3b4b6` (diseño en
-ARQUITECTURA §12 y aquí, antes del código), `f3abebb`
-(`core/change_confirmation.py`, monitor, migración `8fd664bfa9de`, API, 16
-tests), `5066eee` (estilo), `996ca70` (README y estado) y el de este cierre
-de sesión. **Prueba real hecha** (API contra PostgreSQL 16, escaneos
-reales de `scanme.nmap.org`, webhook.site): un servidor lento simulado con
-timeouts de 1 ms dio 9 cambios falsos, ninguno avisado y los 9 descartados en
-el escaneo siguiente; un cambio persistente (el 80 cerrado en la referencia,
-simulado) se avisó firmado en el segundo escaneo; con la versión anterior
-habrían sido 3 avisos, 2 falsos. Evidencias y **maqueta del panel pendiente
-de aprobación**: https://claude.ai/artifact/FHzmxcBAEx8YQ75UpgGx79. El
-prototipo del panel está **sin commitear** en el árbol de trabajo
-(`dashboard/app.py` y `tests/test_dashboard.py`, +1 test): estado «por
-confirmar», «confirma lo pendiente» bajo el turno, descartados en «sin
-cambios», y sin «compara con el #N» mientras hay pendientes (esto último,
-fuera del plan). 703 tests commiteados (704 con el panel); `ruff` y `mypy` a
-cero. Ningún prompt ha cambiado. Al retomar: `git status -sb` (al día con
-`origin/main` salvo esos dos ficheros del panel, modificados) y `git log
---oneline -6`.
+**Dónde se quedó (cierre del 15/10/2026):** todo **subido** a
+`origin/main`. La fase 14 se cerró (`51fd5f5`). La **fase 15** («reduce el
+ruido») tiene hecho todo menos el cierre: diseño (`5f3b4b6`, antes del
+código), confirmación en dos escaneos (`f3abebb`: `core/change_confirmation.py`,
+monitor, migración `8fd664bfa9de`, API) y el panel (`835ad18`, maqueta
+aprobada por el usuario: estado «por confirmar», «confirma lo pendiente» bajo
+el turno, descartados en «sin cambios» y sin «compara con el #N» mientras hay
+pendientes, esto último fuera del plan y aprobado). **Prueba real hecha**
+(API contra PostgreSQL 16, escaneos reales de `scanme.nmap.org`,
+webhook.site): un servidor lento simulado con timeouts de 1 ms dio 9 cambios
+falsos, ninguno avisado y los 9 descartados en el escaneo siguiente; un
+cambio persistente (el 80 cerrado en la referencia, simulado) se avisó
+firmado en el segundo escaneo; con la versión anterior habrían sido 3 avisos,
+2 falsos. Evidencias y maqueta: https://claude.ai/artifact/FHzmxcBAEx8YQ75UpgGx79.
+704 tests; `ruff` y `mypy` a cero. Ningún prompt ha cambiado. Al retomar:
+`git status -sb` (debería estar limpio y al día) y `git log --oneline -6`.
 
 - Dossier de defensa: https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91
 - Guía de la herramienta (funcionalidad, para quien llega de fuera):
   https://claude.ai/code/artifact/1ff455ae-dbc0-4019-b0a9-10222c195a20
 - Maquetas aprobadas: fase B https://claude.ai/artifact/XDwdtF4HAKm8anmajeSWW4,
-  bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b y panel de
-  vigilancia https://claude.ai/artifact/EnvuSwUbnQ71ukn97VyaZz
+  bloque 3 https://claude.ai/artifact/JNGLvVa3VN3FdpRBEWrB9b, panel de
+  vigilancia https://claude.ai/artifact/EnvuSwUbnQ71ukn97VyaZz y vigilancia
+  sin ruido (con la prueba real) https://claude.ai/artifact/FHzmxcBAEx8YQ75UpgGx79
 - Evidencias de la prueba completa de la vigilancia (14/10/2026, stack Docker,
   9 fases, capturas y avisos reales): https://claude.ai/artifact/9xemMd7makz8RuyUJSNtjw
 
-**Pendiente, en este orden:** (1) que el usuario apruebe la maqueta del
-panel y, entonces, commitearlo (desviaciones de lo aprobado, anotadas);
-(2) **cierre de la fase 15**: memoria nueva
-(`memorias/Memoria_Ampliacion_Ruido_Vigilancia_Atalaya.md`), dossier y guía
-al día (límite «los avisos no separan señal de ruido», preguntas, cifras:
-704 tests) y `push` del panel y del cierre cuando lo diga; (3) **ensayar la defensa** con el dossier (guion en
+**Pendiente, en este orden** (el usuario lo dejó para otra sesión): (1)
+**cierre de la fase 15**: memoria nueva
+(`memorias/Memoria_Ampliacion_Ruido_Vigilancia_Atalaya.md`, con su bloque de
+preguntas de defensa), dossier y guía al día (el límite «los avisos no
+separan señal de ruido» pasa a «el ruido que dura dos escaneos sí se avisa»,
+la decisión nueva, preguntas sobre la confirmación, cifras: 704 tests,
+commits) y `push` cuando lo diga; (2) **ensayar la defensa** con el dossier (guion en
 `replay`; la vigilancia, paso opcional con red: alta de `scanme.nmap.org`
 con un webhook de webhook.site, o sin red el rechazo de
 `https://localhost/aviso`); (3) cuando vuelva el crédito, regrabar la
@@ -1416,7 +1413,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
 atalaya init                         # configuración guiada: alcance, BD, claves (.env)
 atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
-pytest -q                            # tests (deben pasar los 703)
+pytest -q                            # tests (deben pasar los 704)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
