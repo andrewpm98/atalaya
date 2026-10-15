@@ -353,7 +353,7 @@ memorias/                        Memorias técnicas por fase (ver "Documentació
 > `memorias/Memoria_Ampliacion_Robustez_Atalaya.md`.
 
 Validado sobre `github.com`: 117 subdominios descubiertos, 61 activos,
-55 objetivos de escaneo, 19 segundos. **683 tests en verde** (170 al cierre
+55 objetivos de escaneo, 19 segundos. **687 tests en verde** (170 al cierre
 del Paso 7; +90 en la ampliación de agentes de IA: Shodan, takeover, 5
 agentes de IA, GeminiProvider, diff + informe con IA; +2 en el rediseño del
 dashboard — severidad fuera de la escala y formato de las marcas de tiempo,
@@ -364,7 +364,7 @@ Memoria_Ampliacion_Robustez_Atalaya.md`; +3 al corregir las fechas en
 PostgreSQL, +8 al arreglar el stack de Docker y +6 al arreglar la auditoría y
 `LOG_LEVEL`, ver "Deuda técnica conocida → Resuelta"; +21 en los datos de
 reserva para la demo, ver la sección dedicada; +33 al rehacer el `risk_score`
-y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +66 en la vigilancia programada: 34 del webhook, 27 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas; +12 en el panel de vigilancia). La suite pasa también sobre
+y arreglar el PDF; +35 en la autenticación por `X-API-Key`; +6 en el diff del dashboard; +6 en la redirección HTTP → HTTPS; +10 en cookies; +2 en el re-triaje forzado; +3 en el diff sin IA; +20 en la validación TLS; +11 en el diff de activos comunes; +20 en la reutilización del triaje; +6 en TLS en otros puertos y +2 al excluir los hosts wildcard del escaneo de puertos; +2 al sacar la clave de Shodan del log de `atalaya -v`; +76 en `atalaya doctor` e `init`; +24 en la fase B: `GET /config/status` y la bienvenida del dashboard; +1 al arreglar la barra lateral plegada; +17 en el escaneo en segundo plano y +5 en su seguimiento desde el dashboard; +66 en la vigilancia programada: 34 del webhook, 27 de los monitores y 5 del test de autenticación, que recorre las rutas nuevas; +12 en el panel de vigilancia; +4 en el cierre de la fase 14: 3 de la siembra con monitores y 1 de la versión exacta de Streamlit). La suite pasa también sobre
 Python 3.11, el mínimo declarado y la versión de las imágenes.
 
 ---
@@ -436,42 +436,48 @@ pide evitar explícitamente ("los stubs no son código muerto").
     configuración en la barra lateral. Las dos partes visuales, con maqueta
     aprobada antes de cerrarlas. Memoria:
     `memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.
-14. **Ampliación — Escaneo en segundo plano y monitorización** 🚧 (desde el
-    13/10/2026) — dossier de defensa y guía de la herramienta en Claude Docs
-    ✅; **bloque 3** ✅: `POST /scans` en segundo plano (202; `running` →
+14. **Ampliación — Escaneo en segundo plano y monitorización** ✅ (13-15/10/2026)
+    — dossier de defensa y guía de la herramienta en Claude Docs; **bloque
+    3**: `POST /scans` en segundo plano (202; `running` →
     `completed`/`failed`; recuperación al arrancar; 409 para usar un escaneo
     no completado) y su seguimiento en el dashboard, con maqueta aprobada; de
     paso, el dashboard llama a la API en `127.0.0.1` (con `localhost`, 2 s por
     petición en Windows). Netlas, evaluada y descartada (14/10/2026).
-    **Bloque 4** ✅ (API, 14/10/2026): vigilancia programada con aviso por
-    webhook (`/monitors`), verificada en local y en el stack Docker; con ella
-    se verificaron en Docker `/config/status` y el escaneo en segundo plano.
-    Panel de vigilancia en el dashboard ✅ (`88bc65d`, con maqueta aprobada).
-    Pendiente: el cierre (bloque 5). Memoria (en curso): `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
+    **Bloque 4** (14/10/2026): vigilancia programada con aviso por webhook
+    (`/monitors`), verificada en local y en el stack Docker, y su panel en el
+    dashboard (`88bc65d`, con maqueta aprobada). **Bloque 5, el cierre**
+    (15/10/2026): el ensayo de la demo por HTTP destapó que la siembra fallaba
+    en PostgreSQL desde la tabla `monitors` (`757f0f3`); `streamlit==1.64.0`
+    fijado (`e59c27e`); demo re-verificada en local y en Docker, con la
+    vigilancia como paso opcional; dossier y guía al día. Memoria:
+    `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
 la defensa). Los siete pasos de la hoja de ruta y los cinco requisitos
-obligatorios están cerrados desde antes de las ampliaciones 8-12 — ninguna era necesaria para aprobar: profundizan el
-componente diferencial (capa IA), la calidad percibida (dashboard) y la
-fiabilidad de la entrega (robustez y cierre pre-entrega) de cara a la
-defensa oral.
+obligatorios están cerrados desde antes de las ampliaciones 8-14 — ninguna era necesaria para aprobar: profundizan el
+componente diferencial (capa IA), la calidad percibida (dashboard), la
+fiabilidad de la entrega (robustez y cierre pre-entrega) y lo que define a un
+ASM (vigilancia programada) de cara a la defensa oral.
 
 ---
 
-## Estado al 14/10/2026 y próxima sesión
+## Estado al 15/10/2026 y próxima sesión
 
-**Dónde se quedó (cierre de la sesión del 14/10/2026):** 8 commits locales
-**sin subir** (el usuario dice cuándo hacer `push`). Hecho en la sesión:
-Netlas medida y descartada (`5acc66f`); el **bloque 4 completo**: vigilancia
-programada con aviso por webhook (`7de68a2` el envío con su protección SSRF,
-`c8e03b1` los monitores), la prueba completa en el stack Docker que destapó
-un defecto del guardia de falsas alarmas (`f541101`, criterio por fuente) y
-el **panel de vigilancia** del dashboard (`88bc65d`, maqueta aprobada); de
-paso, verificados en Docker `GET /config/status` y el escaneo en segundo
-plano. 683 tests; `ruff` (también sobre `dashboard/`) y `mypy` a cero. Ningún
-prompt ha cambiado: la demo en `replay` sigue intacta. Al retomar, comprobar
-con `git status -sb` (debería decir `ahead 8`) y `git log --oneline -9`.
+**Dónde se quedó (cierre de la sesión del 15/10/2026):** la **fase 14 está
+cerrada** (bloque 5). Lo anterior, hasta `2570076`, se subió el 14/10; los 3
+commits de esta sesión están **sin subir** (el usuario dice cuándo hacer
+`push`): `757f0f3` (la siembra de la demo vacía también los monitores: con
+`monitors` apuntando a `scans`, el `TRUNCATE` fallaba en PostgreSQL incluso
+sobre una BD nueva, así que la demo en Docker no se podía sembrar),
+`e59c27e` (`streamlit==1.64.0`) y el de documentación del cierre. Demo
+re-verificada por HTTP en local y en un stack Docker nuevo (0 grabaciones
+faltantes) y la vigilancia probada desde el dashboard como paso opcional;
+dossier y guía al día (cifras, restricción #7, diagrama, guion, decisiones,
+límites y preguntas de la vigilancia). 687 tests; `ruff` (también sobre
+`dashboard/` y `scripts/`) y `mypy` a cero. Ningún prompt ha cambiado. Al
+retomar, comprobar con `git status -sb` (debería decir `ahead 3`, o estar al
+día si ya se subió) y `git log --oneline -4`.
 
 - Dossier de defensa: https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91
 - Guía de la herramienta (funcionalidad, para quien llega de fuera):
@@ -482,23 +488,26 @@ con `git status -sb` (debería decir `ahead 8`) y `git log --oneline -9`.
 - Evidencias de la prueba completa de la vigilancia (14/10/2026, stack Docker,
   9 fases, capturas y avisos reales): https://claude.ai/artifact/9xemMd7makz8RuyUJSNtjw
 
-**Pendiente, en este orden:** (1) **`push`** de los 8 commits cuando el
-usuario lo diga; (2) **cierre de la fase (bloque 5)**: dossier y guía al día
-(vigilancia, restricción de seguridad #7 —el dossier habla de seis—, cifras:
-683 tests), guion de la demo recorrido en `replay` por HTTP sin grabaciones
-faltantes, decidir si la vigilancia entra en la demo (necesita red: escanea y
-avisa a un receptor externo; webhook.site sirve de receptor) y cerrar la
-memoria de la fase; (3) decidir si se fija `streamlit==1.64.0` en
-`pyproject.toml` (hoy `>=1.37`: una versión nueva puede romper el CSS, como
-pasó con la barra lateral; recomendado, sin respuesta del usuario todavía).
+**Pendiente, en este orden:** (1) **`push`** de los 3 commits cuando el
+usuario lo diga; (2) **ensayar la defensa** con el dossier (guion en
+`replay`; la vigilancia, paso opcional con red: alta de `scanme.nmap.org`
+con un webhook de webhook.site, o sin red el rechazo de
+`https://localhost/aviso`); (3) cuando vuelva el crédito, regrabar la
+valoración del diff (ver «Después» más abajo). No hay una fase nueva
+acordada: la siguiente se decide con el usuario.
 
 **En la máquina del usuario, fuera del código:** su base de datos local de
 desarrollo (`atalaya.sqlite3`) no tiene la tabla `monitors`: antes de
 arrancar la API en local, `alembic upgrade head` (`atalaya doctor` lo
 señala). Su `.env` sigue con `API_HOST`/`API_PORT`/`ENVIRONMENT` y
-`SCAN_ALLOWLIST` vacía. El stack Docker se paró al cerrar la sesión (los
-datos siguen en el volumen: 14 escaneos reales de scanme.nmap.org, ningún
-monitor).
+`SCAN_ALLOWLIST` vacía. El stack Docker está parado (los datos siguen en el
+volumen `atalaya_pgdata`: 14 escaneos reales de scanme.nmap.org, ningún
+monitor; la verificación del cierre usó un proyecto aparte y lo borró). Su
+DNS no resuelve `example.com` (comprobado el 15/10/2026): no sirve como
+webhook de prueba. El Playwright del venv (1.63) busca la build 1243 de
+Chromium y la instalada es la 1248: `_shot.py` falla hasta hacer `python -m
+playwright install chromium` en el venv (el cierre usó la 1248 indicando la
+ruta del ejecutable).
 
 **Calendario:** a 12/10/2026, «hay algo de margen», sin fecha de defensa
 concreta. El usuario trabaja **bloque a bloque**: se cierra uno (código,
@@ -518,17 +527,14 @@ lo que usan `doctor` e `init`.
 Diseño ya hablado con el usuario el 12/10/2026; no reabrirlo sin motivo.
 
 **1. Fase B de la puesta en marcha** ✅ (13/10/2026) — hecha con el diseño
-acordado; detalle en la memoria de la fase (§8). Queda **verificarla en el
-stack Docker real**: Docker Desktop no estaba arrancado y se simuló lo que
-hace el compose (API sin `.env` y con la configuración en variables de
-entorno). Cabe al empezar el bloque 3, que también toca la API, o en el
-cierre (bloque 5).
+acordado; detalle en la memoria de la fase (§8). Verificada en el stack
+Docker real el 14/10/2026, con el bloque 4.
 
 **2. Dossier de defensa** ✅ (13/10/2026) — documento vivo en Claude Docs:
 https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91 (el
 usuario lo edita, comenta y exporta a PDF). Secciones: presentación de 2
 minutos, arquitectura con diagrama, los 5 requisitos en la demo, guion de la
-demo con plan B, cifras, decisiones, las 6 restricciones, límites,
+demo con plan B, cifras, decisiones, las 7 restricciones, límites,
 **preguntas sobre la herramienta**, checklist del día y, al final, un anexo
 técnico con las preguntas de las memorias.
 
@@ -541,8 +547,10 @@ técnico con las preguntas de las memorias.
 
 - **Se actualiza con cada bloque siguiente** (cargar antes el skill
   `anthropic-skills:docs`): las cifras (tests, commits), los límites que se
-  cierren (monitorización, `POST /scans` síncrono), el guion si cambia la
-  demo y las preguntas nuevas de cada bloque.
+  cierren, el guion si cambia la demo y las preguntas nuevas de cada bloque.
+  Último repaso completo: 15/10/2026, al cerrar la fase 14 (incluido el
+  diagrama de arquitectura, un widget que se redibuja entero conservando sus
+  `data-claude-text-id`).
 - **Regla:** cada respuesta del banco se comprueba contra el código actual.
   Si una memoria antigua dice otra cosa, manda el dossier, y el bloque de
   defensa de esa memoria se corrige con una nota «Estado posterior» (es la
@@ -600,14 +608,21 @@ usuario el 14/10/2026:
   conexión TLS por IP aunque cambie el SNI (cliente nuevo por intento), y
   `getaddrinfo` puede dar la IPv6 primero.
 
-**5. Cierre de la fase** — docs de cada bloque (CLAUDE.md, ARQUITECTURA,
-README, `.env.example` si hay campos nuevos), memoria de la fase con su bloque
-de preguntas de defensa, guion de la demo recorrido en `replay` por HTTP sin
-grabaciones faltantes, y `push` cuando el usuario lo diga.
+**5. Cierre de la fase** ✅ (15/10/2026) — guion de la demo recorrido por
+HTTP en `replay`, en local y en un stack Docker nuevo, sin grabaciones
+faltantes; el ensayo en Docker destapó que la siembra fallaba en PostgreSQL
+desde la tabla `monitors` (`757f0f3`). Decidido con el usuario: `--reset`
+borra también los monitores; la vigilancia entra en la demo como **paso
+opcional con red** (probado desde el dashboard: alta, ejecución en el
+siguiente minuto, «sin cambios» con el primer escaneo como línea base; sin
+red, el rechazo de un webhook a `localhost`); `streamlit==1.64.0` fijado
+(`e59c27e`). Dossier y guía al día; memoria de la fase cerrada. Falta el
+`push`.
 
-**Después, o si el calendario aprieta:** ensayar la defensa con el dossier
-(guion con `scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una
-BD aparte). **Cuando vuelva
+**Después:** ensayar la defensa con el dossier (guion con
+`scripts/seed_demo_data.py --reset` y `AI_PROVIDER=replay` en una BD aparte;
+en Docker, como otro proyecto con `-p atalaya-demo` para no vaciar el volumen
+del stack). **Cuando vuelva
 el crédito:** regrabar la valoración del diff posterior al triaje (escribe
 «`vpn-ca.github.com` (IAD)» en vez de `vpn-ca.iad.github.com`; 1 llamada) y
 valorar quitar las IPs del prompt de triaje para que la reutilización
@@ -771,6 +786,8 @@ cómo trata esto.
 | Vigilancia: diff sin IA, un monitor por dominio, intervalo mínimo de 1 h, de uno en uno | Sin crédito ni dependencia del proveedor; dos monitores o un intervalo corto serían más carga sobre el objetivo sin información nueva (restricción #5); crt.sh limita a quien le pide mucho a la vez |
 | Webhook: solo `https`, firma HMAC opcional, URL y secreto nunca devueltos | El aviso es un mapa de la superficie; la firma es el esquema de GitHub; las URL de Slack/Discord llevan el token en la ruta |
 | `st.html()`, no `st.markdown(..., unsafe_allow_html=True)`, para el CSS del dashboard | Con contenido grande (~20KB) y líneas en blanco dentro de `<style>`, el parser de Markdown de Streamlit deja de tratar el bloque como HTML a partir de cierto punto y lo muestra como texto literal — bug real, reproducido por bisección. `st.html()` evita el parser de Markdown por completo |
+| Streamlit fijado a una versión exacta (`streamlit==1.64.0`, 15/10/2026) | `_CSS` apunta al DOM interno, que cambia entre versiones sin dar error (de 1.63 a 1.64, la barra lateral plegada). Con un rango, Docker o un clon limpio instalarían una versión que nadie ha mirado. Subirla = revisar el dashboard en el navegador y luego cambiar el pin; un test exige versión exacta |
+| La siembra de la demo (`--reset`) borra también los monitores (15/10/2026) | Uno de un ensayo anterior escanearía de verdad en mitad de la demo, contra una línea base borrada. Y PostgreSQL no deja vaciar `scans` mientras otra tabla le apunte: toda tabla con clave foránea hacia las que se vacían va en `_TABLES` (test sobre el esquema) |
 
 ---
 
@@ -857,11 +874,14 @@ la API**; en Docker con `docker compose up -d`, no `restart` (no recarga
 puede quedar vacía (autenticación desactivada, como se ensaya el guion); si
 tiene valor, el dashboard la toma del mismo `.env` y la demo no cambia.
 
-**`--reset` borra todos los escaneos de esa BD.** Sin él, el script se niega
-si hay datos. No usarlo contra la BD de desarrollo (`atalaya.sqlite3`, con
-escaneos de otras sesiones) sin querer perderlos: para ensayar, mejor
-`DATABASE_URL=sqlite+aiosqlite:///./demo.sqlite3` en la misma terminal o el
-stack Docker.
+**`--reset` borra todos los escaneos y monitores de esa BD.** Sin él, el
+script se niega si hay escaneos o monitores. No usarlo contra la BD de
+desarrollo (`atalaya.sqlite3`, con escaneos de otras sesiones) sin querer
+perderlos: para ensayar, mejor `DATABASE_URL=sqlite+aiosqlite:///./demo.sqlite3`
+en la misma terminal. En Docker vacía el volumen del stack (hoy, 14 escaneos
+de scanme.nmap.org de las pruebas); para conservarlo, la demo como otro
+proyecto: `docker compose -p atalaya-demo up --build -d`, con el stack
+principal parado (los contenedores tienen nombre fijo).
 
 **Qué se carga** (`demo/github.com.json`): dos escaneos **reales** de
 github.com hechos con `POST /scans` — #1 del 21/09/2026 (117 activos, 204
@@ -924,7 +944,13 @@ PostgreSQL, sin él, el `UPDATE` del triaje cambia el orden de lectura y con
 (PostgreSQL 16), dos veces seguidas con `--reset` entre medias; dashboard
 capturado con los datos sembrados y una pregunta del guion respondida.
 Re-verificado el 06/10/2026 tras el diff ampliado y la reutilización del
-triaje: guion completo por HTTP en `replay`, cero grabaciones faltantes.
+triaje: guion completo por HTTP en `replay`, cero grabaciones faltantes. Y el
+15/10/2026, al cerrar la fase 14, en local y en un stack Docker nuevo (23
+pasos, 0 fallos, 0 grabaciones faltantes). Ese ensayo encontró que entre el
+14 y el 15/10 la siembra no funcionaba en PostgreSQL: el `TRUNCATE` de
+`scans` fallaba porque `monitors` le apunta (`757f0f3`). La suite no podía
+verlo (SQLite no aplica claves foráneas): por eso el ensayo en Docker forma
+parte del cierre de cada fase que toque el esquema.
 
 **Defecto conocido de la grabación:** la valoración del diff posterior al
 triaje escribe «`vpn-ca.github.com` (IAD)» en vez de `vpn-ca.iad.github.com`.
@@ -1053,10 +1079,19 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 
 ### Resuelta (se deja constancia para la defensa)
 
+- ~~**La siembra de la demo fallaba en PostgreSQL**~~ (introducido en el
+  bloque 4, encontrado al ensayar la demo en Docker en el cierre) →
+  `TRUNCATE findings, assets, scans` se rechaza si otra tabla apunta a
+  `scans`, aunque esté vacía, y `monitors` le apunta: la demo en Docker no se
+  podía sembrar ni sobre una BD nueva. `--reset` vacía ahora también los
+  monitores y la siembra se niega si hay alguno (`757f0f3`). La guarda mira el
+  esquema, porque la suite corre en SQLite y no lo vería.
+- ~~**Streamlit sin fijar**~~ (`>=1.37`) → `streamlit==1.64.0` (`e59c27e`),
+  con un test que exige versión exacta: el CSS depende del DOM interno.
 - ~~**Sin monitorización continua**~~ (bloque 4) → `/monitors`: un escaneo
   programado cada `interval_hours` y un aviso por webhook cuando el diff no
-  está vacío o el escaneo falla (`7de68a2`, `c8e03b1`; ARQUITECTURA §12).
-  Por API; el panel del dashboard queda pendiente.
+  está vacío o el escaneo falla (`7de68a2`, `c8e03b1`; ARQUITECTURA §12),
+  con su panel en el dashboard (`88bc65d`).
 - ~~**`GET /config/status` y el escaneo en segundo plano sin probar en el
   stack Docker real**~~ → verificados el 14/10/2026 con el stack levantado:
   la configuración sale «sin .env · 29 campos desde variables de entorno» y
@@ -1356,7 +1391,7 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
 pip install -e ".[dev]"              # instalar con dependencias de desarrollo
 atalaya init                         # configuración guiada: alcance, BD, claves (.env)
 atalaya doctor                       # qué funciona y cómo arreglar lo que no (--offline)
-pytest -q                            # tests (deben pasar los 683)
+pytest -q                            # tests (deben pasar los 687)
 uvicorn atalaya.api.main:app --reload # API en :8000, docs en /docs
 streamlit run dashboard/app.py       # dashboard en :8501
 alembic upgrade head                 # aplica las migraciones (crea scans/assets/findings)
@@ -1366,7 +1401,7 @@ ruff check src tests                 # linter (0 avisos)
 mypy src                             # tipos (0 errores); ambos: make lint
 docker compose up --build -d         # stack completo (migra solo; .env opcional)
 docker compose up -d db              # solo PostgreSQL, para la API en local
-python scripts/seed_demo_data.py --reset # BORRA la BD y carga la demo de reserva
+python scripts/seed_demo_data.py --reset # BORRA escaneos y monitores y carga la demo
 ```
 
 **Cambiar de proveedor de IA:** `AI_PROVIDER=anthropic` o `AI_PROVIDER=gemini`
@@ -1386,7 +1421,9 @@ además uno real contra `scanme.nmap.org`, `--triage` lo tría y `--diff` pulsa
 «Comparar» sobre el escaneo grande (con la demo sembrada, github.com). Puerto por
 defecto 8502: con `streamlit run` (8501) hay que pasar `--port 8501`.
 Requiere la API y el dashboard ya arrancados y `playwright install` hecho
-una vez.
+una vez **con el Playwright del venv** (`python -m playwright install
+chromium`): cada versión de Playwright busca su propia build de Chromium, y si
+no está, `_shot.py` falla al lanzar el navegador.
 
 ---
 

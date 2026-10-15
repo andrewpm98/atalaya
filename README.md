@@ -375,12 +375,16 @@ el repositorio incluye dos escaneos **reales** de github.com (21/09 y
 guion de preguntas, grabadas para reproducirlas sin conexión:
 
 ```bash
-python scripts/seed_demo_data.py --reset   # BORRA los escaneos de la BD y siembra la demo
+python scripts/seed_demo_data.py --reset   # BORRA escaneos y monitores de la BD y siembra la demo
 # en .env: AI_PROVIDER=replay              # sin clave ni red; reinicia la API
 ```
 
 Con Docker: `docker compose exec api python scripts/seed_demo_data.py --reset`
-y `AI_PROVIDER=replay` en `.env` aplicado con `docker compose up -d`.
+y `AI_PROVIDER=replay` en `.env` aplicado con `docker compose up -d`. Ahí
+`--reset` vacía la base de datos del stack; para conservarla, levanta la demo
+como otro proyecto, con su propio volumen: `docker compose -p atalaya-demo
+up --build -d` (con el stack principal parado: los contenedores tienen nombre
+fijo).
 
 `AI_PROVIDER=replay` **no es un modelo**: sirve respuestas grabadas (y lo
 avisa en el log de la API). Solo responde a las peticiones grabadas — las

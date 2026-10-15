@@ -347,7 +347,10 @@ VirusTotal, Maltego), no la demo por defecto de Streamlit: fondo oscuro,
 tipografía monoespaciada para datos técnicos, acento único, rojo reservado
 a severidad crítica. Selectores escritos contra el DOM real de Streamlit
 1.63 (`data-testid`, no `data-baseweb`: los widgets migraron de BaseWeb a
-react-aria y los selectores antiguos dejan de pintar sin dar error).
+react-aria y los selectores antiguos dejan de pintar sin dar error). Por
+eso la versión está fijada (`streamlit==1.64.0` en `pyproject.toml`, con un
+test que exige una versión exacta): de 1.63 a 1.64 se rompió la barra lateral
+plegada, y subirla exige volver a mirar el dashboard en el navegador.
 Verificado con capturas de pantalla reales, no solo con la suite de tests
 (`tests/test_dashboard.py` comprueba comportamiento, nunca estilo).
 Detalle completo del proceso, incluidos los bugs de renderizado
@@ -379,7 +382,13 @@ modelo real salvo los hallazgos que aparecieron entre uno y otro, que quedan
 carga en la BD configurada (SQLite o el PostgreSQL de Docker, cuya imagen de
 la API incluye `scripts/` y `demo/`), reiniciando las secuencias para que los
 ids sean siempre #1 y #2: el prompt del diff los incluye. Se niega a pisar una
-BD con escaneos sin `--reset`. `scripts/build_demo_data.py` es quien los
+BD con escaneos o monitores sin `--reset`, y con él vacía también los
+monitores: uno que sobreviviera escanearía de verdad en mitad de la demo. Toda
+tabla con clave foránea hacia las que se vacían tiene que vaciarse con ellas,
+porque PostgreSQL rechaza el `TRUNCATE` de una tabla referenciada aunque la
+otra esté vacía (la tabla `monitors` rompió así la siembra en Docker hasta
+`757f0f3`; SQLite no lo ve, y un test lo comprueba sobre el esquema).
+`scripts/build_demo_data.py` es quien los
 produjo (una vez, con red): tría con el modelo real, recorre el guion por la
 API antes y después del triaje en directo — el orden de los pasos en la demo
 no importa — graba solo lo usado y verifica la reproducción en `replay`.

@@ -5,10 +5,12 @@
 **Fase documentada:** Ampliación 14, iniciada el 13/10/2026. Prepara la
 defensa (dossier y guía de la herramienta), saca el escaneo de la petición
 HTTP y añade la vigilancia programada.
-**Estado:** En curso. Bloques 2 y 3 completos y subidos a `origin/main` el
-13/10/2026. Netlas (bloque 3b), evaluada y descartada el 14/10/2026. Bloque 4
-(vigilancia) completo el 14/10/2026, por API y con su panel en el dashboard:
-683 tests, `ruff` y `mypy` a cero. Pendiente el cierre (bloque 5); ver §9.
+**Estado:** Cerrada el 15/10/2026. Bloques 2 y 3 completos el 13/10/2026.
+Netlas (bloque 3b), evaluada y descartada el 14/10/2026. Bloque 4
+(vigilancia) completo el 14/10/2026, por API y con su panel en el dashboard.
+Bloque 5 (cierre) el 15/10/2026: el ensayo de la demo destapó un defecto del
+bloque 4, que se corrigió, y se fijó la versión de Streamlit. 687 tests,
+`ruff` y `mypy` a cero.
 
 ---
 
@@ -27,6 +29,10 @@ HTTP y añade la vigilancia programada.
    cierto tiempo y avisa por webhook cuando cambia la superficie o cuando el
    escaneo falla. Es la carencia más grande que tenía la herramienta como
    ASM, y cumple de forma literal el requisito «API o webhook».
+6. **El cierre.** El ensayo de la demo, en local y en Docker, destapó que
+   desde la vigilancia la carga de los datos de la demo fallaba en
+   PostgreSQL. Se corrigió, se fijó la versión de Streamlit y el material de
+   defensa quedó al día.
 
 ---
 
@@ -250,9 +256,66 @@ nuevas tras cada alta.
 
 ---
 
-## 7. Verificación
+## 7. Bloque 5: el cierre (15/10/2026)
 
-**Tests:** de 583 a 669. Bloque 3, +22: 17 del escaneo en segundo plano (202, 400 y
+**El ensayo de la demo encontró un defecto del bloque 4.** El guion se
+recorrió por HTTP contra la API real en `replay`, como se hará en la
+defensa. En local (SQLite): 23 pasos sin un fallo y ninguna grabación
+faltante. En el stack Docker, la carga de los datos de la demo ni siquiera
+arrancaba: PostgreSQL se niega a vaciar una tabla a la que otra apunta con una
+clave foránea, aunque esa otra esté vacía, y desde el bloque 4 `monitors`
+apunta a `scans`. Fallaba incluso la primera carga sobre una base de datos
+nueva, porque la siembra siempre vacía antes las tablas. SQLite no aplica
+claves foráneas: ni la suite ni el ensayo local podían verlo.
+
+**El arreglo** (`757f0f3`), decidido con el usuario: `--reset` vacía también
+los monitores, y sin él la siembra se niega si hay alguno. Conservarlos tenía
+poco sentido: un monitor de un ensayo anterior lanzaría escaneos reales en
+mitad de la demo, contra una línea base que ya no existe. Como la suite corre
+en SQLite, el test que lo protege mira el esquema: toda tabla con una clave
+foránea hacia las que se vacían debe vaciarse con ellas, y antes. Falla
+contra la versión anterior. Comprobado contra PostgreSQL 16.15 real: siembra
+sobre una base de datos vacía, negativa con un monitor presente y dos
+`--reset` seguidos con los ids #1 y #2.
+
+**Streamlit, fijado** (`e59c27e`): `streamlit==1.64.0`, la versión con la que
+se verificaron el rediseño, la fase B y el panel de vigilancia. Con `>=1.37`,
+la imagen de Docker o un clon limpio podían instalar una versión cuyo DOM
+nadie había mirado, y el paso de 1.63 a 1.64 ya rompió la barra lateral una
+vez. Un test exige una versión exacta.
+
+**La demo, otra vez en Docker**, con la imagen recién construida (Python 3.11,
+Streamlit 1.64.0) y como proyecto aparte, para no tocar el volumen del stack
+del usuario: dos siembras seguidas, el guion completo por HTTP con 23 pasos y
+ninguna grabación faltante, y el índice de 39 a 40 tras el triaje en directo.
+
+**La vigilancia entra en la demo como paso opcional** (decisión del usuario),
+porque necesita red. Se probó como se hará, con un navegador real contra el
+dashboard de Docker: alta de `scanme.nmap.org` en «Vigilancia», ejecución en
+el siguiente turno del bucle (56 s después) y un escaneo de 4 s. El panel pasa
+de «pendiente» a «sin cambios»: el primer escaneo es la línea base y no
+avisa. «Escaneando» dura lo que el escaneo y el panel refresca cada 10 s, así
+que con un dominio pequeño puede no llegar a verse. Sin red se puede enseñar
+el rechazo de un webhook a `localhost`: la autorización es local y
+`localhost` se resuelve en la propia máquina. Por el camino, `example.com` no
+resolvía en la máquina del usuario y la API lo rechazó con un 400, que es lo
+correcto.
+
+**El material de defensa, al día.** El dossier hablaba de 605 tests, de seis
+restricciones y de que la herramienta «no vigila sola». Ahora tiene las cifras
+recalculadas (687 tests, 17 operaciones), la restricción #7, el diagrama con
+el receptor de los avisos, el paso de vigilancia en el guion con su plan B,
+las decisiones y los límites de los bloques 3 a 5, preguntas sobre la
+vigilancia y un anexo técnico de segundo plano y vigilancia. La guía, igual.
+Al repasarlo, una respuesta de esta memoria (§12) decía que la prueba
+«detectó un puerto nuevo»; el cambio estaba simulado en la línea base, y se
+corrigió.
+
+---
+
+## 8. Verificación
+
+**Tests:** de 583 a 683 en los bloques 3 y 4, y 687 con el cierre. Bloque 3, +22: 17 del escaneo en segundo plano (202, 400 y
 403 sin crear nada, fallo con motivo y sin secretos, autorización al ejecutar,
 409 en triaje, informe, comparación y preguntas, atomicidad, recuperación al
 arrancar y arranque con la base de datos caída) y 5 del dashboard (aviso en
@@ -272,7 +335,10 @@ de lo que llega de la API, alta con secreto generado o propio o sin firma,
 rechazo de la API conservando el formulario, pausa, borrado con
 confirmación y cancelación); cuatro mutaciones (sin escape, borrar sin
 confirmar, el error antes que «escaneando», no recargar tras el alta) hacen
-fallar cada una su test.
+fallar cada una su test. Cierre, +4: tres de la siembra (negativa con
+monitores, `--reset` que los borra y la guarda sobre el esquema) y uno de la
+versión exacta de Streamlit; quitar `monitors` de la siembra o volver al
+rango de versiones hace fallar el suyo.
 
 **Pruebas reales:**
 
@@ -325,9 +391,24 @@ cambiar su configuración (fases E y F) borra sus logs, y con ellos la
 auditoría de las fases anteriores. Se repitió lo necesario en una fase sin
 reinicios (I) y se guardó el log al momento.
 
+**Pruebas reales del cierre** (15/10/2026):
+
+| Prueba | Resultado |
+|---|---|
+| Guion de la demo por HTTP, local (SQLite), `replay` | 23 pasos, 0 fallos, 0 grabaciones faltantes; índice 39 → 40, 8 triados con 8 llamadas |
+| Siembra en PostgreSQL 16.15, antes del arreglo | Falla incluso sobre una base de datos vacía: `cannot truncate a table referenced in a foreign key constraint` |
+| Siembra en PostgreSQL 16.15, después | BD vacía, negativa con un monitor («2 escaneo(s) y 1 monitor(es)»), dos `--reset` con ids #1 y #2 |
+| Stack Docker nuevo (`-p atalaya-b5`), imagen recién construida | Python 3.11.16, Streamlit 1.64.0; dos siembras y el guion completo: 23 pasos, 0 fallos, 0 grabaciones faltantes |
+| Vigilancia desde el dashboard (Chromium) | Alta → «pendiente»; ejecución 56 s después, escaneo de 4 s, «sin cambios» con el #3 como línea base; auditoría «Monitor #1 creado» con la URL enmascarada |
+| Webhook a `https://example.com/…` | 400: no resolvía en la máquina del usuario (ni en el host ni en el contenedor) |
+| Webhook a `https://localhost/aviso` | Rechazado sin red: «loopback», con su línea de auditoría |
+
+Al terminar se desmontaron el stack de verificación y su volumen; el del
+usuario (`atalaya_pgdata`) no se tocó.
+
 ---
 
-## 8. Límites
+## 9. Límites
 
 - **Vigilancia: el diff no separa señal de ruido.** Un timeout o una
   fluctuación de DNS sale como cambio: un dominio grande puede avisar en casi
@@ -344,21 +425,27 @@ reinicios (I) y se guardó el log al momento.
   cada una se reclama, §6.)
 - ~~**Sin probar en el stack Docker real**, como `GET /config/status`.~~
   *Estado posterior:* ambos verificados con el stack levantado el
-  14/10/2026 (§7).
+  14/10/2026 (§8).
 - **El seguimiento depende de tener el panel abierto**; si se cierra, el
   escaneo termina igual y aparece en «Escaneos».
+- **La siembra de la demo en Docker vacía la base de datos del stack.** Para
+  conservar los escaneos de las pruebas, la demo se levanta como otro
+  proyecto (`docker compose -p atalaya-demo`), con su propio volumen y con el
+  stack principal parado: los contenedores tienen nombre fijo.
 
 ---
 
-## 9. Lo que queda de la fase
+## 10. Después de la fase
 
-1. **Cierre**: dossier y guía al día (con la restricción #7), guion de la
-   demo recorrido en `replay`, decidir si la vigilancia entra en la demo y
-   `push`.
+1. `push` de los commits del cierre, cuando el usuario lo diga.
+2. Ensayar la defensa con el dossier: el guion en `replay` y, si hay red, el
+   paso de vigilancia.
+3. Cuando vuelva el crédito de Anthropic: regrabar la valoración del diff
+   posterior al triaje (1 llamada; escribe «`vpn-ca.github.com` (IAD)»).
 
 ---
 
-## 10. Commits
+## 11. Commits
 
 | Commit | Contenido |
 |---|---|
@@ -375,11 +462,14 @@ reinicios (I) y se guardó el log al momento.
 | `f541101` | fix(monitor): la fuente caída, por lo que aporta y no por 0 activos |
 | `ddb0ccd` | docs: la prueba completa y la corrección del guardia |
 | `88bc65d` | feat(dashboard): panel de vigilancia (pestaña «Vigilancia») |
-| (este) | docs: el panel de vigilancia y el estado al cierre del 14/10/2026 |
+| `2570076` | docs: el panel de vigilancia y el estado al cierre del 14/10/2026 |
+| `757f0f3` | fix(demo): la siembra vacía también los monitores (fallaba en PostgreSQL) |
+| `e59c27e` | build: fijar `streamlit==1.64.0` |
+| (este) | docs: cierre de la fase 14 (bloque 5) |
 
 ---
 
-## 11. Bloque de defensa: preguntas previsibles
+## 12. Bloque de defensa: preguntas previsibles
 
 **¿Por qué el escaneo va en segundo plano?**
 Porque dura de segundos a minutos. Dentro de la petición, la conexión quedaba
@@ -418,8 +508,9 @@ vigilancia programada.
 **¿La herramienta vigila sola o hay que lanzarla a mano?**
 Vigila sola. Le dices un dominio, cada cuánto y a qué dirección avisar, y
 repite el escaneo con esa frecuencia. Si aparece un subdominio, desaparece
-otro o uno que ya existía abre un puerto, manda un aviso. En la prueba real
-detectó un puerto nuevo en scanme.nmap.org y el aviso llegó en segundos.
+otro o uno que ya existía abre un puerto, manda un aviso. En la prueba, con
+un cambio simulado en la referencia (el puerto 80 de scanme.nmap.org como
+cerrado), el aviso llegó firmado en segundos.
 
 **¿Y si falla el escaneo? ¿Me entero?**
 Sí, con un aviso distinto. Una vigilancia que falla en silencio es peor que
@@ -459,3 +550,21 @@ El receptor recalcula la firma y descarta lo que no cuadre.
 Como mucho una vez por hora, y un solo monitor por dominio. Un escaneo hace
 cientos de conexiones al objetivo: repetirlo cada pocos minutos sería un
 barrido continuo, que el objetivo no distinguiría de un ataque.
+
+**¿Cómo sabes que la demo va a funcionar el día de la defensa?**
+Porque la ensayé entera por HTTP, en local y en Docker, y la suite la recorre
+en cada ejecución. Y el ensayo sirvió: encontró que, desde que existe la
+vigilancia, la carga de los datos de la demo fallaba en la base de datos de
+Docker. Se corrigió y se volvió a ensayar.
+
+**¿Por qué ese fallo no lo vio ningún test?**
+Porque la suite corre sobre SQLite, que no aplica las claves foráneas, y el
+fallo era de PostgreSQL: no deja vaciar una tabla a la que otra apunta. El
+test nuevo no necesita PostgreSQL: mira el esquema y exige que toda tabla que
+apunte a las que se vacían se vacíe con ellas.
+
+**¿Por qué fijar la versión de Streamlit?**
+Porque el aspecto del panel depende de cómo Streamlit pinta la página por
+dentro, y eso cambia entre versiones sin avisar: una actualización ya dejó la
+barra lateral plegada sin forma de reabrirla. Con la versión fijada, quien
+instale la herramienta ve lo mismo que se revisó.
