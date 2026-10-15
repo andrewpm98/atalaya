@@ -473,11 +473,12 @@ ASM (vigilancia programada) de cara a la defensa oral.
 
 **Dónde se quedó (15/10/2026, segunda parte de la sesión):** la fase 14 se
 cerró y se subió (`51fd5f5`, `push` a petición del usuario: «haz lo
-oportuno»). Después, **fase 15 en curso** («reduce el ruido»), con commits
-**sin subir**: `5f3b4b6` (diseño en ARQUITECTURA §12 y aquí, antes del
-código), `f3abebb` (`core/change_confirmation.py`, monitor, migración
-`8fd664bfa9de`, API, 16 tests), `5066eee` (estilo) y el de docs del README
-y este estado. **Prueba real hecha** (API contra PostgreSQL 16, escaneos
+oportuno»). Después, **fase 15 en curso** («reduce el ruido»), todo
+**subido** el 15/10 a petición del usuario: `5f3b4b6` (diseño en
+ARQUITECTURA §12 y aquí, antes del código), `f3abebb`
+(`core/change_confirmation.py`, monitor, migración `8fd664bfa9de`, API, 16
+tests), `5066eee` (estilo), `996ca70` (README y estado) y el de este cierre
+de sesión. **Prueba real hecha** (API contra PostgreSQL 16, escaneos
 reales de `scanme.nmap.org`, webhook.site): un servidor lento simulado con
 timeouts de 1 ms dio 9 cambios falsos, ninguno avisado y los 9 descartados en
 el escaneo siguiente; un cambio persistente (el 80 cerrado en la referencia,
@@ -489,7 +490,8 @@ prototipo del panel está **sin commitear** en el árbol de trabajo
 confirmar», «confirma lo pendiente» bajo el turno, descartados en «sin
 cambios», y sin «compara con el #N» mientras hay pendientes (esto último,
 fuera del plan). 703 tests commiteados (704 con el panel); `ruff` y `mypy` a
-cero. Ningún prompt ha cambiado. Al retomar: `git status -sb` y `git log
+cero. Ningún prompt ha cambiado. Al retomar: `git status -sb` (al día con
+`origin/main` salvo esos dos ficheros del panel, modificados) y `git log
 --oneline -6`.
 
 - Dossier de defensa: https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91
@@ -506,7 +508,7 @@ panel y, entonces, commitearlo (desviaciones de lo aprobado, anotadas);
 (2) **cierre de la fase 15**: memoria nueva
 (`memorias/Memoria_Ampliacion_Ruido_Vigilancia_Atalaya.md`), dossier y guía
 al día (límite «los avisos no separan señal de ruido», preguntas, cifras:
-704 tests) y `push` cuando lo diga; (3) **ensayar la defensa** con el dossier (guion en
+704 tests) y `push` del panel y del cierre cuando lo diga; (3) **ensayar la defensa** con el dossier (guion en
 `replay`; la vigilancia, paso opcional con red: alta de `scanme.nmap.org`
 con un webhook de webhook.site, o sin red el rechazo de
 `https://localhost/aviso`); (3) cuando vuelva el crédito, regrabar la
