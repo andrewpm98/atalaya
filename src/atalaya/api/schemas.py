@@ -276,10 +276,25 @@ class MonitorOut(BaseModel):
     last_run_at: datetime | None
     last_scan_id: int | None
     baseline_scan_id: int | None = Field(
-        description="Escaneo contra el que se compara el siguiente (avanza al avisar)"
+        description=(
+            "Último escaneo comparado. El siguiente se compara con lo ya avisado: este "
+            "escaneo con los cambios pendientes deshechos"
+        )
     )
     last_notified_at: datetime | None
     last_error: str | None
+    pending_changes: int = Field(
+        description=(
+            "Cambios vistos y aún sin avisar: los que esperan a que un segundo escaneo "
+            "los confirme y, si falló el aviso, los confirmados que se reenviarán"
+        )
+    )
+    last_discarded: int = Field(
+        description=(
+            "Cambios vistos en un solo escaneo que la última ejecución no repitió: "
+            "se descartaron como ruido, sin avisar"
+        )
+    )
 
     @classmethod
     def from_monitor(cls, monitor: Monitor) -> MonitorOut:
@@ -297,4 +312,6 @@ class MonitorOut(BaseModel):
             baseline_scan_id=monitor.baseline_scan_id,
             last_notified_at=monitor.last_notified_at,
             last_error=monitor.last_error,
+            pending_changes=len(monitor.pending_changes or []),
+            last_discarded=monitor.last_discarded or 0,
         )

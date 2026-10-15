@@ -10,9 +10,11 @@ es el disparador. Cada `TICK_SECONDS`, `monitor_loop` (lanzado en el
    #1): la allowlist pudo cambiar desde que se creó el monitor.
 2. Lanza el escaneo con `core/scan_runner.py::run_scan`, el mismo de
    `POST /scans`.
-3. Lo compara **sin IA** con la línea base del monitor (no gasta crédito ni
-   depende del proveedor) y, si hay activos nuevos, desaparecidos o
-   cambiados, lo avisa al webhook (`core/webhooks.py`, protegido contra SSRF).
+3. Lo compara **sin IA** con lo ya avisado (no gasta crédito ni depende del
+   proveedor) y avisa al webhook (`core/webhooks.py`, protegido contra SSRF)
+   de los cambios **confirmados**: los que la ejecución anterior también vio
+   (`core/change_confirmation.py`). Lo visto una sola vez espera a la
+   siguiente, que se adelanta a una hora; si no se repite, era ruido.
 
 De uno en uno y no en paralelo: crt.sh limita a quien le pide mucho a la vez,
 y un escaneo ya reparte su propia concurrencia. Si varios monitores coinciden,
@@ -42,9 +44,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atalaya.core import repository
 from atalaya.core.authorization import ensure_authorized
+from atalaya.core.change_confirmation import (
+    Change,
+    as_scan_diff,
+    changes_between,
+    confirm,
+    reference,
+    snapshot,
+)
 from atalaya.core.exceptions import AtalayaError, InvalidWebhookError, WebhookDeliveryError
 from atalaya.core.models import Monitor, Scan, ScanStatus
-from atalaya.core.repository import ScanDiff, diff_scans
+from atalaya.core.repository import ScanDiff
 from atalaya.core.scan_runner import run_scan
 from atalaya.core.webhooks import send_webhook
 from atalaya.discovery.models import DiscoverySource
@@ -59,6 +69,10 @@ TICK_SECONDS = 60
 #: (restricción de seguridad #5).
 MIN_INTERVAL_HOURS = 1
 MAX_INTERVAL_HOURS = 24 * 30
+#: A cuánto se adelanta el escaneo que confirma cambios nuevos: el intervalo
+#: mínimo, así que la restricción #5 no cambia. Sin esto, un monitor diario
+#: avisaría de cada cambio real un día tarde.
+CONFIRM_AFTER = timedelta(hours=MIN_INTERVAL_HOURS)
 
 
 class MonitorEvent(str, Enum):
@@ -73,17 +87,24 @@ def _now() -> datetime:
 
 
 def _cambios_payload(
-    monitor: Monitor, previous: Scan, current: Scan, diff: ScanDiff
+    monitor: Monitor,
+    previous: Scan,
+    current: Scan,
+    diff: ScanDiff,
+    *,
+    por_confirmar: int = 0,
+    descartados: int = 0,
 ) -> dict[str, Any]:
-    """Cuerpo del aviso de cambios. Sin `comunes`: en un dominio grande son
-    cientos de hostnames que no cambiaron y no dicen nada al receptor."""
+    """Cuerpo del aviso de cambios: los confirmados, vistos en `previous` y en
+    `current`. Sin `comunes`: en un dominio grande son cientos de hostnames
+    que no cambiaron y no dicen nada al receptor."""
     nuevos, desaparecidos = len(diff.nuevos), len(diff.desaparecidos)
     summary = (
         f"Vigilancia de {monitor.domain}: "
         f"{nuevos} {'activo nuevo' if nuevos == 1 else 'activos nuevos'}, "
         f"{desaparecidos} {'desaparecido' if desaparecidos == 1 else 'desaparecidos'} y "
-        f"{len(diff.cambiados)} con cambios "
-        f"(escaneo #{current.id} frente al #{previous.id})"
+        f"{len(diff.cambiados)} con cambios, "
+        f"confirmados en los escaneos #{previous.id} y #{current.id}"
     )
     return {
         "event": MonitorEvent.CAMBIOS.value,
@@ -95,6 +116,10 @@ def _cambios_payload(
         "nuevos": diff.nuevos,
         "desaparecidos": diff.desaparecidos,
         "cambiados": [asdict(change) for change in diff.cambiados],
+        # Lo que no se avisa todavía, para que el receptor sepa que hay más
+        # en camino (`por_confirmar`) y cuánto ruido se filtró (`descartados`).
+        "por_confirmar": por_confirmar,
+        "descartados": descartados,
         # Incidencias del escaneo actual (p. ej. una fuente caída): el receptor
         # debe poder saber si un «desaparecido» viene de un escaneo degradado.
         "errors": list(current.errors),
@@ -240,6 +265,8 @@ async def _compare_and_notify(
         if baseline is None or baseline.status is not ScanStatus.COMPLETED:
             # Sin historial no hay con qué comparar: este escaneo es la base.
             monitor.baseline_scan_id = scan_id
+            monitor.pending_changes = []
+            monitor.last_discarded = 0
             monitor.last_error = None
             logger.info(
                 "Vigilancia de %s: el escaneo #%d queda como línea base", monitor.domain, scan_id
@@ -261,17 +288,70 @@ async def _compare_and_notify(
                 problem=reason,
             )
         else:
-            diff = diff_scans(baseline, current)
-            if diff.nuevos or diff.desaparecidos or diff.cambiados:
-                payload = _cambios_payload(monitor, baseline, current, diff)
-                # La línea base solo avanza si el aviso llegó: si no, la
-                # siguiente ejecución compara contra la misma y lo repite.
-                if await _notify(monitor, MonitorEvent.CAMBIOS, payload):
-                    monitor.baseline_scan_id = scan_id
-            else:
-                monitor.baseline_scan_id = scan_id
-                monitor.last_error = None
+            await _confirm_and_notify(monitor, baseline, current)
         await session.commit()
+
+
+async def _confirm_and_notify(monitor: Monitor, baseline: Scan, current: Scan) -> None:
+    """Avisa de los cambios confirmados y deja pendiente lo demás.
+
+    Se compara contra lo ya avisado: `baseline` (el último escaneo comparado)
+    con los pendientes deshechos. La base pasa siempre a `current`, y lo que
+    no se avisa se queda en `pending_changes` con su valor anterior, así que
+    nada se absorbe sin avisar: ni lo visto una sola vez, que espera a la
+    siguiente ejecución, ni lo confirmado cuyo aviso falló, que en la
+    siguiente se vuelve a confirmar y a enviar (la regla del bloque 4: un
+    aviso perdido no pierde el cambio).
+    """
+    pending = [Change.from_json(c) for c in monitor.pending_changes]
+    ref, now_seen = reference(snapshot(baseline), pending), snapshot(current)
+    outcome = confirm(changes_between(ref, now_seen), pending)
+
+    entregado = True
+    if outcome.confirmed:
+        payload = _cambios_payload(
+            monitor,
+            baseline,
+            current,
+            as_scan_diff(outcome.confirmed, ref, now_seen),
+            por_confirmar=len(outcome.unconfirmed),
+            descartados=outcome.discarded,
+        )
+        entregado = await _notify(monitor, MonitorEvent.CAMBIOS, payload)
+    else:
+        monitor.last_error = None
+
+    sin_avisar = outcome.unconfirmed if entregado else outcome.confirmed + outcome.unconfirmed
+    monitor.pending_changes = [change.to_json() for change in sin_avisar]
+    monitor.last_discarded = outcome.discarded
+    monitor.baseline_scan_id = current.id
+
+    if outcome.discarded:
+        logger.info(
+            "Vigilancia de %s: %d cambio(s) visto(s) una sola vez, descartado(s) como ruido",
+            monitor.domain,
+            outcome.discarded,
+        )
+    if outcome.unconfirmed:
+        logger.info(
+            "Vigilancia de %s: %d cambio(s) por confirmar en el próximo escaneo",
+            monitor.domain,
+            len(outcome.unconfirmed),
+        )
+        # Solo al pasar de nada pendiente a algo pendiente: en un dominio que
+        # fluctúa sin parar, adelantar siempre lo escanearía cada hora.
+        if not pending:
+            _adelantar_confirmacion(monitor)
+
+
+def _adelantar_confirmacion(monitor: Monitor) -> None:
+    """Adelanta el siguiente escaneo a `CONFIRM_AFTER` si tocaba más tarde."""
+    confirmar = _now() + CONFIRM_AFTER
+    siguiente = monitor.next_run_at
+    if siguiente.tzinfo is None:  # la base de datos lo devuelve en UTC sin zona
+        siguiente = siguiente.replace(tzinfo=UTC)
+    if confirmar < siguiente:
+        monitor.next_run_at = confirmar
 
 
 async def run_monitor(

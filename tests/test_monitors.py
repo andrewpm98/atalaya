@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from atalaya.api.schemas import MonitorOut
 from atalaya.config import settings
 from atalaya.core import monitor_runner, repository
 from atalaya.core.audit import AUDIT_LOGGER_NAME
@@ -33,8 +34,10 @@ from atalaya.core.models import Monitor, Scan, ScanStatus
 from atalaya.core.monitor_runner import monitor_loop, run_due_monitors, run_monitor
 from atalaya.core.scan_runner import run_scan
 from atalaya.discovery.models import (
+    DiscoveryFinding,
     DiscoverySource,
     EnrichmentResult,
+    HeaderScanResult,
     ResolutionStatus,
     SubdomainRecord,
     SubdomainScanResult,
@@ -61,6 +64,10 @@ class _Descubrimiento:
         self.caidas: set[DiscoverySource] = set()
         self.errors: list[str] = []
         self.falla: Exception | None = None
+        # Puertos abiertos en la IP que comparten todos los hosts, y tipos de
+        # hallazgo de cabeceras por host: lo que cambia cuando hay un timeout.
+        self.puertos: list[int] = []
+        self.cabeceras: dict[str, list[str]] = {}
 
 
 class _Webhook:
@@ -99,7 +106,16 @@ def descubrimiento(monkeypatch: pytest.MonkeyPatch) -> _Descubrimiento:
         return result
 
     async def fake_enrich(result: SubdomainScanResult) -> EnrichmentResult:
-        return EnrichmentResult()
+        return EnrichmentResult(
+            ports_by_ip={"93.184.216.34": list(estado.puertos)},
+            header_results=[
+                HeaderScanResult(
+                    hostname=host,
+                    findings=[DiscoveryFinding(finding_type=t, evidence=t) for t in tipos],
+                )
+                for host, tipos in estado.cabeceras.items()
+            ],
+        )
 
     monkeypatch.setattr("atalaya.core.scan_runner.enumerate_subdomains", fake_enumerate)
     monkeypatch.setattr("atalaya.core.scan_runner.enrich_scan", fake_enrich)
@@ -212,12 +228,22 @@ async def test_sin_historial_el_primer_escaneo_es_la_linea_base_y_no_avisa(
     assert monitor.last_error is None
 
 
-async def test_avisa_los_cambios_frente_a_la_linea_base_y_la_avanza(
+async def test_un_cambio_se_avisa_cuando_lo_confirma_la_ejecucion_siguiente(
     factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
 ) -> None:
     base = await _escaneo(factory)
     monitor_id = await _monitor(factory, baseline=base)
     descubrimiento.hosts = ["www.ejemplo.com", "api.ejemplo.com"]
+
+    await run_monitor(factory, monitor_id)
+
+    # Visto una vez: por confirmar, sin aviso. La base pasa a este escaneo.
+    monitor = await _leer(factory, monitor_id)
+    primero = monitor.last_scan_id
+    assert webhook.avisos == []
+    assert len(monitor.pending_changes) == 1
+    assert monitor.baseline_scan_id == primero != base
+    assert monitor.last_notified_at is None
 
     await run_monitor(factory, monitor_id)
 
@@ -227,15 +253,21 @@ async def test_avisa_los_cambios_frente_a_la_linea_base_y_la_avanza(
     assert payload["event"] == "cambios"
     assert payload["domain"] == "ejemplo.com"
     assert payload["monitor_id"] == monitor_id
-    assert payload["previous_scan_id"] == base
+    assert payload["previous_scan_id"] == primero
     assert payload["current_scan_id"] == monitor.last_scan_id
     assert payload["nuevos"] == ["api.ejemplo.com"]
     assert payload["desaparecidos"] == []
     assert payload["cambiados"] == []
+    assert payload["por_confirmar"] == 0
+    assert payload["descartados"] == 0
     assert "comunes" not in payload  # cientos de hostnames sin cambios en un dominio grande
     assert "1 activo nuevo, 0 desaparecidos y 0 con cambios" in payload["summary"]
+    assert f"confirmados en los escaneos #{primero} y #{monitor.last_scan_id}" in (
+        payload["summary"]
+    )
     assert payload["sent_at"]
     assert monitor.baseline_scan_id == monitor.last_scan_id
+    assert monitor.pending_changes == []
     assert monitor.last_notified_at is not None
     assert monitor.last_error is None
 
@@ -257,17 +289,20 @@ async def test_sin_cambios_no_avisa_y_avanza_la_linea_base(
 async def test_un_aviso_no_entregado_se_repite_en_la_siguiente_ejecucion(
     factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
 ) -> None:
-    """Si la línea base avanzara con el aviso perdido, la siguiente ejecución
-    compararía contra un escaneo que ya tiene el cambio y no saldría nunca."""
+    """La base pasa al escaneo nuevo, pero el cambio confirmado y no entregado
+    se queda pendiente con su valor anterior: si se absorbiera en la base, no
+    saldría nunca."""
     base = await _escaneo(factory)
     monitor_id = await _monitor(factory, baseline=base)
     descubrimiento.hosts = ["www.ejemplo.com", "api.ejemplo.com"]
+    await run_monitor(factory, monitor_id)  # visto una vez
     webhook.falla = True
 
-    await run_monitor(factory, monitor_id)
+    await run_monitor(factory, monitor_id)  # confirmado, pero el receptor da 503
 
     monitor = await _leer(factory, monitor_id)
-    assert monitor.baseline_scan_id == base
+    assert monitor.baseline_scan_id == monitor.last_scan_id
+    assert len(monitor.pending_changes) == 1
     assert monitor.last_error is not None and "HTTP 503" in monitor.last_error
     assert monitor.last_notified_at is None
 
@@ -277,9 +312,8 @@ async def test_un_aviso_no_entregado_se_repite_en_la_siguiente_ejecucion(
     monitor = await _leer(factory, monitor_id)
     [(evento, payload)] = webhook.avisos
     assert evento == "cambios"
-    assert payload["previous_scan_id"] == base
     assert payload["nuevos"] == ["api.ejemplo.com"]
-    assert monitor.baseline_scan_id == monitor.last_scan_id
+    assert monitor.pending_changes == []
     assert monitor.last_error is None
 
 
@@ -376,10 +410,147 @@ async def test_las_incidencias_no_bloquean_un_aviso_de_cambios(
     descubrimiento.errors = ["Shodan rechazó la petición (HTTP 403)"]
 
     await run_monitor(factory, monitor_id)
+    await run_monitor(factory, monitor_id)
 
     [(evento, payload)] = webhook.avisos
     assert evento == "cambios"
     assert payload["errors"] == ["Shodan rechazó la petición (HTTP 403)"]
+
+
+# --- La confirmación: un cambio se avisa al verse en dos ejecuciones --------
+
+
+async def test_un_timeout_que_no_se_repite_se_descarta_como_ruido(
+    factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
+) -> None:
+    """Lo que hace un timeout de verdad: el 443 no contesta (desaparece en los
+    dos hosts, que comparten IP) y, con HTTPS mudo y HTTP respondiendo,
+    *aparece* un `sin_https` que no existe. Ninguno de los tres se avisa."""
+    descubrimiento.puertos = [80, 443]
+    descubrimiento.cabeceras = {"www.ejemplo.com": ["hsts_missing"]}
+    base = await _escaneo(factory)
+    monitor_id = await _monitor(factory, baseline=base)
+    descubrimiento.puertos = [80]
+    descubrimiento.cabeceras = {"www.ejemplo.com": ["hsts_missing", "sin_https"]}
+
+    await run_monitor(factory, monitor_id)
+
+    monitor = await _leer(factory, monitor_id)
+    assert webhook.avisos == []
+    assert MonitorOut.from_monitor(monitor).pending_changes == 3
+
+    descubrimiento.puertos = [80, 443]
+    descubrimiento.cabeceras = {"www.ejemplo.com": ["hsts_missing"]}
+    await run_monitor(factory, monitor_id)
+
+    monitor = await _leer(factory, monitor_id)
+    assert webhook.avisos == []
+    assert monitor.pending_changes == []
+    assert MonitorOut.from_monitor(monitor).last_discarded == 3
+    assert monitor.last_error is None
+
+
+@pytest.mark.parametrize(
+    ("antes", "despues", "campo"),
+    [
+        (["www.ejemplo.com"], ["www.ejemplo.com", "api.ejemplo.com"], "nuevos"),
+        (["www.ejemplo.com", "api.ejemplo.com"], ["www.ejemplo.com"], "desaparecidos"),
+    ],
+    ids=["aparece", "desaparece"],
+)
+async def test_se_confirma_en_las_dos_direcciones(
+    factory: async_sessionmaker[AsyncSession],
+    descubrimiento: _Descubrimiento,
+    webhook: _Webhook,
+    antes: list[str],
+    despues: list[str],
+    campo: str,
+) -> None:
+    """El ruido también hace aparecer cosas: desconfiar solo de lo que
+    desaparece no basta, y lo real se avisa igual en los dos sentidos."""
+    descubrimiento.hosts = antes
+    monitor_id = await _monitor(factory, baseline=await _escaneo(factory))
+    descubrimiento.hosts = despues
+
+    await run_monitor(factory, monitor_id)
+    assert webhook.avisos == []
+    await run_monitor(factory, monitor_id)
+
+    [(_, payload)] = webhook.avisos
+    assert payload[campo] == ["api.ejemplo.com"]
+
+
+async def test_cada_cambio_se_confirma_por_separado(
+    factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
+) -> None:
+    """Un cambio nuevo no retrasa el aviso de otro ya confirmado: sale el
+    confirmado, y el aviso dice que hay otro en camino."""
+    monitor_id = await _monitor(factory, baseline=await _escaneo(factory))
+    descubrimiento.hosts = ["www.ejemplo.com", "api.ejemplo.com"]
+    await run_monitor(factory, monitor_id)
+    descubrimiento.hosts = ["www.ejemplo.com", "api.ejemplo.com", "vpn.ejemplo.com"]
+
+    await run_monitor(factory, monitor_id)
+
+    [(_, payload)] = webhook.avisos
+    assert payload["nuevos"] == ["api.ejemplo.com"]
+    assert payload["por_confirmar"] == 1
+    assert len((await _leer(factory, monitor_id)).pending_changes) == 1
+
+    await run_monitor(factory, monitor_id)
+
+    assert [p["nuevos"] for _, p in webhook.avisos] == [["api.ejemplo.com"], ["vpn.ejemplo.com"]]
+
+
+async def test_la_confirmacion_se_adelanta_a_una_hora_solo_si_no_habia_pendientes(
+    factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
+) -> None:
+    """Sin adelantarla, un monitor diario avisaría de cada cambio un día tarde.
+    Adelantándola siempre, un dominio que fluctúa sin parar se escanearía cada
+    hora: solo se adelanta al pasar de nada pendiente a algo pendiente."""
+    base = await _escaneo(factory)
+    ahora = datetime.now(UTC)
+    monitor_id = await _monitor(factory, baseline=base, next_run_at=ahora - timedelta(minutes=1))
+    descubrimiento.hosts = ["www.ejemplo.com", "api.ejemplo.com"]
+
+    assert await run_due_monitors(factory, now=ahora) == 1
+
+    confirmacion = (await _leer(factory, monitor_id)).next_run_at.replace(tzinfo=UTC)
+    assert timedelta(minutes=59) < confirmacion - ahora < timedelta(minutes=61)
+
+    # En la confirmación aparece otro cambio: ya había algo pendiente, así
+    # que no se adelanta otra vez y vuelve al turno normal.
+    descubrimiento.hosts = ["www.ejemplo.com", "api.ejemplo.com", "vpn.ejemplo.com"]
+    assert await run_due_monitors(factory, now=confirmacion) == 1
+
+    [(_, payload)] = webhook.avisos
+    assert payload["nuevos"] == ["api.ejemplo.com"]
+    siguiente = (await _leer(factory, monitor_id)).next_run_at.replace(tzinfo=UTC)
+    assert siguiente == confirmacion + timedelta(hours=24)
+
+
+async def test_una_fuente_caida_no_confirma_ni_descarta_lo_pendiente(
+    factory: async_sessionmaker[AsyncSession], descubrimiento: _Descubrimiento, webhook: _Webhook
+) -> None:
+    """Una ejecución que no compara (crt.sh caído) no es una observación: lo
+    pendiente espera a la siguiente que sí compare."""
+    monitor_id = await _monitor(factory, baseline=await _escaneo(factory))
+    descubrimiento.hosts = ["www.ejemplo.com", "vpn.ejemplo.com"]
+    await run_monitor(factory, monitor_id)
+    observado = (await _leer(factory, monitor_id)).baseline_scan_id
+    descubrimiento.caidas = {DiscoverySource.CRTSH}
+
+    await run_monitor(factory, monitor_id)
+
+    monitor = await _leer(factory, monitor_id)
+    assert [evento for evento, _ in webhook.avisos] == ["escaneo_fallido"]
+    assert monitor.baseline_scan_id == observado
+    assert len(monitor.pending_changes) == 1
+
+    descubrimiento.caidas = set()
+    await run_monitor(factory, monitor_id)
+
+    assert webhook.avisos[-1][1]["nuevos"] == ["vpn.ejemplo.com"]
 
 
 async def test_un_dominio_fuera_de_la_allowlist_no_se_escanea_y_se_avisa(
@@ -530,6 +701,7 @@ def test_crear_un_monitor_no_devuelve_ni_la_url_completa_ni_el_secreto(
     assert body["interval_hours"] == 24
     assert body["active"] is True
     assert body["baseline_scan_id"] is None
+    assert body["pending_changes"] == 0 and body["last_discarded"] == 0
     assert body["next_run_at"] and body["last_run_at"] is None
     assert TOKEN not in resp.text and SECRETO not in resp.text
     assert TOKEN not in client.get("/monitors").text

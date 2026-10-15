@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Text
 from sqlalchemy import Enum as SqlEnum
@@ -169,11 +170,17 @@ class Monitor(Base):
     Dos referencias a escaneos, con papeles distintos:
 
     - `last_scan_id`: el último que lanzó este monitor, haya ido bien o mal.
-    - `baseline_scan_id`: contra el que se compara el siguiente. Solo avanza
-      cuando el aviso se entrega o no había nada que avisar; si el webhook
-      falla, la siguiente ejecución vuelve a comparar contra el mismo y el
-      cambio se avisa entonces. Comparando siempre con el escaneo anterior,
-      un aviso perdido no volvería a salir nunca.
+    - `baseline_scan_id`: el último que se comparó. El siguiente no se
+      compara con él tal cual, sino con lo ya avisado: él mismo con los
+      `pending_changes` deshechos.
+
+    `pending_changes` son los cambios vistos y aún no avisados, cada uno con
+    su valor anterior (`core/change_confirmation.py`): los que esperan a que
+    una segunda ejecución los confirme y, si el webhook falló, los
+    confirmados que se reenviarán. Comparando siempre con el escaneo
+    anterior, un aviso perdido no volvería a salir nunca, y lo visto una sola
+    vez quedaría absorbido sin avisar. `last_discarded` cuenta los que la
+    última ejecución no repitió: ruido descartado.
 
     `webhook_url` y `webhook_secret` son secretos (Slack y Discord llevan el
     token en la ruta de la URL): la API nunca los devuelve enteros.
@@ -203,3 +210,7 @@ class Monitor(Base):
     #: Problema de la última ejecución (escaneo fallido, aviso no entregado),
     #: o `None` si fue bien.
     last_error: Mapped[str | None] = mapped_column(Text, default=None)
+    pending_changes: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    last_discarded: Mapped[int] = mapped_column(default=0, server_default="0")
