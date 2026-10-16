@@ -128,8 +128,10 @@ Modelo de datos relacional (`core/models.py`, Paso 3 ✅):
   no requiere migración—, puertos abiertos).
 - **Finding** — hallazgo (tipo, evidencia, severidad, remediación, `asset_id`).
 - **Monitor** — vigilancia programada de un dominio (único): intervalo,
-  webhook y su secreto, `next_run_at`, el último escaneo que lanzó y la
-  **línea base** contra la que compara el siguiente (§12). Solo referencia
+  webhook y su secreto, `next_run_at`, el último escaneo que lanzó, el último
+  escaneo comparado (`baseline_scan_id`) y lo visto y aún no avisado
+  (`pending_changes`, JSON con el valor anterior de cada cambio) más el ruido
+  descartado en la última ejecución (`last_discarded`) (§12). Solo referencia
   escaneos por id (`ON DELETE SET NULL`).
 
 Las fechas se guardan como UTC *naive* (`TIMESTAMP WITHOUT TIME ZONE`) a
@@ -305,7 +307,11 @@ resultado por celda) que se refresca sola cada 10 s en un fragmento, con el
 resultado de la última ejecución deducido de los campos del monitor
 (escaneando, si su último escaneo sigue en curso; atención, si hay
 `last_error`; avisado, si `last_notified_at` es posterior a `last_run_at`;
-si no, sin cambios o pendiente). Atención va en ámbar: el rojo sigue siendo
+por confirmar, si hay `pending_changes`, con el acento en línea discontinua
+y «confirma lo pendiente» bajo el turno adelantado; si no, sin cambios, que
+dice cuántos cambios se descartaron como ruido, o pendiente). Mientras hay
+cambios por confirmar no se escribe «compara con el escaneo #N»: la
+referencia es ese escaneo sin esos cambios. Atención va en ámbar: el rojo sigue siendo
 solo de `critical` y de la API caída. Pausar/reanudar (`PATCH`), borrar con
 confirmación en la página (el visor no tiene `confirm()`) y un formulario de
 alta con la frecuencia entre opciones fijas (mínimo 1 h, así no puede dar
@@ -443,7 +449,8 @@ dominio
    └──▶ [Informes]   PDF con portada + risk_score + resumen ejecutivo IA
 
 [Vigilancia]  cada monitor, cada N horas: mismo escaneo → diff SIN IA contra
-              su línea base → si cambia algo (o falla), POST al webhook (§12)
+              lo ya avisado → lo que se repite en dos escaneos seguidos
+              (o un fallo), POST al webhook (§12)
 ```
 
 ## 4. Decisiones de diseño
@@ -488,9 +495,10 @@ dominio
   por tipo de hallazgo, que ahorraría más, porque el modelo dejaría de ver el
   host — ver 2.4.
 - **Vigilancia: el aviso no se pierde y la URL no es un punto de entrada.**
-  La línea base de un monitor solo avanza cuando el aviso se entrega (un
-  webhook caído no hace perder el cambio); el diff va sin IA (no gasta
-  crédito); y el webhook, que es una petición del servidor a donde diga el
+  Se compara contra lo ya avisado y lo no entregado queda pendiente (un
+  webhook caído no hace perder el cambio); un cambio solo se avisa cuando se
+  ve en dos escaneos seguidos (un timeout no es una alerta); el diff va sin
+  IA (no gasta crédito); y el webhook, que es una petición del servidor a donde diga el
   usuario, pasa la misma regla que los objetivos de escaneo: solo
   direcciones enrutables, validadas al crear y al enviar, conectando a la IP
   validada — ver §12.
@@ -553,11 +561,16 @@ obligatorios:
     `GET /config/status` (§2.1, §10.5) con la bienvenida, el logo y el estado
     de la configuración en el dashboard (§2.6).
     *(`memorias/Memoria_Ampliacion_Puesta_En_Marcha_Atalaya.md`.)*
-15. **Escaneo en segundo plano y monitorización** 🚧 — `POST /scans` en
+15. **Escaneo en segundo plano y monitorización** ✅ — `POST /scans` en
     segundo plano con su seguimiento en el dashboard (§2.1, §2.6, §11) y
     vigilancia programada con aviso por webhook (§2.1, §12) y su panel en el
-    dashboard (§2.6). Pendiente: el cierre.
-    *(`memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`, en curso.)*
+    dashboard (§2.6).
+    *(`memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.)*
+16. **Vigilancia con menos ruido** ✅ — un cambio solo se avisa si se ve en
+    dos escaneos seguidos, cambio a cambio y en las dos direcciones, con la
+    confirmación adelantada a 1 h (§12, `core/change_confirmation.py`), y el
+    panel con lo pendiente y lo descartado (§2.6).
+    *(`memorias/Memoria_Ampliacion_Ruido_Vigilancia_Atalaya.md`.)*
 
 La numeración de esta sección agrupa las ampliaciones de forma distinta a
 CLAUDE.md (que cuenta Shodan, takeover y agentes como una sola ampliación);

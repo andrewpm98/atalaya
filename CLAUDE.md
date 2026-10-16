@@ -41,8 +41,9 @@ Recibe un dominio y ejecuta cuatro fases:
    con resumen en lenguaje natural.
 
 Y, sobre las cuatro, la **vigilancia programada** (`/monitors`): repite el
-escaneo de un dominio cada cierto tiempo y avisa por webhook cuando el diff
-contra su línea base no está vacío, o cuando el escaneo falla.
+escaneo de un dominio cada cierto tiempo y avisa por webhook de los cambios
+que se ven en dos escaneos seguidos (lo visto una sola vez se descarta como
+ruido), o cuando el escaneo falla.
 
 ### Sistema de agentes de IA
 
@@ -88,7 +89,11 @@ src/atalaya/
 │   ├── monitor_runner.py        Vigilancia programada: monitor_loop() en el
 │   │                             lifespan, run_due_monitors() (reclamo con
 │   │                             UPDATE condicional), run_monitor() — escanea,
-│   │                             diff SIN IA contra la línea base y avisa
+│   │                             compara SIN IA con lo ya avisado y avisa de
+│   │                             lo confirmado en dos escaneos seguidos
+│   ├── change_confirmation.py   Cambios atómicos (host, estado, puerto, tipo de
+│   │                             hallazgo), referencia = base con lo pendiente
+│   │                             deshecho, confirm() — puro cálculo (fase 15)
 │   ├── webhooks.py              validate_webhook_url()/send_webhook() — SSRF
 │   │                             (solo IPs públicas, conecta a la IP validada),
 │   │                             firma HMAC, URL enmascarada (es un secreto)
@@ -196,7 +201,8 @@ src/atalaya/
                                     /monitors/{id} — vigilancia programada
 
 migrations/                      Alembic (async); URL desde settings.database_url.
-                                  Dos revisiones: modelos iniciales y `monitors`
+                                  Tres revisiones: modelos iniciales, `monitors`
+                                  y la confirmación de cambios (`8fd664bfa9de`)
 dashboard/app.py                 Dashboard Streamlit — escaneos, «Comparar
                                   con» (diff), triaje IA, vigilancia
                                   (monitores), consulta NL,
@@ -451,43 +457,34 @@ pide evitar explícitamente ("los stubs no son código muerto").
     fijado (`e59c27e`); demo re-verificada en local y en Docker, con la
     vigilancia como paso opcional; dossier y guía al día. Memoria:
     `memorias/Memoria_Ampliacion_Segundo_Plano_Monitorizacion_Atalaya.md`.
-15. **Ampliación — Vigilancia con menos ruido** 🚧 (desde el 15/10/2026,
-    pedida por el usuario: «reduce el ruido») — un cambio solo se avisa si se
-    ve en dos escaneos seguidos, en las dos direcciones y cambio a cambio; lo
-    visto una vez se descarta como ruido, y la confirmación se adelanta a 1 h.
-    Diseño en ARQUITECTURA §12. Hecho y subido: (1) núcleo y API
-    (`f3abebb`), (2) prueba real con timeouts provocados sobre
-    `scanme.nmap.org`, (3) el panel, con maqueta aprobada (`835ad18`).
-    Pendiente: (4) cierre (memoria, dossier y guía).
+15. **Ampliación — Vigilancia con menos ruido** ✅ (15-16/10/2026, pedida
+    por el usuario: «reduce el ruido») — un cambio solo se avisa si se ve en
+    dos escaneos seguidos, en las dos direcciones y cambio a cambio; lo visto
+    una vez se descarta como ruido, y la confirmación se adelanta a 1 h.
+    Diseño en ARQUITECTURA §12 (`5f3b4b6`, antes del código), núcleo y API
+    (`f3abebb`), prueba real con timeouts provocados sobre `scanme.nmap.org`
+    y el panel con maqueta aprobada (`835ad18`). Memoria:
+    `memorias/Memoria_Ampliacion_Ruido_Vigilancia_Atalaya.md`.
 
 **Plazo:** entrega a finales de septiembre (fecha registrada en el diseño;
 a 06/10/2026 está pendiente de confirmar si la entrega ya se hizo y cuándo es
 la defensa). Los siete pasos de la hoja de ruta y los cinco requisitos
-obligatorios están cerrados desde antes de las ampliaciones 8-14 — ninguna era necesaria para aprobar: profundizan el
+obligatorios están cerrados desde antes de las ampliaciones 8-15 — ninguna era necesaria para aprobar: profundizan el
 componente diferencial (capa IA), la calidad percibida (dashboard), la
 fiabilidad de la entrega (robustez y cierre pre-entrega) y lo que define a un
 ASM (vigilancia programada) de cara a la defensa oral.
 
 ---
 
-## Estado al 15/10/2026 y próxima sesión
+## Estado al cierre de la herramienta (16/10/2026)
 
-**Dónde se quedó (cierre del 15/10/2026):** todo **subido** a
-`origin/main`. La fase 14 se cerró (`51fd5f5`). La **fase 15** («reduce el
-ruido») tiene hecho todo menos el cierre: diseño (`5f3b4b6`, antes del
-código), confirmación en dos escaneos (`f3abebb`: `core/change_confirmation.py`,
-monitor, migración `8fd664bfa9de`, API) y el panel (`835ad18`, maqueta
-aprobada por el usuario: estado «por confirmar», «confirma lo pendiente» bajo
-el turno, descartados en «sin cambios» y sin «compara con el #N» mientras hay
-pendientes, esto último fuera del plan y aprobado). **Prueba real hecha**
-(API contra PostgreSQL 16, escaneos reales de `scanme.nmap.org`,
-webhook.site): un servidor lento simulado con timeouts de 1 ms dio 9 cambios
-falsos, ninguno avisado y los 9 descartados en el escaneo siguiente; un
-cambio persistente (el 80 cerrado en la referencia, simulado) se avisó
-firmado en el segundo escaneo; con la versión anterior habrían sido 3 avisos,
-2 falsos. Evidencias y maqueta: https://claude.ai/artifact/FHzmxcBAEx8YQ75UpgGx79.
-704 tests; `ruff` y `mypy` a cero. Ningún prompt ha cambiado. Al retomar:
-`git status -sb` (debería estar limpio y al día) y `git log --oneline -6`.
+**La herramienta está cerrada** por decisión del usuario el 16/10/2026
+(«vamos a cerrar la herramienta. Deja todo bien atado y ya luego vemos lo que
+se pueda mejorar»). Las quince ampliaciones están cerradas y documentadas: la
+última, la fase 15 (vigilancia con menos ruido), con su memoria. Dossier y
+guía al día con la fase 15. 704 tests; `ruff` y `mypy` a cero. Ningún prompt
+ha cambiado: la demo en `replay` sigue intacta. Al retomar: `git status -sb`
+y `git log --oneline -5`.
 
 - Dossier de defensa: https://claude.ai/code/artifact/c7ed9198-242a-442a-9fdb-05876d4e1e91
 - Guía de la herramienta (funcionalidad, para quien llega de fuera):
@@ -499,31 +496,49 @@ firmado en el segundo escaneo; con la versión anterior habrían sido 3 avisos,
 - Evidencias de la prueba completa de la vigilancia (14/10/2026, stack Docker,
   9 fases, capturas y avisos reales): https://claude.ai/artifact/9xemMd7makz8RuyUJSNtjw
 
-**Pendiente, en este orden** (el usuario lo dejó para otra sesión): (1)
-**cierre de la fase 15**: memoria nueva
-(`memorias/Memoria_Ampliacion_Ruido_Vigilancia_Atalaya.md`, con su bloque de
-preguntas de defensa), dossier y guía al día (el límite «los avisos no
-separan señal de ruido» pasa a «el ruido que dura dos escaneos sí se avisa»,
-la decisión nueva, preguntas sobre la confirmación, cifras: 704 tests,
-commits) y `push` cuando lo diga; (2) **ensayar la defensa** con el dossier (guion en
-`replay`; la vigilancia, paso opcional con red: alta de `scanme.nmap.org`
-con un webhook de webhook.site, o sin red el rechazo de
-`https://localhost/aviso`); (3) cuando vuelva el crédito, regrabar la
-valoración del diff (ver «Después» más abajo). No hay una fase nueva
-acordada: la siguiente se decide con el usuario.
+**Pendiente:** ensayar la defensa con el dossier (guion en `replay`; la
+vigilancia, paso opcional con red) y completar con sus palabras las
+preguntas marcadas «para completar» del dossier, entre ellas dos nuevas del
+cierre: la autorización de los escaneos de la demo y cómo se sabe que la IA
+acierta.
 
-**En la máquina del usuario, fuera del código:** su base de datos local de
-desarrollo (`atalaya.sqlite3`) no tiene la tabla `monitors`: antes de
-arrancar la API en local, `alembic upgrade head` (`atalaya doctor` lo
-señala). Su `.env` sigue con `API_HOST`/`API_PORT`/`ENVIRONMENT` y
-`SCAN_ALLOWLIST` vacía. El stack Docker está parado (los datos siguen en el
-volumen `atalaya_pgdata`: 14 escaneos reales de scanme.nmap.org, ningún
-monitor; la verificación del cierre usó un proyecto aparte y lo borró). Su
-DNS no resuelve `example.com` (comprobado el 15/10/2026): no sirve como
-webhook de prueba. El Playwright del venv (1.63) busca la build 1243 de
-Chromium y la instalada es la 1248: `_shot.py` falla hasta hacer `python -m
-playwright install chromium` en el venv (el cierre usó la 1248 indicando la
-ruta del ejecutable).
+**Mejoras posibles, sin acordar** (el usuario las verá «luego»; salen de la
+revisión crítica del 16/10/2026, por orden de lo que aportan):
+
+1. **Medir el triaje sin gastar crédito.** Es la debilidad principal del
+   componente diferencial: no hay evaluación, solo un ejemplo (clickjacking:
+   29 `low` y 3 `medium` en github.com). Con los 415 hallazgos triados de la
+   demo: distribución de severidades por tipo, cuántas veces el modelo se
+   aparta de la severidad más común de su tipo y en qué hosts. Un script, sin
+   llamadas. Con cuota de Gemini, además, consistencia de ~20 hallazgos
+   triados dos veces.
+2. **Avisos por importancia.** Ahora pesa igual que desaparezca una CSP que
+   que aparezca abierto el 3389. Opción por monitor: avisar solo de hosts o
+   puertos nuevos, o de severidad media en adelante.
+3. **Más cobertura de descubrimiento**, el mayor límite como ASM: en la
+   práctica solo crt.sh aporta subdominios (ver «Deuda»).
+4. **Más profundidad**: identificar el servicio de un puerto abierto, o
+   comprobar vulnerabilidades conocidas. Más intrusivo: chocaría con la
+   restricción #5 y habría que plantearlo antes de implementarlo.
+5. **Con crédito de Anthropic**: regrabar la valoración del diff (1 llamada)
+   y valorar quitar las IPs del prompt de triaje (regrabación completa).
+
+**En la máquina del usuario, fuera del código:**
+- Su `.env` está **en blanco** a petición suya (16/10/2026: «deja el .env en
+  blanco para rellenar en otro momento»): es una copia de `.env.example`,
+  con claves y alcance vacíos (alcance vacío = sin restricción). Sus claves
+  están en `.env.bak-20261016-131456` (antes de `init`) y
+  `.env.bak-20261016-132430` (después: Gemini, `SCAN_ALLOWLIST=mediamarkt.es`
+  y `API_KEY`), ignorados por git. La plantilla apunta al PostgreSQL de
+  Docker; para la BD local, `DATABASE_URL=sqlite+aiosqlite:///./atalaya.sqlite3`.
+- Su BD local de desarrollo (`atalaya.sqlite3`) no tiene la tabla `monitors`
+  ni la migración de la fase 15: `alembic upgrade head` antes de arrancar la
+  API en local (`atalaya doctor` lo señala).
+- El stack Docker y Docker Desktop están parados. El volumen `atalaya_pgdata`
+  tiene 23 escaneos reales de scanme.nmap.org, ya migrado a `8fd664bfa9de`.
+- Su DNS no resuelve `example.com` (no sirve como webhook de prueba). El
+  Playwright del venv (1.63) busca la build 1243 de Chromium y la instalada es
+  la 1248: `_shot.py` falla hasta `python -m playwright install chromium`.
 
 **Calendario:** a 12/10/2026, «hay algo de margen», sin fecha de defensa
 concreta. El usuario trabaja **bloque a bloque**: se cierra uno (código,
@@ -538,7 +553,7 @@ en vivo, no para regrabar la demo (grabada con `claude-sonnet-4-6`). Listar
 modelos (`GET /v1/models`) y `/api-info` de Shodan no consumen crédito: es
 lo que usan `doctor` e `init`.
 
-### Plan acordado para las próximas sesiones (en este orden)
+### Plan de las fases 13 y 14 (completado; se conserva como registro)
 
 Diseño ya hablado con el usuario el 12/10/2026; no reabrirlo sin motivo.
 
@@ -644,10 +659,9 @@ el crédito:** regrabar la valoración del diff posterior al triaje (escribe
 valorar quitar las IPs del prompt de triaje para que la reutilización
 sobreviva a CDN (cambia todos los prompts: regrabación completa).
 
-**Pendiente del usuario, fuera del código:** su `.env` de desarrollo aún
-tiene `API_HOST`, `API_PORT` y `ENVIRONMENT` (retirados en `521019e`;
-`atalaya doctor` los señala) y `SCAN_ALLOWLIST` vacía. Puede limpiarlo a mano
-o pasar `atalaya init` (conserva el resto y deja copia).
+*Estado posterior (16/10/2026):* el `.env` de desarrollo ya no tiene
+`API_HOST`, `API_PORT` ni `ENVIRONMENT`: está en blanco (ver «Estado al cierre
+de la herramienta»).
 
 ---
 
@@ -895,7 +909,7 @@ tiene valor, el dashboard la toma del mismo `.env` y la demo no cambia.
 script se niega si hay escaneos o monitores. No usarlo contra la BD de
 desarrollo (`atalaya.sqlite3`, con escaneos de otras sesiones) sin querer
 perderlos: para ensayar, mejor `DATABASE_URL=sqlite+aiosqlite:///./demo.sqlite3`
-en la misma terminal. En Docker vacía el volumen del stack (hoy, 14 escaneos
+en la misma terminal. En Docker vacía el volumen del stack (hoy, 23 escaneos
 de scanme.nmap.org de las pruebas); para conservarlo, la demo como otro
 proyecto: `docker compose -p atalaya-demo up --build -d`, con el stack
 principal parado (los contenedores tienen nombre fijo).
@@ -999,6 +1013,14 @@ así. Regrabarlo cuesta 1 llamada cuando haya crédito.
   los manuales en `GET /scans`. El panel no edita un monitor (se borra y se
   crea otro) ni guarda un historial de avisos (la API solo guarda el último
   resultado).
+- **El triaje no tiene evaluación.** Que el modelo acierta se apoya en
+  ejemplos (el clickjacking que sube a `medium` en un servicio de
+  autenticación), no en una medida: ni consistencia (el mismo hallazgo triado
+  dos veces), ni comparación con un conjunto etiquetado. Es lo más débil del
+  componente diferencial; ver «Mejoras posibles».
+- **Los avisos no distinguen importancia.** Un `csp_missing` que desaparece y
+  un 3389 que se abre van igual en el aviso de la vigilancia: no hay filtro
+  por tipo de cambio ni por severidad.
 - **`init` interactivo en Git Bash (mintty) exige `winpty atalaya init`**:
   mintty no ofrece a Python una consola de Windows y `getpass` no puede leer
   el teclado. `init` lo detecta (`MSYSTEM`) y lo explica en vez de colgarse;

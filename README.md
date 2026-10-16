@@ -501,6 +501,9 @@ Ampliación posterior, más allá de los requisitos obligatorios:
       seguimiento en el dashboard
 - [x] Vigilancia programada: escaneos periódicos con aviso por webhook
       (firmado con HMAC, protegido contra SSRF), por API y desde el dashboard
+- [x] Vigilancia con menos ruido: un cambio solo se avisa si se ve en dos
+      escaneos seguidos; lo que aparece o desaparece una sola vez (un
+      timeout, un servidor lento) se descarta sin avisar
 
 La memoria técnica de cada fase está en [`memorias/`](memorias/).
 
